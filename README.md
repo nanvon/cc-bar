@@ -67,7 +67,7 @@ cc-bar 是 vibe coding 出来满足个人需求的小工具,并非商业化产�
    ./scripts/build.sh
    ```
 
-   脚本会以 `CODE_SIGNING_ALLOWED=NO` 做 Release 构建(工具链自动 ad-hoc 签名),
+   脚本会以 `CODE_SIGNING_ALLOWED=NO` 做 Release 构建,随后显式 ad-hoc 重签整个 `.app`,
    清理扩展属性并打包,产物输出到 `dist/CCBar.app.zip`。
 
 3. 把 `dist/CCBar.app.zip` 上传到 GitHub Release 即可。用户首次安装按上方「安装」一节手动放行一次。

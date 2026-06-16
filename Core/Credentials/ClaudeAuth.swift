@@ -10,17 +10,40 @@ enum ClaudeAuth {
     }
 
     /// Claude 的 OAuth 凭据本身不含邮箱，CLI 登录时会把账号信息额外写到
-    /// `~/.claude.json` 顶层的 `oauthAccount` 字段。这里只读 emailAddress 作为兜底。
+    /// `~/.claude.json` 顶层的 `oauthAccount` 字段。订阅组织名有时才是当前
+    /// Claude Code 额度归属账号,因此优先从 organizationName 中提取邮箱。
     nonisolated private static func loadEmailFromConfig() -> String? {
         let url = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".claude.json")
         guard let data = try? Data(contentsOf: url),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let oauth = root["oauthAccount"] as? [String: Any],
-              let email = oauth["emailAddress"] as? String,
-              !email.isEmpty
+              let oauth = root["oauthAccount"] as? [String: Any]
         else { return nil }
-        return email
+        if let organizationName = oauth["organizationName"] as? String,
+           let email = extractEmail(from: organizationName) {
+            return email
+        }
+        return nonEmpty(oauth["emailAddress"] as? String)
+            ?? nonEmpty(oauth["email"] as? String)
+    }
+
+    nonisolated private static func extractEmail(from text: String) -> String? {
+        let pattern = #"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+            return nil
+        }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        guard let match = regex.firstMatch(in: text, range: range),
+              let emailRange = Range(match.range, in: text)
+        else { return nil }
+        return String(text[emailRange])
+    }
+
+    nonisolated private static func nonEmpty(_ value: String?) -> String? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty
+        else { return nil }
+        return value
     }
 
     nonisolated private static func loadFromFile() throws -> ClaudeAccount? {

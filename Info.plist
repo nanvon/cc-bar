@@ -25,7 +25,7 @@
     <key>NSHumanReadableCopyright</key>
     <string></string>
     <key>NSSupportsAutomaticTermination</key>
-    <true/>
+    <false/>
     <key>NSSupportsSuddenTermination</key>
     <true/>
 </dict>

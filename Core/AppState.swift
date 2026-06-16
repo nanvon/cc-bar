@@ -88,6 +88,8 @@ final class AppState {
             quotaInterval: settings.quotaInterval.seconds,
             usageInterval: settings.usageInterval.seconds
         )
+        // 首次启动不等待完整刷新间隔,否则 10m 间隔下会长时间显示空额度。
+        Task { await refreshQuotas(reason: .periodic) }
         // 启动后台触发一次 JSONL 扫描，让今日 cost 立刻更新（不阻塞 bootstrap）
         Task { await usageService.scanNow() }
         // 启动后异步拉一次服务状态;后续由 Scheduler 5 分钟刷新一次
