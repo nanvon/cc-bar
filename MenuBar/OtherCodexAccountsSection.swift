@@ -21,6 +21,7 @@ struct OtherCodexAccountsSection: View {
                 ForEach(Array(accounts.enumerated()), id: \.element.id) { idx, account in
                     if idx > 0 {
                         Divider()
+                            .overlay(CCPopoverPalette.separator)
                             .padding(.leading, 16)
                             .padding(.trailing, 16)
                     }
@@ -35,14 +36,14 @@ struct OtherCodexAccountsSection: View {
             Text(tr("OTHER CODEX ACCOUNTS", "其他账号"))
                 .font(.system(size: 9.5, weight: .semibold))
                 .kerning(0.3)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(CCPopoverPalette.weakText)
 
             Spacer()
 
             Text("\(count)")
                 .font(.system(size: 9.5, weight: .semibold))
                 .monospacedDigit()
-                .foregroundStyle(.quaternary)
+                .foregroundStyle(CCPopoverPalette.weakText)
         }
         .padding(.horizontal, 16)
         .padding(.top, 10)
@@ -70,12 +71,13 @@ private struct ImportedCodexRow: View {
                 if !displayName.isEmpty {
                     Text(displayName)
                         .font(.system(size: 12))
+                        .foregroundStyle(CCPopoverPalette.primaryText)
                         .lineLimit(1)
                 }
                 if !displaySubtitle.isEmpty {
                     Text(displaySubtitle)
                         .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(CCPopoverPalette.secondaryText)
                         .lineLimit(1)
                 }
             }
@@ -104,13 +106,14 @@ private struct ImportedCodexRow: View {
             Text(label)
                 .font(.system(size: 8.5, weight: .semibold))
                 .kerning(0.5)
-                .foregroundStyle(.quaternary)
+                .foregroundStyle(CCPopoverPalette.weakText)
                 .frame(width: 18, alignment: .leading)
 
             ProgressBar(
                 value: (window?.remainingPercent ?? 0) / 100,
                 tint: rowColor(window: window),
-                height: 2
+                height: 2,
+                track: CCPopoverPalette.progressTrack
             )
 
             Text(percentText(window: window))
@@ -121,7 +124,7 @@ private struct ImportedCodexRow: View {
 
             ResetTimeText(resetsAt: window?.resetsAt)
                 .font(.system(size: 10))
-                .foregroundStyle(.quaternary)
+                .foregroundStyle(CCPopoverPalette.weakText)
                 .frame(width: 70, alignment: .trailing)
         }
     }
@@ -135,17 +138,17 @@ private struct ImportedCodexRow: View {
                         .frame(width: 12, height: 12)
                     Text(tr("Loading…", "加载中…"))
                         .font(.system(size: 10.5))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(CCPopoverPalette.secondaryText)
                 }
             } else if let err = error {
                 Text(shortError(err))
                     .font(.system(size: 10.5))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(CCPopoverPalette.secondaryText)
                     .lineLimit(1)
             } else {
                 Text("—")
                     .font(.system(size: 10.5))
-                    .foregroundStyle(.quaternary)
+                    .foregroundStyle(CCPopoverPalette.weakText)
             }
         }
     }
@@ -174,7 +177,7 @@ private struct ImportedCodexRow: View {
     }
 
     private func rowColor(window: QuotaWindow?) -> Color {
-        guard let window else { return .secondary }
+        guard let window else { return CCPopoverPalette.secondaryText }
         return statusColor(remainingPercent: window.remainingPercent, tint: .codexAccent)
     }
 

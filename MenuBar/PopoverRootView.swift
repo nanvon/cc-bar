@@ -18,10 +18,12 @@ struct PopoverRootView: View {
             header
 
             Divider()
+                .overlay(CCPopoverPalette.separator)
 
             content
         }
         .frame(width: 340)
+        .background(CCPopoverPalette.panelFill)
     }
 
     // MARK: Header
@@ -31,13 +33,14 @@ struct PopoverRootView: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(tr("Usage", "用量"))
                     .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(CCPopoverPalette.primaryText)
 
                 // 用 TimelineView 每秒重新渲染一次,让 "Xs 前已刷新" 实时滚动。
                 // Popover 不可见时 TimelineView 不会被调度,几乎零 CPU 成本。
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     Text(headerSubtitle(now: context.date))
                         .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(CCPopoverPalette.secondaryText)
                         .monospacedDigit()
                         .lineLimit(1)
                 }
@@ -56,7 +59,7 @@ struct PopoverRootView: View {
             Button(action: refresh) {
                 Image(systemName: "arrow.clockwise")
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(CCPopoverPalette.iconText)
                     .rotationEffect(.degrees(refreshRotation))
                     .animation(.easeInOut(duration: 0.7), value: refreshRotation)
             }
@@ -68,7 +71,7 @@ struct PopoverRootView: View {
             Button { activateAndOpenMain() } label: {
                 Image(systemName: "chart.bar.xaxis")
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(CCPopoverPalette.iconText)
             }
             .buttonStyle(PopoverIconButtonStyle())
             .help(tr("Open Statistics", "查看统计"))
@@ -76,7 +79,7 @@ struct PopoverRootView: View {
             Button { activateAndOpenMain() } label: {
                 Image(systemName: "gearshape")
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(CCPopoverPalette.iconText)
             }
             .buttonStyle(PopoverIconButtonStyle())
             .help(tr("Settings", "设置"))
@@ -84,7 +87,7 @@ struct PopoverRootView: View {
             Button { NSApp.terminate(nil) } label: {
                 Image(systemName: "power")
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(CCPopoverPalette.iconText)
             }
             .buttonStyle(PopoverIconButtonStyle())
             .help(tr("Quit", "退出"))
@@ -122,10 +125,10 @@ struct PopoverRootView: View {
             VStack(spacing: 6) {
                 Text(tr("No services enabled", "未启用任何服务"))
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(CCPopoverPalette.secondaryText)
                 Text(tr("Enable a service in Settings → Accounts", "到「设置 → 账号」开启"))
                     .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(CCPopoverPalette.weakText)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 24)
@@ -149,12 +152,16 @@ struct PopoverRootView: View {
                 // 其他 Codex 账号分区（visible 为 0 时自动隐藏）
                 let hasImported = appState.importedCodexAccounts.contains(where: \.visibleInPopover)
                 if hasImported {
-                    Divider().padding(.horizontal, 16)
+                    Divider()
+                        .overlay(CCPopoverPalette.separator)
+                        .padding(.horizontal, 16)
                     OtherCodexAccountsSection()
                 }
 
                 if showClaude && (showCodex || hasImported) {
-                    Divider().padding(.horizontal, 16)
+                    Divider()
+                        .overlay(CCPopoverPalette.separator)
+                        .padding(.horizontal, 16)
                 }
                 if showClaude {
                     ServiceBlockView(
@@ -298,7 +305,7 @@ private struct ServiceBlockView: View {
             if let message = shortError(error) {
                 Text(message)
                     .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(CCPopoverPalette.secondaryText)
                     .lineLimit(2)
             }
         }
@@ -315,11 +322,11 @@ private struct ServiceBlockView: View {
                 Text(title)
                     .font(.system(size: 13, weight: .semibold))
                     .kerning(-0.1)
-                    .foregroundColor(.primary)
+                    .foregroundColor(CCPopoverPalette.primaryText)
                 + Text("   ")
                 + Text(subtitle)
                     .font(.system(size: 11))
-                    .foregroundColor(.secondary.opacity(0.75))
+                    .foregroundColor(CCPopoverPalette.secondaryText.opacity(0.9))
             )
             .lineLimit(1)
             .truncationMode(.tail)
@@ -363,18 +370,23 @@ private struct ServiceBlockView: View {
                 Text("5-HOUR · 五小时")
                     .font(.system(size: 9, weight: .semibold))
                     .kerning(0.5)
-                    .foregroundStyle(.quaternary)
+                    .foregroundStyle(CCPopoverPalette.weakText)
             }
 
             // 右:5h 进度条 + 两行(数值 / label)
             VStack(alignment: .leading, spacing: 8) {
-                ProgressBar(value: fiveHourRemaining / 100, tint: fiveHourColor, height: 7)
+                ProgressBar(
+                    value: fiveHourRemaining / 100,
+                    tint: fiveHourColor,
+                    height: 7,
+                    track: CCPopoverPalette.progressTrack
+                )
 
                 VStack(spacing: 1) {
                     HStack(spacing: 0) {
                         ResetTimeText(resetsAt: snapshot?.fiveHour?.resetsAt)
                             .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(.primary)
+                            .foregroundStyle(CCPopoverPalette.primaryText)
                             .lineLimit(1)
 
                         Spacer(minLength: 8)
@@ -388,13 +400,13 @@ private struct ServiceBlockView: View {
                     HStack(spacing: 0) {
                         BilingualInline(english: "reset", chinese: "重置")
                             .font(.system(size: 9.5))
-                            .foregroundStyle(.quaternary)
+                            .foregroundStyle(CCPopoverPalette.weakText)
 
                         Spacer(minLength: 0)
 
                         BilingualInline(english: "cost", chinese: "花费")
                             .font(.system(size: 9.5))
-                            .foregroundStyle(.quaternary)
+                            .foregroundStyle(CCPopoverPalette.weakText)
                     }
                 }
             }
@@ -407,10 +419,15 @@ private struct ServiceBlockView: View {
             Text("WK")
                 .font(.system(size: 9, weight: .semibold))
                 .kerning(0.6)
-                .foregroundStyle(.quaternary)
+                .foregroundStyle(CCPopoverPalette.weakText)
                 .frame(width: 36, alignment: .leading)
 
-            ProgressBar(value: weeklyRemaining / 100, tint: weeklyColor, height: 2.5)
+            ProgressBar(
+                value: weeklyRemaining / 100,
+                tint: weeklyColor,
+                height: 2.5,
+                track: CCPopoverPalette.progressTrack
+            )
 
             Text(weeklyPercentText)
                 .font(.system(size: 10.5, weight: .medium))
@@ -419,7 +436,7 @@ private struct ServiceBlockView: View {
 
             ResetTimeText(resetsAt: snapshot?.weekly?.resetsAt)
                 .font(.system(size: 10.5))
-                .foregroundStyle(.quaternary)
+                .foregroundStyle(CCPopoverPalette.weakText)
         }
     }
 
@@ -427,11 +444,11 @@ private struct ServiceBlockView: View {
         HStack(spacing: 4) {
             BilingualInline(english: english, chinese: chinese)
                 .font(.system(size: 10))
-                .foregroundStyle(.quaternary)
+                .foregroundStyle(CCPopoverPalette.weakText)
             Text(value)
                 .font(.system(size: 11, weight: .medium))
                 .monospacedDigit()
-                .foregroundStyle(.primary)
+                .foregroundStyle(CCPopoverPalette.primaryText)
         }
     }
 
@@ -446,12 +463,12 @@ private struct ServiceBlockView: View {
     }
 
     private var fiveHourColor: Color {
-        guard snapshot?.fiveHour != nil else { return .secondary }
+        guard snapshot?.fiveHour != nil else { return CCPopoverPalette.secondaryText }
         return statusColor(remainingPercent: fiveHourRemaining, tint: tint)
     }
 
     private var weeklyColor: Color {
-        guard snapshot?.weekly != nil else { return .secondary }
+        guard snapshot?.weekly != nil else { return CCPopoverPalette.secondaryText }
         return statusColor(remainingPercent: weeklyRemaining, tint: tint)
     }
 

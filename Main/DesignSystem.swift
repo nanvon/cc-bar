@@ -25,7 +25,7 @@ func statusColor(remainingPercent: Double?, tint: Color) -> Color {
 // normal 档统一用石墨灰(中性灰),不随服务识别色变化。
 private let quotaNormalColor = quotaAdaptiveColor(
     light: (red: 108, green: 108, blue: 112), // #6C6C70
-    dark: (red: 152, green: 152, blue: 157)   // #98989D
+    dark: (red: 216, green: 216, blue: 210)   // #D8D8D2
 )
 
 private let quotaWarningColor = quotaAdaptiveColor(
@@ -57,6 +57,62 @@ private func quotaAdaptiveColor(
             alpha: 1
         )
     })
+}
+
+// MARK: - Popover high-contrast palette
+//
+// Popover 覆在半透明深灰 material 上,系统 secondary / tertiary 容易发灰。
+// 这里集中定义一套只给 Popover 使用的高对比语义色。
+
+enum CCPopoverPalette {
+    static let panelFill = dynamicColor(
+        light: (red: 244, green: 241, blue: 234, alpha: 0.88), // #F4F1EA
+        dark: (red: 58, green: 58, blue: 56, alpha: 0.92)      // #3A3A38
+    )
+    static let primaryText = dynamicColor(
+        light: (red: 31, green: 35, blue: 40, alpha: 1.0),     // #1F2328
+        dark: (red: 245, green: 245, blue: 242, alpha: 1.0)    // #F5F5F2
+    )
+    static let secondaryText = dynamicColor(
+        light: (red: 88, green: 96, blue: 105, alpha: 1.0),    // #586069
+        dark: (red: 201, green: 201, blue: 196, alpha: 1.0)    // #C9C9C4
+    )
+    static let weakText = dynamicColor(
+        light: (red: 110, green: 119, blue: 129, alpha: 1.0),  // #6E7781
+        dark: (red: 168, green: 168, blue: 162, alpha: 1.0)    // #A8A8A2
+    )
+    static let iconText = dynamicColor(
+        light: (red: 75, green: 85, blue: 99, alpha: 1.0),     // #4B5563
+        dark: (red: 216, green: 216, blue: 210, alpha: 1.0)    // #D8D8D2
+    )
+    static let separator = dynamicColor(
+        light: (red: 31, green: 35, blue: 40, alpha: 0.12),
+        dark: (red: 245, green: 245, blue: 242, alpha: 0.12)
+    )
+    static let progressTrack = dynamicColor(
+        light: (red: 110, green: 119, blue: 129, alpha: 0.16),
+        dark: (red: 138, green: 138, blue: 132, alpha: 0.45)   // #8A8A84
+    )
+    static let buttonHoverFill = dynamicColor(
+        light: (red: 31, green: 35, blue: 40, alpha: 0.08),
+        dark: (red: 245, green: 245, blue: 242, alpha: 0.12)
+    )
+
+    private static func dynamicColor(
+        light: (red: CGFloat, green: CGFloat, blue: CGFloat, alpha: CGFloat),
+        dark: (red: CGFloat, green: CGFloat, blue: CGFloat, alpha: CGFloat)
+    ) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            let rgba = isDark ? dark : light
+            return NSColor(
+                calibratedRed: rgba.red / 255,
+                green: rgba.green / 255,
+                blue: rgba.blue / 255,
+                alpha: rgba.alpha
+            )
+        })
+    }
 }
 
 // MARK: - Reset time (hover 切换格式)
@@ -281,12 +337,13 @@ struct ProgressBar: View {
     let value: Double
     let tint: Color
     var height: CGFloat = 5
+    var track: Color = Color.secondary.opacity(0.18)
 
     var body: some View {
         GeometryReader { proxy in
             ZStack(alignment: .leading) {
                 Capsule()
-                    .fill(Color.secondary.opacity(0.18))
+                    .fill(track)
 
                 Capsule()
                     .fill(tint)
@@ -444,7 +501,7 @@ struct PopoverIconButtonStyle: ButtonStyle {
             .frame(width: 26, height: 22)
             .background(
                 RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(hovering && isEnabled ? Color.primary.opacity(0.08) : .clear)
+                    .fill(hovering && isEnabled ? CCPopoverPalette.buttonHoverFill : .clear)
             )
             .opacity(configuration.isPressed ? 0.5 : 1)
             .contentShape(Rectangle())
