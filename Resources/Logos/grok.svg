@@ -1,6 +1,10 @@
-<svg width="100" height="100" viewBox="0 0 466.04 516.93" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <!-- Official xAI monogram (white on accent tile), adapted from public XAI logo geometry -->
-  <g fill="white">
+<svg width="100" height="100" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!--
+    Official xAI monogram, optically sized for menu bar / tiles.
+    Source geometry is tall (~466×517); we center it in a 100×100 frame with
+    ~20% padding so it matches Codex/Claude glyph weight at 18pt.
+  -->
+  <g fill="white" transform="translate(20.5 16.5) scale(0.127)">
     <polygon points="0.12 182.71 234.14 516.92 338.15 516.92 104.13 182.71 0.12 182.71"/>
     <polygon points="0 516.92 104.08 516.92 156.08 442.67 104.04 368.34 0 516.92"/>
     <polygon points="466.04 0 361.96 0 182.1 256.86 234.15 331.18 466.04 0"/>
