@@ -4,6 +4,7 @@ nonisolated enum QuotaHistoryAccountKind: String, Sendable, Codable {
     case codexPrimary
     case codexImported
     case claudePrimary
+    case grokPrimary
 }
 
 nonisolated struct QuotaHistorySample: Sendable, Equatable, Codable {
@@ -54,6 +55,13 @@ enum QuotaHistoryAccountKey {
 
     nonisolated static func claudePrimary() -> String {
         "claude:primary"
+    }
+
+    nonisolated static func grokPrimary(userId: String?) -> String {
+        if let id = nonEmpty(userId) {
+            return "grok:primary:\(id)"
+        }
+        return "grok:primary"
     }
 
     nonisolated private static func nonEmpty(_ value: String?) -> String? {

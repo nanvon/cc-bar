@@ -30,6 +30,11 @@ nonisolated struct QuotaCachePayload: Sendable, Equatable, Codable {
         set { providers[.antigravity] = newValue }
     }
 
+    var grok: QuotaCacheRecord? {
+        get { providers[.grok] }
+        set { providers[.grok] = newValue }
+    }
+
     private enum CodingKeys: String, CodingKey {
         case version
         case providers

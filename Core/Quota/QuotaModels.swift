@@ -4,6 +4,7 @@ nonisolated enum QuotaApp: String, Sendable, Codable, CaseIterable, Hashable {
     case codex
     case claude
     case antigravity
+    case grok
 }
 
 nonisolated struct QuotaProviderDescriptor: Sendable, Hashable, Identifiable {
@@ -39,6 +40,14 @@ nonisolated struct QuotaProviderDescriptor: Sendable, Hashable, Identifiable {
             vendor: "Google",
             logoName: "antigravity",
             fallback: "A",
+            supportsLocalCost: false
+        ),
+        QuotaProviderDescriptor(
+            app: .grok,
+            title: "Grok",
+            vendor: "xAI",
+            logoName: "grok",
+            fallback: "G",
             supportsLocalCost: false
         ),
     ]
@@ -363,7 +372,7 @@ nonisolated enum QuotaError: Error, CustomStringConvertible {
         case .decode(let msg): return "decode: \(msg)"
         case .tokenRefreshFailed(let msg): return "token refresh failed: \(msg)"
         case .tokenRevoked:
-            return "Claude 登录已失效,请在终端运行 claude 重新登录后再回来刷新"
+            return "登录已失效,请在终端重新登录后再回来刷新"
         }
     }
 

@@ -184,6 +184,10 @@ struct PopoverRootView: View {
             email = appState.antigravityAccount?.email
             plan = appState.antigravityAccount?.planType
             fallback = "Google"
+        case .grok:
+            email = appState.grokAccount?.email
+            plan = appState.grokAccount?.planType?.capitalized
+            fallback = "xAI"
         }
         if !privacy, let email, !email.isEmpty { parts.append(email) }
         if let plan, !plan.isEmpty { parts.append(plan) }
@@ -217,7 +221,7 @@ struct PopoverRootView: View {
         switch app {
         case .codex: usageApp = .codex
         case .claude: usageApp = .claude
-        case .antigravity: return nil
+        case .antigravity, .grok: return nil
         }
         let (from, to) = Self.weekBounds()
         let totals = appState.usageService.aggregator.totals(app: usageApp, from: from, to: to)
@@ -228,7 +232,7 @@ struct PopoverRootView: View {
         switch app {
         case .codex: appState.codexTodayCost
         case .claude: appState.claudeTodayCost
-        case .antigravity: nil
+        case .antigravity, .grok: nil
         }
     }
 
@@ -237,7 +241,7 @@ struct PopoverRootView: View {
         return switch app {
         case .codex: appState.codexServiceStatus
         case .claude: appState.claudeServiceStatus
-        case .antigravity: nil as ServiceStatus?
+        case .antigravity, .grok: nil as ServiceStatus?
         }
     }
 

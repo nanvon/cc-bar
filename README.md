@@ -1,6 +1,6 @@
 # cc-bar
 
-> macOS 菜单栏小工具 —— 一眼看清 Codex、Claude Code 与 Antigravity 的剩余额度。
+> macOS 菜单栏小工具 —— 一眼看清 Codex、Claude Code、Antigravity 与 Grok 的剩余额度。
 
 <p>
   <img alt="platform" src="https://img.shields.io/badge/macOS-14+-blue.svg">
@@ -14,10 +14,10 @@
 
 ## 功能
 
-- **额度显示** —— Codex、Claude Code 与 Antigravity 的 5 小时 / 周窗口剩余额度,实时同步
+- **额度显示** —— Codex、Claude Code、Antigravity 与 Grok 的剩余额度,实时同步
 - **菜单栏 + 悬浮窗** —— 状态栏图标显示剩余百分比;可选桌面悬浮 HUD,可拖动、边缘吸附、置顶不抢焦
 - **多 Codex 账号** —— 支持导入多个 Codex 账号,主副账号在 Popover 同屏展示;设置页可查看每个账号的额外重置次数与到期时间
-- **Token 与费用统计** —— 按今天 / 昨天 / 本周 / 本月 / 本年 / 7 天 / 30 天 / 全部 / 自定义切换;KPI、堆叠柱状图、按服务占比、按模型明细
+- **Token 与费用统计** —— 按今天 / 昨天 / 本周 / 本月 / 本年 / 7 天 / 30 天 / 全部 / 自定义切换;KPI、堆叠柱状图、按服务占比、按模型明细（Codex / Claude）
 - **丰富的设置** —— 账号开关、菜单栏显示项、悬浮窗、刷新间隔、重置时间显示、中英双语、开机自动启动
 
 <p align="center">
@@ -37,7 +37,7 @@
 
 ## 安装
 
-要求 macOS 14 Sonoma 或更新版本。Codex / Claude Code 需已通过终端登录；Antigravity 需安装官方 App 或 IDE，并在运行时提供本地额度服务。
+要求 macOS 14 Sonoma 或更新版本。Codex / Claude Code / Grok 需已通过终端登录；Antigravity 需安装官方 App 或 IDE，并在运行时提供本地额度服务。
 
 1. 到 [Releases](https://github.com/nanvon/cc-bar/releases) 下载最新 `CCBar.app.zip`,解压后把 `CCBar.app` 拖入 `/Applications`。
 
@@ -54,7 +54,7 @@
 
 ## 关于本项目与安全性
 
-cc-bar 是 vibe coding 出来满足个人需求的小工具,并非商业化产品。为了显示额度,它需要读取本地的登录凭据:Codex 的 `~/.codex/auth.json`、Claude Code 的 `~/.claude/.credentials.json` 以及 macOS Keychain。Antigravity 只连接官方进程在 `127.0.0.1` 暴露的本地 Language Server,不保存 Google OAuth 凭据,也不会启动 CLI 或发送模型请求。
+cc-bar 是 vibe coding 出来满足个人需求的小工具,并非商业化产品。为了显示额度,它需要读取本地的登录凭据:Codex 的 `~/.codex/auth.json`、Claude Code 的 `~/.claude/.credentials.json` 与 macOS Keychain、Grok Build 的 `~/.grok/auth.json`。Antigravity 只连接官方进程在 `127.0.0.1` 暴露的本地 Language Server,不保存 Google OAuth 凭据,也不会启动 CLI 或发送模型请求。Grok 额度来自 xAI 统一计费接口（与 `grok` CLI 相同），token 过期时会用 refresh_token 续期并写回 `auth.json`。
 
 发布的 `CCBar.app` 未做 Apple 付费公证(详见上方「安装」)。如果你介意安全性,完全可以**自己用 AI 审阅本仓库代码**,确认无误后**按下方教程自行构建**,不依赖我发布的二进制包。
 

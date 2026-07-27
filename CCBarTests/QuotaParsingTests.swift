@@ -36,6 +36,44 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertNil(fetched.snapshot.weekly)
     }
 
+    func testGrokBillingCreditsMapsWeeklyPrimaryAndProductLimits() {
+        let root: [String: Any] = [
+            "subscriptionTier": "SuperGrok",
+            "config": [
+                "creditUsagePercent": 42.0,
+                "currentPeriod": [
+                    "type": "USAGE_PERIOD_TYPE_WEEKLY",
+                    "start": "2026-07-27T02:22:31.057371+00:00",
+                    "end": "2026-08-03T02:22:31.057371+00:00"
+                ],
+                "billingPeriodStart": "2026-07-27T02:22:31.057371+00:00",
+                "billingPeriodEnd": "2026-08-03T02:22:31.057371+00:00",
+                "productUsage": [
+                    ["product": "GrokBuild", "usagePercent": 30.0],
+                    ["product": "Api", "usagePercent": 12.0],
+                    ["product": "GrokChat"]
+                ],
+                "isUnifiedBillingUser": true
+            ]
+        ]
+
+        let fetched = GrokQuotaClient.parse(root: root)
+        XCTAssertEqual(fetched.snapshot.app, .grok)
+        XCTAssertEqual(fetched.snapshot.primaryLimit?.kind, .weekly)
+        XCTAssertEqual(fetched.snapshot.primaryWindow?.usedPercent, 42)
+        XCTAssertEqual(fetched.snapshot.primaryWindow?.remainingPercent, 58)
+        XCTAssertNotNil(fetched.snapshot.primaryWindow?.resetsAt)
+        XCTAssertEqual(fetched.snapshot.planType, "SuperGrok")
+        XCTAssertEqual(fetched.planType, "SuperGrok")
+        XCTAssertEqual(fetched.snapshot.modelLimits.count, 3)
+        let names = Set(fetched.snapshot.modelLimits.compactMap(\.displayName))
+        XCTAssertTrue(names.contains("Grok Build"))
+        XCTAssertTrue(names.contains("API"))
+        XCTAssertTrue(names.contains("Grok Chat"))
+        let chat = fetched.snapshot.modelLimits.first { $0.displayName == "Grok Chat" }
+        XCTAssertEqual(chat?.window.usedPercent, 0)
+    }
+
     func testClaudeMergesLegacyWindowsAndDynamicFableLimit() {
         let root: [String: Any] = [
             "five_hour": ["utilization": 2.0, "resets_at": "2026-07-13T02:30:00.424333+00:00"],

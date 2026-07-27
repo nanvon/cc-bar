@@ -124,6 +124,10 @@ final class SettingsStore {
         get { isProviderEnabled(.antigravity) }
         set { setProviderEnabled(newValue, for: .antigravity) }
     }
+    var showGrok: Bool {
+        get { isProviderEnabled(.grok) }
+        set { setProviderEnabled(newValue, for: .grok) }
+    }
     var menuBarShowCodex: Bool {
         get { isProviderShownInMenuBar(.codex) }
         set { setProviderShownInMenuBar(newValue, for: .codex) }
@@ -135,6 +139,10 @@ final class SettingsStore {
     var menuBarShowAntigravity: Bool {
         get { isProviderShownInMenuBar(.antigravity) }
         set { setProviderShownInMenuBar(newValue, for: .antigravity) }
+    }
+    var menuBarShowGrok: Bool {
+        get { isProviderShownInMenuBar(.grok) }
+        set { setProviderShownInMenuBar(newValue, for: .grok) }
     }
 
     // 菜单栏
@@ -153,6 +161,10 @@ final class SettingsStore {
     var floatingShowAntigravity: Bool {
         get { isProviderShownInFloatingHUD(.antigravity) }
         set { setProviderShownInFloatingHUD(newValue, for: .antigravity) }
+    }
+    var floatingShowGrok: Bool {
+        get { isProviderShownInFloatingHUD(.grok) }
+        set { setProviderShownInFloatingHUD(newValue, for: .grok) }
     }
 
     // 刷新
@@ -280,6 +292,7 @@ final class SettingsStore {
                 floatingHUD: defaults.object(forKey: Keys.floatingShowClaude) as? Bool ?? true
             ),
             .antigravity: .enabledByDefault,
+            .grok: .enabledByDefault,
         ]
     }
 

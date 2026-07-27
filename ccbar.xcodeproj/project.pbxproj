@@ -69,6 +69,10 @@
 		49C1B300000000000001AABB /* QuotaParsingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B300000000000001AAAA /* QuotaParsingTests.swift */; };
 		49C1B3F3000000000001AABB /* codex-fast-scan.jsonl in Resources */ = {isa = PBXBuildFile; fileRef = 49C1B3F0000000000001AAAA /* codex-fast-scan.jsonl */; };
 		49C1B3F4000000000001AABB /* claude-fast-scan.jsonl in Resources */ = {isa = PBXBuildFile; fileRef = 49C1B3F1000000000001AAAA /* claude-fast-scan.jsonl */; };
+49C1B1A0000000000001AABB /* GrokAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B1A0000000000001AAAA /* GrokAuth.swift */; };
+		49C1B1A1000000000001AABB /* GrokTokenRefresher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B1A1000000000001AAAA /* GrokTokenRefresher.swift */; };
+		49C1B1A2000000000001AABB /* GrokQuotaClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B1A2000000000001AAAA /* GrokQuotaClient.swift */; };
+		49C1B1A3000000000001AABB /* grok.svg in Resources */ = {isa = PBXBuildFile; fileRef = 49C1B1A3000000000001AAAA /* grok.svg */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -150,6 +154,10 @@
 		49C1B301000000000001AAAA /* CCBarTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = CCBarTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		49C1B3F0000000000001AAAA /* codex-fast-scan.jsonl */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "codex-fast-scan.jsonl"; sourceTree = "<group>"; };
 		49C1B3F1000000000001AAAA /* claude-fast-scan.jsonl */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "claude-fast-scan.jsonl"; sourceTree = "<group>"; };
+49C1B1A0000000000001AAAA /* GrokAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GrokAuth.swift; sourceTree = "<group>"; };
+		49C1B1A1000000000001AAAA /* GrokTokenRefresher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GrokTokenRefresher.swift; sourceTree = "<group>"; };
+		49C1B1A2000000000001AAAA /* GrokQuotaClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GrokQuotaClient.swift; sourceTree = "<group>"; };
+		49C1B1A3000000000001AAAA /* grok.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = grok.svg; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -256,6 +264,7 @@
 				49C1B102000000000001AAAA /* JWT.swift */,
 				49C1B103000000000001AAAA /* CodexAuth.swift */,
 				49C1B104000000000001AAAA /* ClaudeAuth.swift */,
+				49C1B1A0000000000001AAAA /* GrokAuth.swift */,
 				49C1B191000000000001AAAA /* ImportedCodexAccount.swift */,
 				49C1B192000000000001AAAA /* ImportedCodexStore.swift */,
 			);
@@ -283,6 +292,8 @@
 				49C1B122000000000001AAAA /* CodexQuotaClient.swift */,
 				49C1B128000000000001AAAA /* CodexResetCreditsClient.swift */,
 				49C1B129000000000001AAAA /* AntigravityQuotaClient.swift */,
+				49C1B1A1000000000001AAAA /* GrokTokenRefresher.swift */,
+				49C1B1A2000000000001AAAA /* GrokQuotaClient.swift */,
 				49C1B123000000000001AAAA /* ClaudeQuotaClient.swift */,
 				49C1B124000000000001AAAA /* ClaudeCLIFallbackQuotaClient.swift */,
 				49C1B125000000000001AAAA /* ClaudeTokenRefresher.swift */,
@@ -298,6 +309,7 @@
 				49C1B140000000000001AAAA /* codex.svg */,
 				49C1B141000000000001AAAA /* claude.svg */,
 				49C1B143000000000001AAAA /* antigravity.svg */,
+				49C1B1A3000000000001AAAA /* grok.svg */,
 			);
 			path = Logos;
 			sourceTree = "<group>";
@@ -490,6 +502,7 @@
 				49C1B140000000000001AABB /* codex.svg in Resources */,
 				49C1B141000000000001AABB /* claude.svg in Resources */,
 				49C1B143000000000001AABB /* antigravity.svg in Resources */,
+				49C1B1A3000000000001AABB /* grok.svg in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -542,6 +555,7 @@
 				49C1B102000000000001AABB /* JWT.swift in Sources */,
 				49C1B103000000000001AABB /* CodexAuth.swift in Sources */,
 				49C1B104000000000001AABB /* ClaudeAuth.swift in Sources */,
+				49C1B1A0000000000001AABB /* GrokAuth.swift in Sources */,
 				49C1B105000000000001AABB /* Settings.swift in Sources */,
 				49C1B106000000000001AABB /* QuotaCache.swift in Sources */,
 				49C1B120000000000001AABB /* QuotaModels.swift in Sources */,
@@ -549,6 +563,8 @@
 				49C1B122000000000001AABB /* CodexQuotaClient.swift in Sources */,
 				49C1B128000000000001AABB /* CodexResetCreditsClient.swift in Sources */,
 				49C1B129000000000001AABB /* AntigravityQuotaClient.swift in Sources */,
+				49C1B1A1000000000001AABB /* GrokTokenRefresher.swift in Sources */,
+				49C1B1A2000000000001AABB /* GrokQuotaClient.swift in Sources */,
 				49C1B123000000000001AABB /* ClaudeQuotaClient.swift in Sources */,
 				49C1B124000000000001AABB /* ClaudeCLIFallbackQuotaClient.swift in Sources */,
 				49C1B125000000000001AABB /* ClaudeTokenRefresher.swift in Sources */,

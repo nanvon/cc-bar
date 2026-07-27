@@ -34,6 +34,23 @@ struct ClaudeAccount: Sendable, Equatable {
     var refreshToken: String?
 }
 
+/// Grok Build / xAI CLI 登录态，对应 `~/.grok/auth.json`。
+struct GrokAccount: Sendable, Equatable {
+    /// auth.json 顶层 map 的 key，写回时用（如 `https://auth.x.ai::<client_id>`）
+    var storageKey: String
+    var email: String?
+    var userId: String?
+    var teamId: String?
+    var planType: String?
+    var expiresAt: Date?
+    var expiredGuess: Bool
+    var oidcIssuer: String
+    var oidcClientId: String
+    /// 仅内存使用，不打印 / 不持久化到 UserDefaults
+    var accessToken: String?
+    var refreshToken: String?
+}
+
 enum CredentialError: Error, CustomStringConvertible {
     case fileNotFound(String)
     case invalidJSON(String)

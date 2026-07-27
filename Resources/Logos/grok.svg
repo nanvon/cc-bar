@@ -1,0 +1,5 @@
+<svg width="100" height="100" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Stylized G mark for Grok / xAI menu-bar tile (white on accent) -->
+  <path d="M50 12C29.014 12 12 29.014 12 50s17.014 38 38 38c12.426 0 23.55-5.966 30.5-15.2l-11.2-7.4C64.7 72.2 57.8 76 50 76c-14.36 0-26-11.64-26-26s11.64-26 26-26c9.3 0 17.4 4.9 21.9 12.2H50v14h36.5C84.2 28.8 68.7 12 50 12z" fill="white"/>
+  <circle cx="70" cy="50" r="6" fill="white"/>
+</svg>

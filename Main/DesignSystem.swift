@@ -13,6 +13,7 @@ extension QuotaApp {
         case .codex: .codexAccent
         case .claude: .claudeAccent
         case .antigravity: .antigravityAccent
+        case .grok: .grokAccent
         }
     }
 }

@@ -189,6 +189,17 @@ private struct DetectAccountsStep: View {
                     fallback: "A",
                     isDetected: antigravityDetected
                 )
+                DetectedAccountRow(
+                    title: "Grok",
+                    subtitle: "xAI",
+                    plan: appState.grokAccount?.planType,
+                    email: appState.grokAccount?.email,
+                    source: "~/.grok/auth.json",
+                    tint: .grokAccent,
+                    logoName: "grok",
+                    fallback: "G",
+                    isDetected: appState.grokAccount != nil
+                )
             }
             .padding(.top, 18)
 
@@ -227,7 +238,10 @@ private struct DetectAccountsStep: View {
     }
 
     private var anyDetected: Bool {
-        appState.codexAccount != nil || appState.claudeAccount != nil || antigravityDetected
+        appState.codexAccount != nil
+            || appState.claudeAccount != nil
+            || antigravityDetected
+            || appState.grokAccount != nil
     }
 }
 

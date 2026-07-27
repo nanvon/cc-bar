@@ -98,6 +98,18 @@ struct SettingsRootView: View {
                         set: { settings.showAntigravity = $0 }
                     )
                 )
+                AccountRow(
+                    title: "Grok",
+                    subtitle: "xAI",
+                    tint: .grokAccent,
+                    logoName: "grok",
+                    fallback: "G",
+                    email: appState.grokAccount?.email,
+                    plan: appState.grokAccount?.planType,
+                    availability: appState.grokAccount == nil ? .notDetected : .connected,
+                    canToggle: appState.grokAccount != nil,
+                    isOn: Binding(get: { settings.showGrok }, set: { settings.showGrok = $0 })
+                )
             }
 
             // 其他 Codex 账号（手动导入）

@@ -9,8 +9,10 @@ final class AppState {
     var claudeAccount: ClaudeAccount?
     var antigravityAccount: AntigravityAccount?
     var antigravityAvailability: AntigravityAvailability = .notInstalled
+    var grokAccount: GrokAccount?
     var codexError: String?
     var claudeError: String?
+    var grokError: String?
 
     // MARK: 导入的 Codex 副账号
     //
@@ -45,6 +47,10 @@ final class AppState {
         get { quotaSnapshot(for: .antigravity) }
         set { updatePrimaryState(.antigravity) { $0.snapshot = newValue } }
     }
+    var grokQuota: QuotaSnapshot? {
+        get { quotaSnapshot(for: .grok) }
+        set { updatePrimaryState(.grok) { $0.snapshot = newValue } }
+    }
     var codexQuotaError: String? {
         get { quotaError(for: .codex) }
         set { updatePrimaryState(.codex) { $0.error = newValue } }
@@ -56,6 +62,10 @@ final class AppState {
     var antigravityQuotaError: String? {
         get { quotaError(for: .antigravity) }
         set { updatePrimaryState(.antigravity) { $0.error = newValue } }
+    }
+    var grokQuotaError: String? {
+        get { quotaError(for: .grok) }
+        set { updatePrimaryState(.grok) { $0.error = newValue } }
     }
     var codexQuotaSource: QuotaSnapshotSource? {
         get { quotaSource(for: .codex) }
@@ -69,6 +79,10 @@ final class AppState {
         get { quotaSource(for: .antigravity) }
         set { updatePrimaryState(.antigravity) { $0.source = newValue } }
     }
+    var grokQuotaSource: QuotaSnapshotSource? {
+        get { quotaSource(for: .grok) }
+        set { updatePrimaryState(.grok) { $0.source = newValue } }
+    }
     var codexRefreshState: QuotaRefreshState {
         get { refreshState(for: .codex) }
         set { updatePrimaryState(.codex) { $0.refresh = newValue } }
@@ -80,6 +94,10 @@ final class AppState {
     var antigravityRefreshState: QuotaRefreshState {
         get { refreshState(for: .antigravity) }
         set { updatePrimaryState(.antigravity) { $0.refresh = newValue } }
+    }
+    var grokRefreshState: QuotaRefreshState {
+        get { refreshState(for: .grok) }
+        set { updatePrimaryState(.grok) { $0.refresh = newValue } }
     }
     var quotaHistory = QuotaHistoryPayload()
 
@@ -125,6 +143,7 @@ final class AppState {
         await loadCodex()
         maybeShowKeychainPrompt()
         await loadClaude()
+        await loadGrok()
         antigravityAvailability = await AntigravityQuotaClient.detectAvailability()
         logCredentialSummary()
 
@@ -192,8 +211,10 @@ final class AppState {
     func refreshQuotas(reason: QuotaRefreshReason = .periodic) async {
         await loadCodex()
         await loadClaude()
+        await loadGrok()
         await loadCodexQuota(reason: reason)
         await loadClaudeQuota(reason: reason)
+        await loadGrokQuota(reason: reason)
         await loadAntigravityQuota(reason: reason)
         await loadAllImportedCodexQuotas(reason: reason)
         logQuotaSummary()
@@ -736,6 +757,16 @@ final class AppState {
         )
     }
 
+    private func recordGrokQuotaHistory(snapshot: QuotaSnapshot, sampledAt: Date) {
+        recordQuotaHistory(
+            accountKey: QuotaHistoryAccountKey.grokPrimary(userId: grokAccount?.userId),
+            app: .grok,
+            kind: .grokPrimary,
+            snapshot: snapshot,
+            sampledAt: sampledAt
+        )
+    }
+
     private func recordImportedCodexQuotaHistory(id: String, snapshot: QuotaSnapshot, sampledAt: Date) {
         recordQuotaHistory(
             accountKey: QuotaHistoryAccountKey.codexImported(id: id),
@@ -872,6 +903,39 @@ final class AppState {
         saveQuotaCache()
     }
 
+    private func loadGrok() async {
+        do {
+            let next = try await Task.detached(priority: .utility) {
+                try GrokAuth.load()
+            }.value
+            if grokIdentityChanged(previous: grokAccount, next: next) {
+                resetGrokQuotaState()
+            }
+            self.grokAccount = next
+            self.grokError = nil
+        } catch {
+            self.grokAccount = nil
+            self.grokError = "\(error)"
+        }
+    }
+
+    private func grokIdentityChanged(previous: GrokAccount?, next: GrokAccount) -> Bool {
+        guard let previous else { return false }
+        if let a = previous.userId, let b = next.userId, !a.isEmpty, !b.isEmpty {
+            return a != b
+        }
+        return previous.email != next.email
+    }
+
+    private func resetGrokQuotaState() {
+        grokQuota = nil
+        grokQuotaSource = nil
+        grokQuotaError = nil
+        grokRefreshState = QuotaRefreshState()
+        quotaCache.grok = nil
+        saveQuotaCache()
+    }
+
     private func loadCodexQuota(reason: QuotaRefreshReason) async {
         guard beginCodexRefresh(reason: reason) else { return }
         defer { codexRefreshState.inFlight = false }
@@ -962,6 +1026,54 @@ final class AppState {
             if reason == .userInitiated, claudeQuota == nil {
                 await loadClaudeCLIFallback(apiError: err)
             }
+        }
+    }
+
+    private func loadGrokQuota(reason: QuotaRefreshReason) async {
+        guard SettingsStore.shared.showGrok else { return }
+        guard beginGrokRefresh(reason: reason) else { return }
+        defer { grokRefreshState.inFlight = false }
+
+        guard var account = grokAccount else {
+            markGrokFailure("no grok account")
+            return
+        }
+        guard account.accessToken != nil else {
+            markGrokFailure(QuotaError.missingToken.description)
+            return
+        }
+        let refreshed = await GrokTokenRefresher.ensureFreshAccessToken(account: &account)
+        let activeToken: String
+        switch refreshed {
+        case .success(let t):
+            activeToken = t
+            if t != grokAccount?.accessToken {
+                grokAccount = account
+            }
+        case .failure(let err):
+            if err.isAuthRevoked {
+                markGrokFailure(
+                    "Grok 登录已失效,请在终端运行 grok login 重新登录后再回来刷新",
+                    error: err
+                )
+            } else {
+                markGrokFailure(err.description, error: err)
+            }
+            return
+        }
+        let result = await GrokQuotaClient.fetch(accessToken: activeToken)
+        switch result {
+        case .success(let fetched):
+            if account.planType == nil, let plan = fetched.planType {
+                account.planType = plan
+                grokAccount = account
+            } else if let plan = fetched.planType, account.planType != plan {
+                account.planType = plan
+                grokAccount = account
+            }
+            storeGrok(snapshot: fetched.snapshot, source: .api)
+        case .failure(let err):
+            markGrokFailure(err.description, error: err)
         }
     }
 
@@ -1063,6 +1175,24 @@ final class AppState {
         return true
     }
 
+    private func beginGrokRefresh(reason: QuotaRefreshReason) -> Bool {
+        let now = Date()
+        guard !grokRefreshState.inFlight else { return false }
+        if let backoffUntil = grokRefreshState.backoffUntil, backoffUntil > now {
+            markGrokFailure(backoffMessage(until: backoffUntil))
+            return false
+        }
+        if reason == .periodic,
+           let lastSuccessAt = grokRefreshState.lastSuccessAt,
+           now.timeIntervalSince(lastSuccessAt) < minSuccessInterval
+        {
+            return false
+        }
+        grokRefreshState.inFlight = true
+        grokRefreshState.lastAttemptAt = now
+        return true
+    }
+
     private func beginAntigravityRefresh(reason: QuotaRefreshReason) -> Bool {
         let now = Date()
         guard !antigravityRefreshState.inFlight else { return false }
@@ -1131,6 +1261,27 @@ final class AppState {
         saveQuotaCache()
     }
 
+    private func storeGrok(snapshot: QuotaSnapshot, source: QuotaSnapshotSource) {
+        let updatedAt = Date()
+        let mergedSnapshot = snapshot.preservingFutureResetDates(from: grokQuota, now: updatedAt)
+        grokQuota = mergedSnapshot
+        grokQuotaSource = source
+        grokQuotaError = nil
+        grokRefreshState.lastSuccessAt = updatedAt
+        grokRefreshState.lastError = nil
+        if source == .api {
+            grokRefreshState.backoffUntil = nil
+        }
+        grokRefreshState.source = source
+        quotaCache.grok = QuotaCacheRecord(
+            snapshot: mergedSnapshot,
+            source: source,
+            updatedAt: updatedAt
+        )
+        saveQuotaCache()
+        recordGrokQuotaHistory(snapshot: mergedSnapshot, sampledAt: updatedAt)
+    }
+
     private func markCodexFailure(_ message: String, error: QuotaError? = nil) {
         codexQuotaError = message
         codexRefreshState.lastError = message
@@ -1152,6 +1303,14 @@ final class AppState {
         antigravityRefreshState.lastError = message
         if error?.isRateLimited == true {
             antigravityRefreshState.backoffUntil = Date().addingTimeInterval(rateLimitBackoff)
+        }
+    }
+
+    private func markGrokFailure(_ message: String, error: QuotaError? = nil) {
+        grokQuotaError = message
+        grokRefreshState.lastError = message
+        if error?.isRateLimited == true {
+            grokRefreshState.backoffUntil = Date().addingTimeInterval(rateLimitBackoff)
         }
     }
 
@@ -1180,6 +1339,11 @@ final class AppState {
         case .unavailable(let detail):
             print("[Credentials 凭据] Antigravity 检测失败: \(detail)")
         }
+        if let g = grokAccount {
+            print("[Credentials 凭据] Grok: email=\(g.email ?? "—") plan=\(g.planType ?? "—") user_id=\(g.userId ?? "—") expiredGuess=\(g.expiredGuess) hasAccessToken=\(g.accessToken != nil)")
+        } else {
+            print("[Credentials 凭据] Grok 未加载: error=\(grokError ?? "unknown")")
+        }
     }
 
     private func logQuotaSummary() {
@@ -1200,6 +1364,14 @@ final class AppState {
             print("[Quota 额度] Antigravity: source=\(antigravityQuotaSource?.rawValue ?? "—") plan=\(q.planType ?? "—") \(format(q))")
         } else {
             print("[Quota 额度] Antigravity 拉取失败: error=\(antigravityQuotaError ?? "unknown")")
+        }
+        if let q = grokQuota {
+            print("[Quota 额度] Grok: source=\(grokQuotaSource?.rawValue ?? "—") plan=\(q.planType ?? "—") \(format(q))")
+            for limit in q.modelLimits {
+                print("       └─ \(limit.displayName ?? limit.id)=\(format(window: limit.window))")
+            }
+        } else {
+            print("[Quota 额度] Grok 拉取失败: error=\(grokQuotaError ?? "unknown")")
         }
     }
 
