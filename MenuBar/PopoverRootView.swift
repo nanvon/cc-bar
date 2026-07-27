@@ -186,7 +186,8 @@ struct PopoverRootView: View {
             fallback = "Google"
         case .grok:
             email = appState.grokAccount?.email
-            plan = appState.grokAccount?.planType?.capitalized
+            // planType 已是展示名（SuperGrok 等），不再二次 capitalized 破坏大小写
+            plan = appState.grokAccount?.planType
             fallback = "xAI"
         }
         if !privacy, let email, !email.isEmpty { parts.append(email) }

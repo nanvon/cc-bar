@@ -906,17 +906,50 @@ final class AppState {
 
     private func loadGrok() async {
         do {
-            let next = try await Task.detached(priority: .utility) {
+            var next = try await Task.detached(priority: .utility) {
                 try GrokAuth.load()
             }.value
             if grokIdentityChanged(previous: grokAccount, next: next) {
                 resetGrokQuotaState()
+            } else if next.planType == nil, let prevPlan = grokAccount?.planType {
+                // 重读 auth.json 不会带订阅档；保留上一次从 API 回填的 plan。
+                next.planType = prevPlan
             }
             self.grokAccount = next
             self.grokError = nil
+            // 设置页要立刻显示 subscription（类似 Claude 凭据里的 subscriptionType），
+            // 不必等周期性额度刷新。
+            await enrichGrokSubscriptionIfNeeded()
         } catch {
             self.grokAccount = nil
             self.grokError = "\(error)"
+        }
+    }
+
+    /// 用 `/rest/subscriptions` 补全 `planType`，失败静默（额度刷新仍会再试）。
+    private func enrichGrokSubscriptionIfNeeded() async {
+        guard var account = grokAccount, account.planType == nil,
+              let token = account.accessToken, !token.isEmpty
+        else { return }
+        // 先确保 token 可用，避免刚启动时 access 已过期。
+        let refreshed = await GrokTokenRefresher.ensureFreshAccessToken(account: &account)
+        let activeToken: String
+        switch refreshed {
+        case .success(let t):
+            activeToken = t
+            if t != grokAccount?.accessToken {
+                grokAccount = account
+            }
+        case .failure:
+            return
+        }
+        switch await GrokQuotaClient.fetchSubscriptionDisplayName(accessToken: activeToken) {
+        case .success(let plan):
+            guard var current = grokAccount else { return }
+            current.planType = plan
+            grokAccount = current
+        case .failure:
+            break
         }
     }
 
@@ -1065,10 +1098,7 @@ final class AppState {
         let result = await GrokQuotaClient.fetch(accessToken: activeToken)
         switch result {
         case .success(let fetched):
-            if account.planType == nil, let plan = fetched.planType {
-                account.planType = plan
-                grokAccount = account
-            } else if let plan = fetched.planType, account.planType != plan {
+            if let plan = fetched.planType, !plan.isEmpty, account.planType != plan {
                 account.planType = plan
                 grokAccount = account
             }

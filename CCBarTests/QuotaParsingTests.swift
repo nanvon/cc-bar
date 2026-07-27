@@ -137,6 +137,37 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertEqual(chat?.window.usedPercent, 0)
     }
 
+    func testGrokSubscriptionTierMapsToDisplayName() {
+        XCTAssertEqual(
+            GrokQuotaClient.displayName(forTier: "SUBSCRIPTION_TIER_GROK_PRO"),
+            "SuperGrok"
+        )
+        XCTAssertEqual(
+            GrokQuotaClient.displayName(forTier: "SuperGrok"),
+            "SuperGrok"
+        )
+        XCTAssertEqual(
+            GrokQuotaClient.displayName(forProductId: "grok.pro.monthly.30.legacy"),
+            "SuperGrok"
+        )
+
+        let root: [String: Any] = [
+            "subscriptions": [
+                [
+                    "tier": "SUBSCRIPTION_TIER_GROK_PRO",
+                    "status": "SUBSCRIPTION_STATUS_ACTIVE",
+                    "apple": [
+                        "productId": "grok.pro.monthly.30.legacy"
+                    ]
+                ]
+            ]
+        ]
+        XCTAssertEqual(
+            GrokQuotaClient.parseSubscriptionDisplayName(root: root),
+            "SuperGrok"
+        )
+    }
+
     func testClaudeMergesLegacyWindowsAndDynamicFableLimit() {
         let root: [String: Any] = [
             "five_hour": ["utilization": 2.0, "resets_at": "2026-07-13T02:30:00.424333+00:00"],
