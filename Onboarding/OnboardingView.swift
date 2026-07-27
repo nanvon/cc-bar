@@ -23,7 +23,8 @@ struct OnboardingView: View {
                 progressDots.padding(.bottom, 16)
             }
         }
-        .frame(width: 620, height: 520)
+        // 检测页现有 4 个 Provider 行，略增高避免底部按钮被挤。
+        .frame(width: 620, height: 560)
         .background(.regularMaterial)
         .animation(.easeInOut(duration: 0.25), value: step)
     }
@@ -81,14 +82,14 @@ private struct WelcomeStep: View {
                 .kerning(-0.4)
 
             Text(tr(
-                "Track Codex, Claude Code, and Antigravity quota right from your menu bar. We'll detect local providers automatically.",
-                "在菜单栏即时查看 Codex、Claude Code 与 Antigravity 的额度,我们将自动检测本机服务。"
+                "Track Codex, Claude Code, Antigravity, and Grok quota right from your menu bar. We'll detect local providers automatically.",
+                "在菜单栏即时查看 Codex、Claude Code、Antigravity 与 Grok 的额度,我们将自动检测本机服务。"
             ))
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .lineSpacing(2)
-                .frame(maxWidth: 380)
+                .frame(maxWidth: 400)
                 .padding(.top, 14)
 
             VStack(spacing: 8) {
@@ -351,19 +352,36 @@ private struct ConfigureStep: View {
                              chineseTitle: "菜单栏",
                              subtitle: "Show enabled providers next to the menu bar icon.",
                              chineseSubtitle: "在菜单栏图标旁显示百分比") {
-                    HStack(spacing: 12) {
-                        Toggle("Codex", isOn: Binding(get: { settings.menuBarShowCodex }, set: { settings.menuBarShowCodex = $0 }))
+                    // 两行排布，避免 4 个 Provider 挤在一行。
+                    VStack(alignment: .trailing, spacing: 8) {
+                        HStack(spacing: 12) {
+                            Toggle("Codex", isOn: Binding(
+                                get: { settings.menuBarShowCodex },
+                                set: { settings.menuBarShowCodex = $0 }
+                            ))
                             .toggleStyle(.switch)
                             .tint(.green)
-                        Toggle("Claude Code", isOn: Binding(get: { settings.menuBarShowClaude }, set: { settings.menuBarShowClaude = $0 }))
+                            Toggle("Claude Code", isOn: Binding(
+                                get: { settings.menuBarShowClaude },
+                                set: { settings.menuBarShowClaude = $0 }
+                            ))
                             .toggleStyle(.switch)
                             .tint(.green)
-                        Toggle("Antigravity", isOn: Binding(
-                            get: { settings.menuBarShowAntigravity },
-                            set: { settings.menuBarShowAntigravity = $0 }
-                        ))
-                        .toggleStyle(.switch)
-                        .tint(.green)
+                        }
+                        HStack(spacing: 12) {
+                            Toggle("Antigravity", isOn: Binding(
+                                get: { settings.menuBarShowAntigravity },
+                                set: { settings.menuBarShowAntigravity = $0 }
+                            ))
+                            .toggleStyle(.switch)
+                            .tint(.green)
+                            Toggle("Grok", isOn: Binding(
+                                get: { settings.menuBarShowGrok },
+                                set: { settings.menuBarShowGrok = $0 }
+                            ))
+                            .toggleStyle(.switch)
+                            .tint(.green)
+                        }
                     }
                 }
 

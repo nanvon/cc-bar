@@ -28,7 +28,7 @@ struct CCBarApp: App {
             OnboardingView()
                 .environment(appState)
         }
-        .defaultSize(width: 620, height: 520)
+        .defaultSize(width: 620, height: 560)
         .windowResizability(.contentSize)
     }
 }
