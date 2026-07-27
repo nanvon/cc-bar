@@ -132,21 +132,27 @@ final class UsageService {
     private func runScan(prev: ScanState) async -> Bool {
         let started = Date()
         let prevSeen = prev.claudeSeenMessageIds
+        let prevGrokSeen = prev.grokSeenPromptIds
         async let claudeTask = Task.detached(priority: .utility) {
             ClaudeJSONLScanner.scan(previous: prev.claude, seenMessageIds: prevSeen)
         }.value
         async let codexTask = Task.detached(priority: .utility) {
             CodexJSONLScanner.scan(previous: prev.codex)
         }.value
+        async let grokTask = Task.detached(priority: .utility) {
+            GrokJSONLScanner.scan(previous: prev.grok, seenPromptIds: prevGrokSeen)
+        }.value
 
         let claude = await claudeTask
         let codex = await codexTask
+        let grok = await grokTask
 
         aggregator.ingest(claude.entries)
         aggregator.ingest(codex.entries)
+        aggregator.ingest(grok.entries)
         let conversationChanged = conversationAggregator.ingest(
-            entries: claude.entries + codex.entries,
-            seeds: claude.conversationSeeds + codex.conversationSeeds
+            entries: claude.entries + codex.entries + grok.entries,
+            seeds: claude.conversationSeeds + codex.conversationSeeds + grok.conversationSeeds
         )
 
         // 个人历史用量一次性补录：缓存失效路径会清空聚合器，若只在 bootstrap 合并，
@@ -158,7 +164,7 @@ final class UsageService {
         // 没有真实用量或档案变化时沿用现有代次，只提交轻量 watermark。
         let buckets = aggregator.snapshot()
         let fingerprint = Pricing.fingerprint(knownModels: Set(buckets.map { $0.model }))
-        let hasNewEntries = !claude.entries.isEmpty || !codex.entries.isEmpty
+        let hasNewEntries = !claude.entries.isEmpty || !codex.entries.isEmpty || !grok.entries.isEmpty
         let shouldWriteRollups = loadedRollupGeneration == nil || hasNewEntries || conversationChanged
         let generationID = shouldWriteRollups ? UUID().uuidString : loadedRollupGeneration!
         let newScanState = ScanState(
@@ -166,7 +172,9 @@ final class UsageService {
             pricingFingerprint: fingerprint,
             claude: claude.newState,
             codex: codex.newState,
-            claudeSeenMessageIds: claude.newSeenIds
+            grok: grok.newState,
+            claudeSeenMessageIds: claude.newSeenIds,
+            grokSeenPromptIds: grok.newSeenIds
         )
         let shouldWriteScanState = newScanState != prev
 
@@ -230,7 +238,7 @@ final class UsageService {
         publishTotals()
 
         let elapsed = String(format: "%.2fs", Date().timeIntervalSince(started))
-        print("[UsageScan 用量扫描] claude files=\(claude.filesScanned) lines=\(claude.linesParsed) new=\(claude.entries.count); codex files=\(codex.filesScanned) lines=\(codex.linesParsed) new=\(codex.entries.count); elapsed=\(elapsed)")
+        print("[UsageScan 用量扫描] claude files=\(claude.filesScanned) lines=\(claude.linesParsed) new=\(claude.entries.count); codex files=\(codex.filesScanned) lines=\(codex.linesParsed) new=\(codex.entries.count); grok files=\(grok.filesScanned) lines=\(grok.linesParsed) new=\(grok.entries.count); elapsed=\(elapsed)")
         return true
     }
 
@@ -238,5 +246,6 @@ final class UsageService {
         guard let appState else { return }
         appState.codexTodayCost = aggregator.todayCost(for: .codex)
         appState.claudeTodayCost = aggregator.todayCost(for: .claude)
+        appState.grokTodayCost = aggregator.todayCost(for: .grok)
     }
 }

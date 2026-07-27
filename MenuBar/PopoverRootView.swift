@@ -221,7 +221,8 @@ struct PopoverRootView: View {
         switch app {
         case .codex: usageApp = .codex
         case .claude: usageApp = .claude
-        case .antigravity, .grok: return nil
+        case .grok: usageApp = .grok
+        case .antigravity: return nil
         }
         let (from, to) = Self.weekBounds()
         let totals = appState.usageService.aggregator.totals(app: usageApp, from: from, to: to)
@@ -232,7 +233,8 @@ struct PopoverRootView: View {
         switch app {
         case .codex: appState.codexTodayCost
         case .claude: appState.claudeTodayCost
-        case .antigravity, .grok: nil
+        case .grok: appState.grokTodayCost
+        case .antigravity: nil
         }
     }
 

@@ -109,12 +109,14 @@ enum StatsServiceFilter: Hashable, CaseIterable {
     case all
     case codex
     case claude
+    case grok
 
     var englishLabel: String {
         switch self {
         case .all: return "All"
         case .codex: return "Codex"
         case .claude: return "Claude Code"
+        case .grok: return "Grok"
         }
     }
 
@@ -123,6 +125,7 @@ enum StatsServiceFilter: Hashable, CaseIterable {
         case .all: return "全部"
         case .codex: return "Codex"
         case .claude: return "Claude Code"
+        case .grok: return "Grok"
         }
     }
 
@@ -131,6 +134,7 @@ enum StatsServiceFilter: Hashable, CaseIterable {
         case .all: return nil
         case .codex: return .codexAccent
         case .claude: return .claudeAccent
+        case .grok: return .grokAccent
         }
     }
 }
@@ -400,28 +404,47 @@ struct StatsView: View {
             KPICard(
                 english: "Codex",
                 chinese: "Codex",
-                value: serviceFilter == .claude
+                value: serviceFilter != .all && serviceFilter != .codex
                     ? "—"
                     : StatsFormatter.tierCost(
                         currentTotals(.codex).costUSD,
                         hasUnpricedUsage: currentTotals(.codex).hasUnpricedUsage
                     ),
-                delta: serviceFilter == .claude ? nil : costDelta(current: currentTotals(.codex), previous: previousTotals(.codex)),
+                delta: serviceFilter != .all && serviceFilter != .codex
+                    ? nil
+                    : costDelta(current: currentTotals(.codex), previous: previousTotals(.codex)),
                 tint: .codexAccent,
-                dimmed: serviceFilter == .claude
+                dimmed: serviceFilter != .all && serviceFilter != .codex
             )
             KPICard(
                 english: "Claude Code",
                 chinese: "Claude Code",
-                value: serviceFilter == .codex
+                value: serviceFilter != .all && serviceFilter != .claude
                     ? "—"
                     : StatsFormatter.tierCost(
                         currentTotals(.claude).costUSD,
                         hasUnpricedUsage: currentTotals(.claude).hasUnpricedUsage
                     ),
-                delta: serviceFilter == .codex ? nil : costDelta(current: currentTotals(.claude), previous: previousTotals(.claude)),
+                delta: serviceFilter != .all && serviceFilter != .claude
+                    ? nil
+                    : costDelta(current: currentTotals(.claude), previous: previousTotals(.claude)),
                 tint: .claudeAccent,
-                dimmed: serviceFilter == .codex
+                dimmed: serviceFilter != .all && serviceFilter != .claude
+            )
+            KPICard(
+                english: "Grok",
+                chinese: "Grok",
+                value: serviceFilter != .all && serviceFilter != .grok
+                    ? "—"
+                    : StatsFormatter.tierCost(
+                        currentTotals(.grok).costUSD,
+                        hasUnpricedUsage: currentTotals(.grok).hasUnpricedUsage
+                    ),
+                delta: serviceFilter != .all && serviceFilter != .grok
+                    ? nil
+                    : costDelta(current: currentTotals(.grok), previous: previousTotals(.grok)),
+                tint: .grokAccent,
+                dimmed: serviceFilter != .all && serviceFilter != .grok
             )
         }
     }
@@ -453,6 +476,7 @@ struct StatsView: View {
                 }
                 LegendChip(color: .codexAccent, label: "Codex")
                 LegendChip(color: .claudeAccent, label: "Claude Code")
+                LegendChip(color: .grokAccent, label: "Grok")
             }
         )) {
             VStack(spacing: 6) {
@@ -482,6 +506,16 @@ struct StatsView: View {
                                 stacking: .standard
                             )
                             .foregroundStyle(Color.claudeAccent)
+                            .opacity(barOpacity(for: sample))
+                            .cornerRadius(2)
+
+                            BarMark(
+                                x: .value("Day", sample.day, unit: .day),
+                                y: .value("Cost", sample.grokCost.doubleValue),
+                                width: .fixed(dailyBarWidth),
+                                stacking: .standard
+                            )
+                            .foregroundStyle(Color.grokAccent)
                             .opacity(barOpacity(for: sample))
                             .cornerRadius(2)
                         }
@@ -543,6 +577,16 @@ struct StatsView: View {
                     speed: currentSpeedBreakdown(.claude)
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
+                ByServiceRow(
+                    title: "Grok",
+                    subtitle: "xAI",
+                    tint: .grokAccent,
+                    value: currentTotals(.grok).costUSD,
+                    totalValue: currentTotalsAll.costUSD,
+                    totals: currentTotals(.grok),
+                    speed: currentSpeedBreakdown(.grok)
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
@@ -552,14 +596,20 @@ struct StatsView: View {
     private var byModelPanel: some View {
         Panel(title: "By model", chinese: "按模型") {
             VStack(alignment: .leading, spacing: 10) {
-                if serviceFilter != .claude {
+                if serviceFilter == .all || serviceFilter == .codex {
                     modelGroup(title: "Codex", tint: .codexAccent, rows: modelRows(for: .codex))
                 }
-                if serviceFilter != .codex && serviceFilter != .claude {
+                if serviceFilter == .all {
                     Divider()
                 }
-                if serviceFilter != .codex {
+                if serviceFilter == .all || serviceFilter == .claude {
                     modelGroup(title: "Claude Code", tint: .claudeAccent, rows: modelRows(for: .claude))
+                }
+                if serviceFilter == .all {
+                    Divider()
+                }
+                if serviceFilter == .all || serviceFilter == .grok {
+                    modelGroup(title: "Grok", tint: .grokAccent, rows: modelRows(for: .grok))
                 }
             }
         }
@@ -746,6 +796,8 @@ struct StatsView: View {
             return buckets.filter { $0.app == .codex }
         case .claude:
             return buckets.filter { $0.app == .claude }
+        case .grok:
+            return buckets.filter { $0.app == .grok }
         }
     }
 
@@ -795,8 +847,13 @@ struct StatsView: View {
             .filter { $0.day >= bounds.from && $0.day < bounds.to }
         var t = UsageTotals.zero
         for b in buckets {
-            if serviceFilter == .codex && b.app != .codex { continue }
-            if serviceFilter == .claude && b.app != .claude { continue }
+            switch serviceFilter {
+            case .all: break
+            case .codex where b.app != .codex: continue
+            case .claude where b.app != .claude: continue
+            case .grok where b.app != .grok: continue
+            default: break
+            }
             t.add(b)
         }
         return t
@@ -823,18 +880,24 @@ struct StatsView: View {
 
     private var dailySamples: [DailySample] {
         let (from, to) = chartBounds
-        var byDay: [Date: (codex: UsageTotals, claude: UsageTotals)] = [:]
+        var byDay: [Date: (codex: UsageTotals, claude: UsageTotals, grok: UsageTotals)] = [:]
         for b in filteredBuckets(from: from, to: to) {
-            var pair = byDay[b.day] ?? (.zero, .zero)
+            var triple = byDay[b.day] ?? (.zero, .zero, .zero)
             switch b.app {
-            case .codex: pair.codex.add(b)
-            case .claude: pair.claude.add(b)
+            case .codex: triple.codex.add(b)
+            case .claude: triple.claude.add(b)
+            case .grok: triple.grok.add(b)
             }
-            byDay[b.day] = pair
+            byDay[b.day] = triple
         }
         return byDay
             .map {
-                DailySample(day: $0.key, codex: $0.value.codex, claude: $0.value.claude)
+                DailySample(
+                    day: $0.key,
+                    codex: $0.value.codex,
+                    claude: $0.value.claude,
+                    grok: $0.value.grok
+                )
             }
             .sorted { $0.day < $1.day }
     }
@@ -965,6 +1028,10 @@ private struct DailyTooltip: View {
             serviceRow(color: .claudeAccent, label: "Claude Code", value: StatsFormatter.tierCost(
                 sample.claudeCost,
                 hasUnpricedUsage: sample.claude.hasUnpricedUsage
+            ))
+            serviceRow(color: .grokAccent, label: "Grok", value: StatsFormatter.tierCost(
+                sample.grokCost,
+                hasUnpricedUsage: sample.grok.hasUnpricedUsage
             ))
 
             Divider()
@@ -1576,21 +1643,23 @@ private struct DailySample: Identifiable {
     let day: Date
     let codex: UsageTotals
     let claude: UsageTotals
+    let grok: UsageTotals
 
     var codexCost: Decimal { codex.costUSD }
     var claudeCost: Decimal { claude.costUSD }
-    var totalCost: Decimal { codexCost + claudeCost }
+    var grokCost: Decimal { grok.costUSD }
+    var totalCost: Decimal { codexCost + claudeCost + grokCost }
     var totalTokens: Int { totalUsage.totalTokens }
 
-    /// codex + claude 合并后的口径,供每日悬浮明细展示 token 拆分 + 命中率。
+    /// 各服务合并后的口径,供每日悬浮明细展示 token 拆分 + 命中率。
     var totalUsage: UsageTotals {
         var t = UsageTotals.zero
-        t.inputTokens = codex.inputTokens + claude.inputTokens
-        t.outputTokens = codex.outputTokens + claude.outputTokens
-        t.cacheReadTokens = codex.cacheReadTokens + claude.cacheReadTokens
-        t.cacheCreationTokens = codex.cacheCreationTokens + claude.cacheCreationTokens
+        t.inputTokens = codex.inputTokens + claude.inputTokens + grok.inputTokens
+        t.outputTokens = codex.outputTokens + claude.outputTokens + grok.outputTokens
+        t.cacheReadTokens = codex.cacheReadTokens + claude.cacheReadTokens + grok.cacheReadTokens
+        t.cacheCreationTokens = codex.cacheCreationTokens + claude.cacheCreationTokens + grok.cacheCreationTokens
         t.costUSD = totalCost
-        t.hasUnpricedUsage = codex.hasUnpricedUsage || claude.hasUnpricedUsage
+        t.hasUnpricedUsage = codex.hasUnpricedUsage || claude.hasUnpricedUsage || grok.hasUnpricedUsage
         return t
     }
 }

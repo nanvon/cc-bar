@@ -20,16 +20,19 @@ nonisolated struct ScanFileState: Sendable, Equatable, Codable {
 
 nonisolated struct ScanState: Sendable, Equatable, Codable {
     /// version 管「结构变更」（字段增减导致解码不兼容时 bump）；价格变更由 pricingFingerprint 接管。
-    /// v9: Claude 流式半成品不再入账；旧 seen / rollup 可能已污染，必须全量重建。
-    static let currentVersion: Int = 9
+    /// v10: 接入 Grok Build 本地用量扫描（`~/.grok/sessions/**/updates.jsonl`）。
+    static let currentVersion: Int = 10
     var version: Int = ScanState.currentVersion
     var generationID: String = ""
     /// 写盘时记录的价格指纹；load 时与当前 `Pricing.fingerprint(knownModels:)` 不一致即视为缓存失效、全量重扫重算。
     var pricingFingerprint: String = ""
     var claude: [String: ScanFileState] = [:]
     var codex: [String: ScanFileState] = [:]
+    var grok: [String: ScanFileState] = [:]
     /// 跨文件的 Claude message.id 去重集合（同一条 assistant 消息可能被 sidechain / subagent 在多个 jsonl 里重复引用）。
     var claudeSeenMessageIds: [String] = []
+    /// Grok turn_completed 的 prompt_id 去重（主会话 / subagent 可能重复写同一 turn）。
+    var grokSeenPromptIds: [String] = []
 }
 
 /// 扫描缓存的读取结论。缓存文件缺失、损坏、版本不符或价格指纹变化都必须显式标为失效，
@@ -95,8 +98,8 @@ enum ScanCache {
 /// 聚合结果磁盘缓存，启动后立刻 UI 有数。
 nonisolated struct UsageRollupPayload: Sendable, Codable {
     /// version 管「结构变更」；价格变更由 pricingFingerprint 接管。
-    /// v8: 配合 ScanState v9 清除曾被提前入账的 Claude 流式半成品。
-    static let currentVersion: Int = 8
+    /// v9: 配合 ScanState v10 接入 Grok 本地用量。
+    static let currentVersion: Int = 9
     var version: Int = UsageRollupPayload.currentVersion
     var generationID: String = ""
     /// 写盘时记录的价格指纹；load 时与当前 `Pricing.fingerprint(knownModels:)` 不一致即丢弃，全量重扫重建。

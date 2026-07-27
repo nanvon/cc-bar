@@ -87,6 +87,18 @@ nonisolated enum Pricing {
         "deepseek-chat":      .init(input: 0.27,  output: 1.10,  cacheRead: 0.07,     cacheCreation: 0),
         "deepseek-reasoner":  .init(input: 0.55,  output: 2.19,  cacheRead: 0.14,     cacheCreation: 0),
         // codex-auto-review 内部 review，官方未公开计费；不入表 → cost=0，token 仍记录
+
+        // —— Grok / xAI 系（USD / 百万 token；Grok 扫描优先用 costUsdTicks，表仅作回退）——
+        // 价位对齐 2026 公开 API 量级；精确计费以 CLI 写入的 ticks 为准。
+        "grok-4.5":        .init(input: 3,    output: 15,  cacheRead: 0.75,  cacheCreation: 0),
+        "grok-4.5-build":  .init(input: 3,    output: 15,  cacheRead: 0.75,  cacheCreation: 0),
+        "grok-build":      .init(input: 3,    output: 15,  cacheRead: 0.75,  cacheCreation: 0),
+        "grok-build-0.1":  .init(input: 2,    output: 10,  cacheRead: 0.40,  cacheCreation: 0),
+        "grok-code-fast":  .init(input: 0.20, output: 1.50, cacheRead: 0.05, cacheCreation: 0),
+        "grok-code-fast-1":.init(input: 0.20, output: 1.50, cacheRead: 0.05, cacheCreation: 0),
+        "grok-4":          .init(input: 3,    output: 15,  cacheRead: 0.75,  cacheCreation: 0),
+        "grok-3":          .init(input: 3,    output: 15,  cacheRead: 0.75,  cacheCreation: 0),
+        "grok-3-mini":     .init(input: 0.30, output: 0.50, cacheRead: 0.07, cacheCreation: 0),
     ]
 
     /// Fast / Priority 的显式价格表。远端 LiteLLM / models.dev 目录没有服务档位维度，不能用于覆盖这些价格。
@@ -246,6 +258,9 @@ nonisolated enum Pricing {
                 return codexFastPrices[key]
             case .claude:
                 return claudeFastPrices[key]
+            case .grok:
+                // Grok Build 无独立 Fast 价表；未收录时返回 nil。
+                return nil
             }
         }
     }
@@ -259,6 +274,9 @@ nonisolated enum Pricing {
         }
         if m.hasPrefix("deepseek/") {
             m.removeFirst("deepseek/".count)
+        }
+        if m.hasPrefix("xai/") {
+            m.removeFirst("xai/".count)
         }
         // Vertex 风格：`name@YYYYMMDD`
         if let at = m.firstIndex(of: "@") {
@@ -369,6 +387,7 @@ nonisolated enum Pricing {
             switch app {
             case .codex: return codexFastMultipliers[key]
             case .claude: return claudeFastMultipliers[key]
+            case .grok: return nil
             }
         }
     }

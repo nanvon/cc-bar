@@ -73,6 +73,7 @@
 		49C1B1A1000000000001AABB /* GrokTokenRefresher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B1A1000000000001AAAA /* GrokTokenRefresher.swift */; };
 		49C1B1A2000000000001AABB /* GrokQuotaClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B1A2000000000001AAAA /* GrokQuotaClient.swift */; };
 		49C1B1A3000000000001AABB /* grok.svg in Resources */ = {isa = PBXBuildFile; fileRef = 49C1B1A3000000000001AAAA /* grok.svg */; };
+		49C1B1A4000000000001AABB /* GrokJSONLScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B1A4000000000001AAAA /* GrokJSONLScanner.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -158,6 +159,7 @@
 		49C1B1A1000000000001AAAA /* GrokTokenRefresher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GrokTokenRefresher.swift; sourceTree = "<group>"; };
 		49C1B1A2000000000001AAAA /* GrokQuotaClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GrokQuotaClient.swift; sourceTree = "<group>"; };
 		49C1B1A3000000000001AAAA /* grok.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = grok.svg; sourceTree = "<group>"; };
+		49C1B1A4000000000001AAAA /* GrokJSONLScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GrokJSONLScanner.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -332,6 +334,7 @@
 				49C1B151000000000001AAAA /* Pricing.swift */,
 				49C1B152000000000001AAAA /* JSONLLineReader.swift */,
 				49C1B153000000000001AAAA /* ClaudeJSONLScanner.swift */,
+				49C1B1A4000000000001AAAA /* GrokJSONLScanner.swift */,
 				49C1B154000000000001AAAA /* CodexJSONLScanner.swift */,
 				49C1B155000000000001AAAA /* UsageAggregator.swift */,
 				49C1B156000000000001AAAA /* UsageService.swift */,
@@ -579,6 +582,7 @@
 				49C1B151000000000001AABB /* Pricing.swift in Sources */,
 				49C1B152000000000001AABB /* JSONLLineReader.swift in Sources */,
 				49C1B153000000000001AABB /* ClaudeJSONLScanner.swift in Sources */,
+				49C1B1A4000000000001AABB /* GrokJSONLScanner.swift in Sources */,
 				49C1B154000000000001AABB /* CodexJSONLScanner.swift in Sources */,
 				49C1B155000000000001AABB /* UsageAggregator.swift in Sources */,
 				49C1B156000000000001AABB /* UsageService.swift in Sources */,

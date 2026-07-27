@@ -103,6 +103,7 @@ final class AppState {
 
     var codexTodayCost: Decimal?
     var claudeTodayCost: Decimal?
+    var grokTodayCost: Decimal?
 
     /// OpenAI / Anthropic statuspage.io 最新快照,失败时保留上一份。
     var codexServiceStatus: ServiceStatus?

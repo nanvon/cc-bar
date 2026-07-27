@@ -48,7 +48,7 @@ nonisolated struct QuotaProviderDescriptor: Sendable, Hashable, Identifiable {
             vendor: "xAI",
             logoName: "grok",
             fallback: "G",
-            supportsLocalCost: false
+            supportsLocalCost: true
         ),
     ]
 }

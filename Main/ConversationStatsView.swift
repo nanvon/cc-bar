@@ -246,6 +246,7 @@ struct ConversationStatsView: View {
         case .all: return nil
         case .codex: return .codex
         case .claude: return .claude
+        case .grok: return .grok
         }
     }
 
@@ -329,13 +330,29 @@ private struct ConversationScanStatus: View {
     }
 }
 
+private func usageAccent(_ app: UsageApp) -> Color {
+    switch app {
+    case .codex: return .codexAccent
+    case .claude: return .claudeAccent
+    case .grok: return .grokAccent
+    }
+}
+
+private func usageTitle(_ app: UsageApp) -> String {
+    switch app {
+    case .codex: return "Codex"
+    case .claude: return "Claude Code"
+    case .grok: return "Grok"
+    }
+}
+
 private struct ConversationListRow: View {
     let summary: ConversationSummary
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 7) {
-                ServiceMark(color: summary.info.app == .codex ? .codexAccent : .claudeAccent, size: 8)
+                ServiceMark(color: usageAccent(summary.info.app), size: 8)
                 Text(summary.info.title ?? tr("Untitled", "（无标题）"))
                     .font(.system(size: 12.5, weight: .medium))
                     .lineLimit(1)
@@ -406,8 +423,8 @@ private struct ConversationDetailView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                ServiceMark(color: detail.info.app == .codex ? .codexAccent : .claudeAccent, size: 9)
-                Text(detail.info.app == .codex ? "Codex" : "Claude Code")
+                ServiceMark(color: usageAccent(detail.info.app), size: 9)
+                Text(usageTitle(detail.info.app))
                     .font(.system(size: 11.5, weight: .semibold))
                 Text(tr("All time", "全部时间"))
                     .font(.system(size: 10, weight: .medium))

@@ -36,6 +36,69 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertNil(fetched.snapshot.weekly)
     }
 
+    func testGrokTurnCompletedUsageParsesTokensAndCostTicks() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ccbar-grok-scan-\(UUID().uuidString)", isDirectory: true)
+        let sessionDir = root
+            .appendingPathComponent("%2Ftmp%2Fdemo", isDirectory: true)
+            .appendingPathComponent("sess-1", isDirectory: true)
+        try FileManager.default.createDirectory(at: sessionDir, withIntermediateDirectories: true)
+        let line: [String: Any] = [
+            "timestamp": 1_784_444_600.0,
+            "method": "_x.ai/session/update",
+            "params": [
+                "sessionId": "sess-1",
+                "update": [
+                    "sessionUpdate": "turn_completed",
+                    "prompt_id": "prompt-abc",
+                    "stop_reason": "end_turn",
+                    "usage": [
+                        "inputTokens": 1000,
+                        "outputTokens": 100,
+                        "cachedReadTokens": 400,
+                        "reasoningTokens": 50,
+                        "costUsdTicks": 1_500_000_000,
+                        "modelUsage": [
+                            "grok-4.5": [
+                                "inputTokens": 1000,
+                                "outputTokens": 100,
+                                "cachedReadTokens": 400,
+                                "reasoningTokens": 50,
+                                "costUsdTicks": 1_500_000_000
+                            ]
+                        ]
+                    ]
+                ]
+            ]
+        ]
+        let data = try JSONSerialization.data(withJSONObject: line)
+        var payload = data
+        payload.append(contentsOf: [0x0A])
+        try payload.write(to: sessionDir.appendingPathComponent("updates.jsonl"))
+
+        let result = GrokJSONLScanner.scan(previous: [:], seenPromptIds: [], root: root)
+        XCTAssertEqual(result.entries.count, 1)
+        let entry = try XCTUnwrap(result.entries.first)
+        XCTAssertEqual(entry.app, .grok)
+        XCTAssertEqual(entry.model, "grok-4.5")
+        XCTAssertEqual(entry.inputTokens, 600) // 1000 - 400 cache
+        XCTAssertEqual(entry.outputTokens, 150) // output + reasoning
+        XCTAssertEqual(entry.cacheReadTokens, 400)
+        XCTAssertEqual(entry.costUSD, Decimal(string: "1.5"))
+        XCTAssertEqual(entry.conversationKey, "grok:sess-1")
+        XCTAssertTrue(result.newSeenIds.contains("prompt-abc"))
+
+        // 增量：seen 后不应重复计费
+        let again = GrokJSONLScanner.scan(
+            previous: result.newState,
+            seenPromptIds: result.newSeenIds,
+            root: root
+        )
+        XCTAssertTrue(again.entries.isEmpty)
+
+        try? FileManager.default.removeItem(at: root)
+    }
+
     func testGrokBillingCreditsMapsWeeklyPrimaryAndProductLimits() {
         let root: [String: Any] = [
             "subscriptionTier": "SuperGrok",
