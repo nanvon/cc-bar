@@ -88,17 +88,27 @@ nonisolated enum Pricing {
         "deepseek-reasoner":  .init(input: 0.55,  output: 2.19,  cacheRead: 0.14,     cacheCreation: 0),
         // codex-auto-review 内部 review，官方未公开计费；不入表 → cost=0，token 仍记录
 
-        // —— Grok / xAI 系（USD / 百万 token；Grok 扫描优先用 costUsdTicks，表仅作回退）——
-        // 价位对齐 2026 公开 API 量级；精确计费以 CLI 写入的 ticks 为准。
-        "grok-4.5":        .init(input: 3,    output: 15,  cacheRead: 0.75,  cacheCreation: 0),
-        "grok-4.5-build":  .init(input: 3,    output: 15,  cacheRead: 0.75,  cacheCreation: 0),
-        "grok-build":      .init(input: 3,    output: 15,  cacheRead: 0.75,  cacheCreation: 0),
-        "grok-build-0.1":  .init(input: 2,    output: 10,  cacheRead: 0.40,  cacheCreation: 0),
-        "grok-code-fast":  .init(input: 0.20, output: 1.50, cacheRead: 0.05, cacheCreation: 0),
-        "grok-code-fast-1":.init(input: 0.20, output: 1.50, cacheRead: 0.05, cacheCreation: 0),
-        "grok-4":          .init(input: 3,    output: 15,  cacheRead: 0.75,  cacheCreation: 0),
-        "grok-3":          .init(input: 3,    output: 15,  cacheRead: 0.75,  cacheCreation: 0),
-        "grok-3-mini":     .init(input: 0.30, output: 0.50, cacheRead: 0.07, cacheCreation: 0),
+        // —— Grok / xAI 系（USD / 百万 token）——
+        // 来源：docs.x.ai 公开价（promptTextTokenPrice / 1000 = $/M）。
+        // 本地校验：CLI `costUsdTicks / 1e9` 与「billable_input * in + output * out + cache * cache」完全一致；
+        // reasoningTokens 不单独计费。扫描优先 ticks，本表作无 ticks 时的回退与拆分比例。
+        "grok-4.5":                    .init(input: 20,   output: 60,   cacheRead: 3,    cacheCreation: 0),
+        "grok-4.5-build":              .init(input: 20,   output: 60,   cacheRead: 3,    cacheCreation: 0),
+        "grok-build":                  .init(input: 10,   output: 20,   cacheRead: 2,    cacheCreation: 0),
+        "grok-build-0.1":              .init(input: 10,   output: 20,   cacheRead: 2,    cacheCreation: 0),
+        "grok-4.20":                   .init(input: 12.5, output: 25,   cacheRead: 2,    cacheCreation: 0),
+        "grok-4.20-reasoning":         .init(input: 12.5, output: 25,   cacheRead: 2,    cacheCreation: 0),
+        "grok-4.20-non-reasoning":     .init(input: 12.5, output: 25,   cacheRead: 2,    cacheCreation: 0),
+        "grok-4.20-multi-agent":       .init(input: 12.5, output: 25,   cacheRead: 2,    cacheCreation: 0),
+        "grok-4.3":                    .init(input: 12.5, output: 25,   cacheRead: 2,    cacheCreation: 0),
+        "grok-code-fast":              .init(input: 0.20, output: 1.50, cacheRead: 0.05, cacheCreation: 0),
+        "grok-code-fast-1":            .init(input: 0.20, output: 1.50, cacheRead: 0.05, cacheCreation: 0),
+        // 较旧公开价，仍可能出现在历史 session
+        "grok-4":                      .init(input: 3,    output: 15,   cacheRead: 0.75, cacheCreation: 0),
+        "grok-3":                      .init(input: 3,    output: 15,   cacheRead: 0.75, cacheCreation: 0),
+        "grok-3-mini":                 .init(input: 0.30, output: 0.50, cacheRead: 0.07, cacheCreation: 0),
+        "grok-2":                      .init(input: 2,    output: 10,   cacheRead: 0.50, cacheCreation: 0),
+        "grok-2-1212":                 .init(input: 2,    output: 10,   cacheRead: 0.50, cacheCreation: 0),
     ]
 
     /// Fast / Priority 的显式价格表。远端 LiteLLM / models.dev 目录没有服务档位维度，不能用于覆盖这些价格。
@@ -290,7 +300,39 @@ nonisolated enum Pricing {
                 break
             }
         }
-        return m.lowercased()
+        m = m.lowercased()
+        // Grok CLI 变体：`grok-4.20-0309-reasoning` → 先剥日期段，再映射到价表键
+        // 已由上方日期正则处理一部分；再剥 `-reasoning` / `-non-reasoning` 以外的实验后缀由别名表覆盖。
+        return grokPriceAlias(m)
+    }
+
+    /// 把 CLI / 网关上报的 Grok 模型名映射到价表键。
+    nonisolated private static func grokPriceAlias(_ model: String) -> String {
+        // 精确命中价表则不动
+        if table[model] != nil { return model }
+        // 常见别名
+        let aliases: [String: String] = [
+            "grok-4.5-build-plan": "grok-4.5-build",
+            "grok-build-plan": "grok-build",
+            "grok-code-fast-1-0825": "grok-code-fast-1",
+            "grok-4.20-multi-agent-latest": "grok-4.20-multi-agent",
+            "grok-4.20-reasoning-latest": "grok-4.20-reasoning",
+            "grok-4.20-latest": "grok-4.20",
+        ]
+        if let mapped = aliases[model] { return mapped }
+        // `grok-4.20-0309-reasoning` 已剥日期后可能是 `grok-4.20-reasoning`；
+        // `grok-4.20-beta-reasoning` → 归到 reasoning 价。
+        if model.hasPrefix("grok-4.20") {
+            if model.contains("multi-agent") { return "grok-4.20-multi-agent" }
+            if model.contains("non-reasoning") { return "grok-4.20-non-reasoning" }
+            if model.contains("reasoning") { return "grok-4.20-reasoning" }
+            return "grok-4.20"
+        }
+        if model.hasPrefix("grok-4.5") { return model.contains("build") ? "grok-4.5-build" : "grok-4.5" }
+        if model.hasPrefix("grok-4.3") { return "grok-4.3" }
+        if model.hasPrefix("grok-build") { return "grok-build-0.1" }
+        if model.hasPrefix("grok-code-fast") { return "grok-code-fast-1" }
+        return model
     }
 
     private static let perMillion: Decimal = 1_000_000

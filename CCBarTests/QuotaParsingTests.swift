@@ -82,9 +82,10 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertEqual(entry.app, .grok)
         XCTAssertEqual(entry.model, "grok-4.5")
         XCTAssertEqual(entry.inputTokens, 600) // 1000 - 400 cache
-        XCTAssertEqual(entry.outputTokens, 150) // output + reasoning
+        XCTAssertEqual(entry.outputTokens, 150) // output + reasoning（用量可见）
         XCTAssertEqual(entry.cacheReadTokens, 400)
         XCTAssertEqual(entry.costUSD, Decimal(string: "1.5"))
+        XCTAssertNotNil(entry.costBreakdown)
         XCTAssertEqual(entry.conversationKey, "grok:sess-1")
         XCTAssertTrue(result.newSeenIds.contains("prompt-abc"))
 
@@ -97,6 +98,51 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertTrue(again.entries.isEmpty)
 
         try? FileManager.default.removeItem(at: root)
+    }
+
+    func testGrokTablePricingMatchesOfficialRatesWithoutReasoning() throws {
+        // billable 600 * $20/M + output 100 * $60/M + cache 400 * $3/M
+        // = 0.012 + 0.006 + 0.0012 = 0.0192
+        let usage = GrokJSONLScanner.TurnModelUsage(
+            model: "grok-4.5-build",
+            inputTokens: 1000,
+            outputTokens: 100,
+            cacheReadTokens: 400,
+            reasoningTokens: 9999, // 不计费
+            costUsdTicks: nil
+        )
+        let breakdown = try XCTUnwrap(GrokJSONLScanner.tableBreakdown(for: usage, at: Date()))
+        XCTAssertEqual(breakdown.input, Decimal(string: "0.012"))
+        XCTAssertEqual(breakdown.output, Decimal(string: "0.006"))
+        XCTAssertEqual(breakdown.cacheRead, Decimal(string: "0.0012"))
+        XCTAssertEqual(breakdown.total, Decimal(string: "0.0192"))
+
+        // ticks 权威费用缩放拆分
+        let priced = GrokJSONLScanner.resolveTurnCosts(
+            models: [usage],
+            totalTicks: 19_200_000, // $0.0192
+            at: Date()
+        )
+        XCTAssertEqual(priced.count, 1)
+        XCTAssertEqual(priced[0].costUSD, Decimal(string: "0.0192"))
+        XCTAssertEqual(priced[0].breakdown?.total, Decimal(string: "0.0192"))
+    }
+
+    func testGrokPriceAliasesNormalizeBuildVariants() {
+        XCTAssertEqual(Pricing.normalize(model: "grok-4.5-build"), "grok-4.5-build")
+        XCTAssertEqual(Pricing.normalize(model: "xai/grok-4.5"), "grok-4.5")
+        XCTAssertEqual(Pricing.normalize(model: "grok-4.20-0309-reasoning"), "grok-4.20-reasoning")
+        XCTAssertEqual(Pricing.normalize(model: "grok-code-fast-1-0825"), "grok-code-fast-1")
+        XCTAssertNotNil(Pricing.cost(
+            app: .grok,
+            model: "grok-4.5-build",
+            speed: .standard,
+            input: 1_000_000,
+            output: 0,
+            cacheRead: 0,
+            cacheCreation: 0,
+            at: Date()
+        ))
     }
 
     func testGrokBillingCreditsMapsWeeklyPrimaryAndProductLimits() {

@@ -7,7 +7,8 @@ import Foundation
 /// - 子 agent：`.../subagents/<id>/updates.jsonl`
 /// - 事件：`method` 为 `_x.ai/session/update`，`sessionUpdate == turn_completed`
 /// - 去重：`prompt_id`（同一 turn 只计一次）
-/// - 花费：优先 `costUsdTicks`（1 tick = 1e-9 USD），否则走 `Pricing` 本地表
+/// - 花费：优先 `costUsdTicks`（1 tick = 1e-9 USD，与官方 API 价一致），否则走 `Pricing` 本地表
+/// - 计费口径（与 ticks 校验一致）：billable_input + output（不含 reasoning）+ cache_read
 enum GrokJSONLScanner {
     /// costUsdTicks → USD 的换算：1e9 ticks = $1
     nonisolated static let ticksPerUSD: Decimal = 1_000_000_000
@@ -102,20 +103,20 @@ enum GrokJSONLScanner {
                     seen.insert(turn.promptID)
 
                     let day = UsageDay.startOfDay(for: turn.timestamp)
-                    for modelUsage in turn.models {
+                    // 多模型 turn：若仅有合计 ticks，按价表估算比例拆分；单模型直接用自身 ticks。
+                    let modelCosts = resolveTurnCosts(
+                        models: turn.models,
+                        totalTicks: turn.totalCostUsdTicks,
+                        at: turn.timestamp
+                    )
+                    for (index, modelUsage) in turn.models.enumerated() {
                         let model = Pricing.normalize(model: modelUsage.model)
                         let cacheRead = modelUsage.cacheReadTokens
                         // Grok 的 inputTokens 含 cachedRead；用量表记非缓存输入。
                         let input = max(0, modelUsage.inputTokens - cacheRead)
+                        // Token 统计保留 reasoning（用量可见）；计费见 resolveCost。
                         let output = modelUsage.outputTokens + modelUsage.reasoningTokens
-                        let costUSD = resolveCost(
-                            ticks: modelUsage.costUsdTicks ?? turn.totalCostUsdTicks,
-                            model: model,
-                            input: input,
-                            output: output,
-                            cacheRead: cacheRead,
-                            at: turn.timestamp
-                        )
+                        let priced = modelCosts[index]
                         entries.append(UsageEntry(
                             app: .grok,
                             conversationKey: conversationKey,
@@ -127,8 +128,8 @@ enum GrokJSONLScanner {
                             outputTokens: output,
                             cacheReadTokens: cacheRead,
                             cacheCreationTokens: 0,
-                            costUSD: costUSD,
-                            costBreakdown: nil
+                            costUSD: priced.costUSD,
+                            costBreakdown: priced.breakdown
                         ))
                     }
                 }
@@ -155,7 +156,7 @@ enum GrokJSONLScanner {
 
     // MARK: - Parse
 
-    private struct TurnModelUsage: Sendable {
+    struct TurnModelUsage: Sendable {
         var model: String
         var inputTokens: Int
         var outputTokens: Int
@@ -236,26 +237,111 @@ enum GrokJSONLScanner {
         )]
     }
 
-    nonisolated private static func resolveCost(
-        ticks: Int64?,
-        model: String,
-        input: Int,
-        output: Int,
-        cacheRead: Int,
+    struct PricedModel: Sendable {
+        var costUSD: Decimal?
+        var breakdown: CostBreakdown?
+    }
+
+    /// 为 turn 内每个模型解析费用。
+    /// - 有 per-model ticks：直接用（权威）
+    /// - 仅有 total ticks：按价表估算比例拆分
+    /// - 都没有：价表回退（reasoning 不计费）
+    nonisolated static func resolveTurnCosts(
+        models: [TurnModelUsage],
+        totalTicks: Int64?,
         at date: Date
-    ) -> Decimal? {
-        if let ticks, ticks > 0 {
-            return Decimal(ticks) / ticksPerUSD
+    ) -> [PricedModel] {
+        let estimates: [CostBreakdown?] = models.map { m in
+            tableBreakdown(for: m, at: date)
         }
-        return Pricing.cost(
+        let perModelTicks: [Decimal?] = models.map { m in
+            guard let t = m.costUsdTicks, t > 0 else { return nil }
+            return Decimal(t) / ticksPerUSD
+        }
+
+        // 1) 每个模型自带 ticks
+        if perModelTicks.allSatisfy({ $0 != nil }) {
+            return zip(perModelTicks, estimates).map { ticksUSD, est in
+                scaledBreakdown(target: ticksUSD!, estimate: est)
+            }
+        }
+
+        // 2) 部分有 ticks：有的用 ticks，没有的用价表
+        if perModelTicks.contains(where: { $0 != nil }) {
+            return zip(perModelTicks, estimates).map { ticksUSD, est in
+                if let ticksUSD {
+                    return scaledBreakdown(target: ticksUSD, estimate: est)
+                }
+                return PricedModel(costUSD: est?.total, breakdown: est)
+            }
+        }
+
+        // 3) 仅合计 ticks：按价表比例分摊
+        if let totalTicks, totalTicks > 0 {
+            let totalUSD = Decimal(totalTicks) / ticksPerUSD
+            let weights = estimates.map { $0?.total ?? 0 }
+            let weightSum = weights.reduce(0, +)
+            if weightSum > 0 {
+                return zip(weights, estimates).map { w, est in
+                    let share = totalUSD * w / weightSum
+                    return scaledBreakdown(target: share, estimate: est)
+                }
+            }
+            // 无价表权重时均分
+            let share = totalUSD / Decimal(max(models.count, 1))
+            return models.map { _ in
+                PricedModel(
+                    costUSD: share,
+                    breakdown: CostBreakdown(input: share, output: 0, cacheRead: 0, cacheCreation: 0)
+                )
+            }
+        }
+
+        // 4) 纯价表
+        return estimates.map { PricedModel(costUSD: $0?.total, breakdown: $0) }
+    }
+
+    /// 价表估算：billable input + **output（不含 reasoning）** + cache。
+    nonisolated static func tableBreakdown(
+        for modelUsage: TurnModelUsage,
+        at date: Date
+    ) -> CostBreakdown? {
+        let cacheRead = modelUsage.cacheReadTokens
+        let input = max(0, modelUsage.inputTokens - cacheRead)
+        // reasoning 经本地校验不计入 ticks/官方计费
+        let billedOutput = modelUsage.outputTokens
+        return Pricing.costBreakdown(
             app: .grok,
-            model: model,
+            model: modelUsage.model,
             speed: .standard,
             input: input,
-            output: output,
+            output: billedOutput,
             cacheRead: cacheRead,
             cacheCreation: 0,
             at: date
+        )
+    }
+
+    /// 把价表拆分按比例缩放到目标总额（通常是 ticks 换算的权威费用）。
+    nonisolated static func scaledBreakdown(
+        target: Decimal,
+        estimate: CostBreakdown?
+    ) -> PricedModel {
+        guard let estimate, estimate.total > 0 else {
+            return PricedModel(
+                costUSD: target,
+                breakdown: CostBreakdown(input: target, output: 0, cacheRead: 0, cacheCreation: 0)
+            )
+        }
+        let scale = target / estimate.total
+        return PricedModel(
+            costUSD: target,
+            breakdown: CostBreakdown(
+                input: estimate.input * scale,
+                output: estimate.output * scale,
+                cacheRead: estimate.cacheRead * scale,
+                cacheCreation: estimate.cacheCreation * scale
+            )
         )
     }
 
