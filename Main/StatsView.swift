@@ -636,7 +636,7 @@ struct StatsView: View {
     private var timelineSections: [QuotaTimelineSection] {
         var sections: [QuotaTimelineSection] = []
 
-        if serviceFilter != .claude {
+        if serviceFilter == .all || serviceFilter == .codex {
             let key = QuotaHistoryAccountKey.codexPrimary(accountId: appState.codexAccount?.accountId)
             var addedPrimaryCodex = false
             if shouldShowTimelineSection(key: key, snapshot: appState.codexQuota, accountExists: appState.codexAccount != nil) {
@@ -664,7 +664,7 @@ struct StatsView: View {
             }
         }
 
-        if serviceFilter != .codex {
+        if serviceFilter == .all || serviceFilter == .claude {
             let key = QuotaHistoryAccountKey.claudePrimary()
             if shouldShowTimelineSection(key: key, snapshot: appState.claudeQuota, accountExists: appState.claudeAccount != nil) {
                 sections.append(timelineSection(
@@ -673,6 +673,19 @@ struct StatsView: View {
                     tint: .claudeAccent,
                     snapshot: appState.claudeQuota,
                     isLoading: appState.refreshState(for: .claude).inFlight
+                ))
+            }
+        }
+
+        if serviceFilter == .all || serviceFilter == .grok {
+            let key = QuotaHistoryAccountKey.grokPrimary(userId: appState.grokAccount?.userId)
+            if shouldShowTimelineSection(key: key, snapshot: appState.grokQuota, accountExists: appState.grokAccount != nil) {
+                sections.append(timelineSection(
+                    key: key,
+                    title: "Grok",
+                    tint: .grokAccent,
+                    snapshot: appState.grokQuota,
+                    isLoading: appState.refreshState(for: .grok).inFlight
                 ))
             }
         }
