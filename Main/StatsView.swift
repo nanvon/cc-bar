@@ -365,7 +365,7 @@ struct StatsView: View {
     @State private var range: StatsRange = .today
     @State private var serviceFilter: StatsServiceFilter = .all
     @State private var viewMode: StatsViewMode = .overview
-    @State private var selectedDay: Date?
+    @State private var selectedPeriodKey: String?
     @State private var customFrom: Date = Calendar.current.startOfDay(
         for: Date().addingTimeInterval(-7 * 86400)
     )
@@ -839,7 +839,7 @@ struct StatsView: View {
                         ForEach(dailySamples) { sample in
                             ForEach(visibleUsageApps, id: \.self) { app in
                                 BarMark(
-                                    x: .value("Day", sample.day, unit: .day),
+                                    x: .value("Period", sample.key),
                                     y: .value("Tokens", Double(sample.totals(for: app).totalTokens)),
                                     width: .fixed(dailyBarWidth),
                                     stacking: .standard
@@ -851,7 +851,7 @@ struct StatsView: View {
                         }
 
                         if let selected = selectedSample {
-                            RuleMark(x: .value("Day", selected.day, unit: .day))
+                            RuleMark(x: .value("Period", selected.key))
                                 .foregroundStyle(Color.secondary.opacity(0.25))
                                 .lineStyle(StrokeStyle(lineWidth: 1))
                                 .annotation(
@@ -867,21 +867,26 @@ struct StatsView: View {
                                 }
                         }
                     }
-                    .chartXSelection(value: $selectedDay)
+                    .chartXSelection(value: $selectedPeriodKey)
+                    .chartXScale(domain: dailySamples.map(\.key))
                     .chartXAxis {
-                        AxisMarks(values: chartAxisDates) { _ in
-                            AxisValueLabel(format: granularity.axisDateFormat,
-                                           centered: true)
-                                .font(.system(size: 10, design: .monospaced))
-                                .foregroundStyle(.tertiary)
+                        AxisMarks(values: chartAxisKeys) { value in
+                            AxisValueLabel {
+                                if let key = value.as(String.self),
+                                   let date = StatsPeriodKey.date(from: key) {
+                                    Text(date, format: granularity.axisDateFormat)
+                                        .font(.system(size: 10, design: .monospaced))
+                                        .foregroundStyle(.tertiary)
+                                }
+                            }
                         }
                     }
                     .chartYAxis(.hidden)
                     .frame(height: 160)
-                    .animation(.easeOut(duration: 0.12), value: selectedDay)
-                    .onChange(of: range) { _, _ in selectedDay = nil }
-                    .onChange(of: serviceFilter) { _, _ in selectedDay = nil }
-                    .onChange(of: granularity) { _, _ in selectedDay = nil }
+                    .animation(.easeOut(duration: 0.12), value: selectedPeriodKey)
+                    .onChange(of: range) { _, _ in selectedPeriodKey = nil }
+                    .onChange(of: serviceFilter) { _, _ in selectedPeriodKey = nil }
+                    .onChange(of: granularity) { _, _ in selectedPeriodKey = nil }
                 }
             }
         }
@@ -1546,6 +1551,7 @@ struct StatsView: View {
             .map {
                 DailySample(
                     day: $0.key,
+                    key: StatsPeriodKey.key(for: $0.key),
                     codex: $0.value.codex,
                     claude: $0.value.claude,
                     cursor: $0.value.cursor,
@@ -1556,21 +1562,18 @@ struct StatsView: View {
             .sorted { $0.day < $1.day }
     }
 
-    /// X 轴刻度直接取自桶起点,而不是按日历 stride:周 / 月粒度下 Swift Charts 会用
-    /// `Calendar.current` 的周起点(可能是周日)推算刻度,和本项目的周一口径对不上。
-    private var chartAxisDates: [Date] {
-        let days = dailySamples.map(\.day)
-        guard days.count > 5 else { return days }
-        let step = max(1, days.count / 5)
-        return stride(from: 0, to: days.count, by: step).map { days[$0] }
+    /// X 轴刻度取自桶自己的类别键,不按日历 stride 推算;周期多时每隔 step 个取一个,
+    /// 保证刻度永远落在某根柱子的 band 上。
+    private var chartAxisKeys: [String] {
+        let keys = dailySamples.map(\.key)
+        guard keys.count > 5 else { return keys }
+        let step = max(1, keys.count / 5)
+        return stride(from: 0, to: keys.count, by: step).map { keys[$0] }
     }
 
-    /// 把 chartXSelection 吸附到的连续 Date 映射到最近的那个周期起点。
     private var selectedSample: DailySample? {
-        guard let selectedDay else { return nil }
-        return dailySamples.min {
-            abs($0.day.timeIntervalSince(selectedDay)) < abs($1.day.timeIntervalSince(selectedDay))
-        }
+        guard let selectedPeriodKey else { return nil }
+        return dailySamples.first { $0.key == selectedPeriodKey }
     }
 
     /// 悬浮选中某个周期时,非选中柱降透明以聚焦;无悬浮时,上下文窗口内
@@ -2608,11 +2611,29 @@ private struct QuotaTimelineTable: View {
 
 // MARK: - Daily / Model row models
 
+/// 用量图表的 X 轴不用日期轴，改用「每个周期一个类别」的离散轴：日期轴上 Swift Charts
+/// 会按自己推断(或指定)的 unit 给柱子分箱、把柱心挪到箱中点，刻度却落在箱起点，日 / 周 /
+/// 月三种粒度都对不齐；周粒度还会按 `Calendar.current` 的周起点(可能是周日)算箱边界，
+/// 和本项目的周一口径再差一天。类别轴下柱心与刻度共用同一个 band 中心，天然对齐。
+private enum StatsPeriodKey {
+    private static let formatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
+
+    static func key(for day: Date) -> String { formatter.string(from: day) }
+    static func date(from key: String) -> Date? { formatter.date(from: key) }
+}
+
 /// 图表的一根柱。`day` 是该柱所属周期的起点(日粒度即当天,周粒度为周一,月粒度为 1 号),
 /// 命名沿用历史,不随粒度改名。
 private struct DailySample: Identifiable {
     var id: Date { day }
     let day: Date
+    /// 用量图表 X 轴用的离散类别键，见 `StatsPeriodKey`。
+    let key: String
     let codex: UsageTotals
     let claude: UsageTotals
     let cursor: UsageTotals
