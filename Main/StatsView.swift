@@ -5,7 +5,8 @@ import Charts
 // MARK: - StatsRange
 
 /// 时间范围。从属于 `StatsGranularity`：每个粒度只暴露自己那一组范围
-/// （当前 / 上一个 / 近 N 个 / 全部 / 自定义），`.all` 与 `.custom` 三个粒度共用。
+/// （当前 / 上一个 / 近 N 个 / 全部 / 自定义），`.all` 与 `.custom` 三个粒度共用；
+/// 日粒度额外保留 `.thisWeek` / `.thisMonth` / `.thisYear`，用于「按天看、但只统计本周 / 本月 / 本年」。
 enum StatsRange: Hashable, CaseIterable {
     case today
     case yesterday
@@ -193,9 +194,10 @@ enum StatsGranularity: Hashable, CaseIterable {
 
     /// 该粒度下可选的时间范围：当前 / 上一个 / 近 N 个 / 全部 / 自定义。
     /// `.all` 与 `.custom` 三个粒度共用，切换粒度时不会被重置。
+    /// 日粒度另外保留本周 / 本月 / 本年三档自然周期，按天分桶但只统计该周期。
     var ranges: [StatsRange] {
         switch self {
-        case .day: return [.today, .yesterday, .last7, .last30, .all, .custom]
+        case .day: return [.today, .yesterday, .last7, .last30, .thisWeek, .thisMonth, .thisYear, .all, .custom]
         case .week: return [.thisWeek, .lastWeek, .last4Weeks, .last12Weeks, .all, .custom]
         case .month: return [.thisMonth, .lastMonth, .last6Months, .thisYear, .all, .custom]
         }
@@ -224,6 +226,35 @@ enum StatsGranularity: Hashable, CaseIterable {
             return Date.FormatStyle.dateTime.month(.abbreviated).day()
         case .month:
             return Date.FormatStyle.dateTime.year().month(.abbreviated)
+        }
+    }
+
+    /// 单周期上下文窗口显示多少个周期（含所选那个）。三种粒度共用同一个值，
+    /// 柱数落在 `dailyBarWidth` 的 4~14 根档位里，粒度切换时柱宽不跳变。
+    static let contextWindowPeriods = 14
+
+    /// 上下文窗口按该单位往前推：日 → 天，周 → 周，月 → 月。
+    var contextWindowComponent: Calendar.Component {
+        switch self {
+        case .day: return .day
+        case .week: return .weekOfYear
+        case .month: return .month
+        }
+    }
+
+    var contextWindowHintEnglish: String {
+        switch self {
+        case .day: return "Last 14 days · highlighted = selected"
+        case .week: return "Last 14 weeks · highlighted = selected"
+        case .month: return "Last 14 months · highlighted = selected"
+        }
+    }
+
+    var contextWindowHintChinese: String {
+        switch self {
+        case .day: return "近 14 天 · 高亮为所选范围"
+        case .week: return "近 14 周 · 高亮为所选范围"
+        case .month: return "近 14 个月 · 高亮为所选范围"
         }
     }
 
@@ -637,9 +668,12 @@ struct StatsView: View {
 
     private var topBar: some View {
         HStack(spacing: 12) {
-            Spacer()
-            if appState.usageService.isScanning {
-                HStack(spacing: 6) {
+            // 扫描提示由后台扫描自行出现 / 消失。它不能当成 HStack 的普通成员夹在
+            // Spacer 和两个 Picker 之间——那样每次出现都凭空插入约 170pt,把右对齐的
+            // 控件整体推着左右平移。改成让它独占左侧剩余空间并在其中右对齐:视觉上仍
+            // 紧贴控件左边,但剩余空间由它自己吃掉,控件位置只由自身宽度决定,不再被推动。
+            HStack(spacing: 6) {
+                if appState.usageService.isScanning {
                     ProgressView()
                         .controlSize(.small)
                     Text(tr("Recalculating usage…", "正在重新计算用量…"))
@@ -647,22 +681,40 @@ struct StatsView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            Picker("", selection: $granularity) {
-                ForEach(StatsGranularity.allCases, id: \.self) { item in
-                    Text(tr(item.englishLabel, item.chineseLabel)).tag(item)
-                }
-            }
-            .pickerStyle(.segmented)
-            .fixedSize()
+            .frame(maxWidth: .infinity, alignment: .trailing)
 
-            Picker("", selection: $range) {
-                ForEach(granularity.ranges, id: \.self) { r in
-                    Text(tr(r.englishLabel, r.chineseLabel)).tag(r)
-                }
-            }
-            .pickerStyle(.segmented)
-            .fixedSize()
+            SegmentedBar(items: StatsGranularity.allCases,
+                         label: { tr($0.englishLabel, $0.chineseLabel) },
+                         selection: $granularity)
+
+            rangePicker
         }
+    }
+
+    /// 范围分段控件。三个粒度的段数不一样(日 9 段,周 / 月各 6 段):若让每组按自己的内容
+    /// 取宽,切换粒度时控件会忽宽忽窄,并把左边的粒度控件推得左右跳;若只取最宽一组而不
+    /// 拉伸,周 / 月又会在两个控件之间空出约 3 个段的空隙。
+    ///
+    /// 这里用段数最多的日粒度那组按自然宽度撑出总宽(`.hidden()`,只参与布局不显示),
+    /// 当前粒度的控件叠在上面等分填满。于是三个粒度总宽一致、右边缘齐平、与粒度控件之间
+    /// 没有空隙,代价是周 / 月的 6 段各自更宽——段内都是 2~3 个字,拉宽后仍是正常观感。
+    /// 宽度由布局系统算,不写死数值,改文案或换语言时自动跟着变。
+    private var rangePicker: some View {
+        SegmentedBar(items: StatsGranularity.day.ranges,
+                     label: { tr($0.englishLabel, $0.chineseLabel) },
+                     selection: .constant(StatsRange.today),
+                     uniformSegments: true)
+            .hidden()
+            .overlay {
+                SegmentedBar(items: granularity.ranges,
+                             label: { tr($0.englishLabel, $0.chineseLabel) },
+                             selection: $range,
+                             stretch: true)
+                    .frame(maxWidth: .infinity)
+                    // 段数随粒度变(9 / 6),不按粒度重建的话 SwiftUI 会跨粒度复用同一批段视图,
+                    // 把上一个粒度的段宽残留下来,切几次就宽度不一、控件也撑不满而居中留白。
+                    .id(granularity)
+            }
     }
 
     /// 切换粒度后，把不属于新粒度的范围收敛到该粒度的第一档；
@@ -765,7 +817,7 @@ struct StatsView: View {
             right: AnyView(
                 HStack(spacing: 8) {
                     if chartUsesContextWindow {
-                        Text(tr("Last 14 days · highlighted = selected", "近 14 天 · 高亮为所选范围"))
+                        Text(tr(granularity.contextWindowHintEnglish, granularity.contextWindowHintChinese))
                             .font(.system(size: 10.5))
                             .foregroundStyle(.tertiary)
                     }
@@ -1375,21 +1427,38 @@ struct StatsView: View {
         }
     }
 
-    /// 所选范围只有一天(今天 / 昨天 / 单日自定义)时,每日用量图表扩展为近 14 天上下文,
+    /// 所选范围只落在**一个当前粒度周期**内(日:今天 / 昨天 / 单日自定义;周:本周 / 上周;
+    /// 月:本月 / 上月;以及不跨周期的自定义)时,用量图表扩展为近 14 个周期的上下文,
     /// 范围内柱子高亮、范围外降透明;KPI 与其他面板口径不变。
-    /// 仅日粒度生效——周 / 月粒度下这个窗口只会多画出半根相邻周期的柱子,反而误导。
     private var chartUsesContextWindow: Bool {
-        guard granularity == .day else { return false }
+        guard range != .all else { return false }
         let (from, to) = rangeBounds
-        // 单日跨度按 ≤1.5 天判断,容忍夏令时导致的 23/25 小时。
-        return to > from && to.timeIntervalSince(from) <= 86400 * 1.5
+        guard to > from else { return false }
+        // 按桶归属判断而非按时长,夏令时的 23/25 小时和月份天数差都不会影响结果。
+        return selectedPeriodStart == granularity.bucketStart(for: lastDayInRange)
     }
 
-    /// 图表展示窗口:上下文模式取「范围结束日往前 14 天」,保证过去的单日自定义也有前文可看。
+    /// 所选范围首日所属的周期起点——上下文窗口里唯一全彩的那根柱子。
+    private var selectedPeriodStart: Date {
+        let cal = StatsRange.weekStartMondayCalendar
+        return granularity.bucketStart(for: cal.startOfDay(for: rangeBounds.from))
+    }
+
+    /// 所选范围末日(右开区间往回退一秒再取当天 0 点)。
+    private var lastDayInRange: Date {
+        let cal = StatsRange.weekStartMondayCalendar
+        return cal.startOfDay(for: rangeBounds.to.addingTimeInterval(-1))
+    }
+
+    /// 图表展示窗口:上下文模式取「所选周期起点往前 13 个周期」,连所选那个共 14 个。
+    /// 从周期起点往前推而不是从范围结束时刻往前推,首柱才是完整的周 / 月,不会天然偏矮。
     private var chartBounds: (from: Date, to: Date) {
         let bounds = rangeBounds
         guard chartUsesContextWindow else { return bounds }
-        let from = Calendar.current.date(byAdding: .day, value: -14, to: bounds.to) ?? bounds.from
+        let cal = StatsRange.weekStartMondayCalendar
+        let from = cal.date(byAdding: granularity.contextWindowComponent,
+                            value: -(StatsGranularity.contextWindowPeriods - 1),
+                            to: selectedPeriodStart) ?? bounds.from
         return (min(from, bounds.from), bounds.to)
     }
 
@@ -1504,15 +1573,16 @@ struct StatsView: View {
         }
     }
 
-    /// 悬浮选中某天时,非选中柱降透明以聚焦;无悬浮时,上下文窗口内
-    /// 只有所选范围内的柱子全彩,范围外的上下文柱降透明。
+    /// 悬浮选中某个周期时,非选中柱降透明以聚焦;无悬浮时,上下文窗口内
+    /// 只有所选周期那根柱子全彩,前面的上下文柱降透明。
+    /// 上下文窗口本身已保证范围只覆盖一个周期,所以直接和该周期起点比,
+    /// 自定义范围从周中 / 月中开始时也不会把自己那根柱判成范围外。
     private func barOpacity(for sample: DailySample) -> Double {
         if let selected = selectedSample {
             return selected.id == sample.id ? 1 : 0.35
         }
         guard chartUsesContextWindow else { return 1 }
-        let (from, to) = rangeBounds
-        return (sample.day >= from && sample.day < to) ? 1 : 0.35
+        return sample.day == selectedPeriodStart ? 1 : 0.35
     }
 
     /// 柱宽用固定值而非交给 Swift Charts 自动计算——天数很少(极端情况只有 1 天)时,
@@ -1620,6 +1690,104 @@ private struct LegendChip: View {
             Text(label)
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
+        }
+    }
+}
+
+// MARK: - Segmented bar
+
+/// 自绘分段控件。系统 `Picker(.segmented)` 的段宽只按各自文案自适应,SwiftUI 也没有暴露
+/// `NSSegmentedControl.distribution`,所以它既不会拉伸去填满给定宽度,段与段之间也不会等宽。
+/// 而 Stats 顶栏要求三个粒度(日 9 段、周 / 月各 6 段)下范围控件总宽一致、和粒度控件之间
+/// 不留空隙,系统控件做不到,只能自绘:`stretch` 打开时各段等分容器宽度。
+/// 粒度控件一并换成同一组件,避免两个并排的控件一个系统一个自绘、圆角底色对不上。
+/// 样式见 设计风格「Segmented control」。
+private struct SegmentedBar<Item: Hashable>: View {
+    let items: [Item]
+    let label: (Item) -> String
+    @Binding var selection: Item
+    /// 各段等分容器宽度(让周 / 月那 6 段撑满日粒度 9 段的宽度);
+    /// 关闭时按文案自然宽度,用于撑出宽度骨架。
+    var stretch: Bool = false
+    /// 骨架专用:每段都按**所有段里最长的那个文案**取宽,于是总宽 = 段数 × 最宽段宽。
+    /// 若骨架只取各段自然宽之和,等分后每段拿到的是平均宽,比平均宽的那几段
+    /// (中文「30 天」「自定义」)就会被挤到缩字。
+    var uniformSegments: Bool = false
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        HStack(spacing: 0) {
+            // 身份用 item 自身而不是位置索引:段数随粒度变化,按索引复用会让不同粒度的段
+            // 共用同一个视图身份,布局残留在切换后表现为段宽不一。
+            ForEach(items, id: \.self) { item in
+                segment(item,
+                        isFirst: item == items.first,
+                        precededBySelected: precedingItem(of: item) == selection)
+            }
+        }
+        .padding(2)
+        .background(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(colorScheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.06))
+        )
+    }
+
+    /// 段内文案。骨架模式下把所有段的文案叠在一起,宽度取其中最长的那个。
+    @ViewBuilder
+    private func segmentLabel(_ item: Item, isActive: Bool) -> some View {
+        if uniformSegments {
+            ZStack {
+                ForEach(items, id: \.self) { other in
+                    segmentText(label(other), isActive: false)
+                }
+            }
+        } else {
+            segmentText(label(item), isActive: isActive)
+        }
+    }
+
+    private func segmentText(_ text: String, isActive: Bool) -> some View {
+        Text(text)
+            .font(.system(size: 13))
+            .lineLimit(1)
+            // 骨架已保证每段不窄于最长文案,这里只是兜底,防止窗口被压到极窄时截成省略号。
+            .minimumScaleFactor(0.85)
+            .foregroundStyle(isActive ? Color.white : Color.primary)
+    }
+
+    /// 左邻的那一段,首段返回 nil。段数最多 9 个,线性查找足够。
+    private func precedingItem(of item: Item) -> Item? {
+        guard let index = items.firstIndex(of: item), index > 0 else { return nil }
+        return items[index - 1]
+    }
+
+    private func segment(_ item: Item, isFirst: Bool, precededBySelected: Bool) -> some View {
+        let isActive = item == selection
+        return Button {
+            selection = item
+        } label: {
+            segmentLabel(item, isActive: isActive)
+                .padding(.horizontal, 10)
+                .frame(maxWidth: stretch ? .infinity : nil)
+                .frame(height: 22)
+                .background(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(isActive ? Color.accentColor : Color.clear)
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusEffectDisabled()
+        .pointingHandCursor()
+        .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)
+        // 段间分隔线:与系统 segmented 一致,只在自己和左邻都未选中时出现。
+        .overlay(alignment: .leading) {
+            if !isFirst, !isActive, !precededBySelected {
+                Rectangle()
+                    .fill(Color.primary.opacity(0.12))
+                    .frame(width: 1, height: 12)
+            }
         }
     }
 }
