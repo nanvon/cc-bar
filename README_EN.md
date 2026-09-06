@@ -42,23 +42,23 @@
   * **Claude Code (Anthropic)**: 5-hour and weekly quotas with specialized model (e.g. Fable) weekly allocations; transparent, safe CLI fallback refresh on API errors or expired credentials.
   * **Antigravity (Google)**: Cloud Mode direct connection to Google Cloud APIs (without requiring local IDE/CLI processes), grouping Gemini 5H, Gemini Weekly, and Claude auxiliary quotas.
   * **Cursor**: Direct connection to the official Usage API, displaying Total primary quota alongside Auto and API breakdown, automatically recognizing Unlimited with `∞` badges and aggregating today/week actual spend.
-  * **Command Code**: Tracks 5-hour primary quota (cap 14.0), weekly quota (cap 35.0), and monthly GOAT subscription Credits.
+  * **Command Code**: Shows the 5-hour primary and weekly quotas returned by the service (both cap and usage come from the API), plus monthly GOAT subscription Credits (monthly allowance 70).
 * **Menu Bar & Floating HUD** — Customizable menu bar percentages (primary, weekly, or both); independent desktop HUD overlay with per-service toggles, 20pt edge magnetic snapping, position persistence, and non-activating window behavior (never steals keyboard focus).
-* **Live Health & Smart Scheduling** — Dynamic relative timestamp ("refreshed Xs ago") rolling in the Popover header; embedded live health status dots for OpenAI and Anthropic; dual independent polling loops (2-min quota / 5-min log scan) with 60s throttling and 429 exponential backoff.
+* **Live Health & Smart Scheduling** — Dynamic relative timestamp ("refreshed Xs ago") rolling in the Popover header; embedded live health status dots for OpenAI, Anthropic and Cursor; quota polling (2 min by default), log scanning (5 min by default) and service status (fixed 5 min) share a single time base so due jobs wake up together, throttle down while the screen is locked or asleep, stop the clock during system sleep and refresh immediately on wake; 60s minimum interval between successes and a 10-minute backoff after a 429.
 
 ### 📊 Local Usage & Cost Analytics
 * **Cross-Engine Log & Remote Metering Aggregation** — Automatically parses local session logs across Codex (with Standard/Fast tier mapping), Claude Code (with 5m/1h cache TTL differentiation), Pi (log total cost priority + catalog fallback), and OpenCode (`opencode.db` SQLite), combined with Cursor full-device remote metering.
 * **Four Dedicated Analytics Views**:
-  * **Overview**: Total and per-service KPI summary cards with period-over-period delta, stacked daily consumption bar charts, horizontal service distribution bars, and detailed model-level breakdown tables.
+  * **Overview**: Day / week / month granularity with the time range following the selected granularity (Today, This week, 4w, 6m, All, Custom, …); total and per-service KPI cards with period-over-period delta, token breakdown, horizontal service distribution bars, a stacked bar chart bucketed by granularity (a single-period range expands into a 14-period context window), plus by-model and by-provider breakdowns.
   * **Conversations**: Drill down into individual chats with 4-way token breakdown (input, output, cache creation, cache read), cache hit ratios, execution speed indicators (`Fast` / `Mixed` badges), and API-equivalent cost estimations; secure project grouping without macOS permission prompts.
   * **Cycles**: 2×2 grid tracking local token and cost consumption within Codex and Claude primary accounts' actual 5-hour and weekly reset windows, projecting burn-out time and reset countdowns based on official quota ratios.
-  * **Timeline**: Visualizes quota change events within 5-hour windows and tracks 15-day weekly burn curves across multiple accounts with independent, smoothed sampling.
+  * **Timeline**: The 5H view shows quota change events for the local day (00:00–24:00); the weekly view splits the current and previous cycle by the reset time the service reports, not by calendar week. Local samples are kept for 15 days, with one section per account.
 * **Model Provider Grouping (ModelProvider)** — Automatically classifies models across tools into 6 dedicated provider panels: OpenAI, Anthropic, DeepSeek, OpenCode-Go, Command Code, and Other; supports sorting by cost, tokens, requests, or name, with inline token breakdowns.
 
 ### 💻 Pure Native Experience
 * **Zero-Config Onboarding** — Auto-detects existing local CLI and desktop sessions across all 5 services without re-entering or managing third-party API keys (also supports manual Keychain API key configuration for Command Code).
 * **Built-in & Dual Remote Pricing Engine** — Built-in catalog continually updated with latest models including Claude 5, GPT-5.6, DeepSeek, Cursor, and Command Code; automatically syncs and caches upstream LiteLLM and models.dev catalogs with graceful offline fallback.
-* **Privacy-First Local Parsing** — Safe string-only path splitting for protected directories (Desktop, Documents, Downloads), completely eliminating macOS TCC privacy permission dialogs; parses only tokens and model metadata without touching chat text; includes privacy mode (masks email and account names) and silent launch-at-login.
+* **Privacy-First Local Parsing** — Safe string-only path splitting for protected directories (Desktop, Documents, Downloads, Music, Pictures, Movies), completely eliminating macOS TCC privacy permission dialogs; parses only tokens and model metadata without touching chat text; includes privacy mode (masks email and account names) and silent launch-at-login.
 * **Static Version Update Checker** — Checks updates against static GitHub Release manifests to eliminate GitHub API rate limits, with manual one-click checks in Settings.
 
 ---
@@ -115,11 +115,11 @@ cc-bar strictly adheres to **local-first and least-privilege** principles. All u
 | **Claude Code** | `~/.claude/.credentials.json`<br>or macOS Keychain | **Strictly Read-Only** | **Never refreshes or writes credentials**. Anthropic refresh tokens are single-use; third-party rotation invalidates CLI sessions. Preserves the last snapshot and prompts for CLI re-login when expired; provides safe CLI fallback when needed. |
 | **Antigravity** | `~/.gemini/jetski-standalone-oauth-token`<br>`~/.gemini/oauth_creds.json` (fallback) | Read / Write | Reads the standalone OAuth token first and refreshes near expiry. Cloud Mode queries Google Cloud APIs directly without requiring local IDE processes. |
 | **Cursor** | `~/Library/Application Support/Cursor`<br>`/User/globalStorage/state.vscdb` | **Strictly Read-Only** | Reads only `cursorAuth/accessToken` to construct session cookies for usage queries. Never touches refresh tokens/OAuth and never writes back to SQLite or Keychain. |
-| **Command Code** | 5-level local configs or macOS Keychain | Read / Keychain | 5-level auto-detection (CLI, Pi, OpenCode, environment variables), or secure manual API key storage in macOS Keychain via Settings. |
+| **Command Code** | 5-level local sources or macOS Keychain | Read / Keychain | Read-only auto-detection in order: `~/.commandcode/auth.json` → `~/.pi/agent/auth.json` → `~/.local/share/opencode/auth.json` → environment variables → Keychain. Settings can also switch to a manual API key stored in the macOS Keychain. |
 | **Local Session Logs** | `~/.codex/sessions`, `~/.claude/projects`<br>`~/.pi/agent/sessions`, OpenCode SQLite | **Strictly Read-Only** | Parses local JSONL / SQLite files for token metrics and model metadata only. Never reads or uploads conversation text. Safe path tokenization prevents permission prompts. |
 
 ### System Permissions & Zero-Telemetry Guarantee
-* **Zero Protected-Folder Access**: For protected directories (Desktop, Documents, Downloads, etc.), project grouping relies exclusively on **in-memory string splitting**. It never invokes filesystem APIs on those folders, avoiding macOS privacy permission prompts.
+* **Zero Protected-Folder Access**: For protected directories (Desktop, Documents, Downloads, Music, Pictures, Movies) and for any path outside the home directory, project grouping relies exclusively on **in-memory string splitting**. It never invokes filesystem APIs on those paths, avoiding macOS privacy permission prompts.
 * **No Telemetry**: Contains zero tracking SDKs, analytics libraries, or external reporting services.
 
 > [!TIP]

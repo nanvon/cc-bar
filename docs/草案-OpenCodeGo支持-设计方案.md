@@ -1,6 +1,6 @@
 # 草案 · OpenCode Go 支持（额度）
 
-> 状态：范围、技术契约与第一版边界已完成评审收敛；本文档是下一步实现与验收的执行基线。实现完成并通过验收后，再把最终行为并入正式产品 / 技术 / 界面文档并将本草案归档。接口来源已经抓取并交叉验证：`GET https://opencode.ai/zen/go/v1/usage` 与 Bearer token，响应字段 `usage.{rolling,weekly,monthly}{status, percent, resetsAt}`（百分号为**已用**）。macOS 上的 Go API key 位于 OpenCode 全局数据目录的 `auth.json` 中 `opencode-go` provider 项，默认路径为 `~/.local/share/opencode/auth.json`，兜底环境变量为 `OPENCODE_API_KEY`。第一版订阅额度只进 Popover + 设置 Accounts + Onboarding 检测；菜单栏、悬浮窗不做，也不把订阅额度注入主窗口的 Agent 对话统计。现有 OpenCode / Pi 等 Agent 对话若使用 `opencode-go/<model-id>`，仍按本地日志正常统计 Token 与预估费用，不受本功能影响。
+> 状态：**未实施**。当前代码里 `QuotaApp` 没有 `opencodeGo`，也没有对应的凭据读取或额度客户端；Popover / 设置 / Onboarding 都没有 OpenCode Go 条目。注意与已落地的 `Core/Usage/OpencodeScanner.swift` 区分——后者扫的是本地 `~/.local/share/opencode/opencode.db` 会话库，属于**用量统计**，与本文的 OpenCode Go **订阅额度**是两件事。本文是范围与技术契约已收敛的设计方案，尚未落地。实现完成并通过验收后，再把最终行为并入正式产品 / 技术 / 界面文档并将本草案归档。接口来源已经抓取并交叉验证：`GET https://opencode.ai/zen/go/v1/usage` 与 Bearer token，响应字段 `usage.{rolling,weekly,monthly}{status, percent, resetsAt}`（百分号为**已用**）。macOS 上的 Go API key 位于 OpenCode 全局数据目录的 `auth.json` 中 `opencode-go` provider 项，默认路径为 `~/.local/share/opencode/auth.json`，兜底环境变量为 `OPENCODE_API_KEY`。第一版订阅额度只进 Popover + 设置 Accounts + Onboarding 检测；菜单栏、悬浮窗不做，也不把订阅额度注入主窗口的 Agent 对话统计。现有 OpenCode / Pi 等 Agent 对话若使用 `opencode-go/<model-id>`，仍按本地日志正常统计 Token 与预估费用，不受本功能影响。
 
 ## 1. 背景、目标与范围
 

@@ -15,16 +15,17 @@
 
 阅读顺序:先看产品需求(知道有什么),再看技术实现(知道怎么搭),做 UI 时配合设计风格 + 界面布局。
 
-## 进行中的草案
+## 草案
 
 | 文件 | 状态 |
 |---|---|
-| [草案-性能与功耗等价优化方案.md](草案-性能与功耗等价优化方案.md) | 批次 A/B/C 已实施并通过 Xcode 测试，批次 D 保留为后续候选；全程以不改变功能与统计口径为前提 |
+| [草案-性能与功耗等价优化方案.md](草案-性能与功耗等价优化方案.md) | 批次 A/B/C 已落地(单一时基调度、FSEvents 日志门控、rollup / 额度写盘节流与 `QuotaPersistenceCoordinator`、`QuotaRefreshPlan`)，批次 D 保留为后续候选 |
+| [草案-Cursor支持-设计方案.md](草案-Cursor支持-设计方案.md) | 已落地：`CursorAuth` 只读 SQLite、`CursorQuotaClient` / `CursorUsageFetcher`、独立 `cursor-usage-rollup.json`、Popover / 菜单栏 / 悬浮窗 / 统计页 / 设置 / Onboarding 全部接入。文档保留接口字段与风险说明的追溯细节 |
+| [草案-CommandCode支持-设计方案.md](草案-CommandCode支持-设计方案.md) | 已落地：`CommandCodeAuth` 五级凭据扫描 + Keychain 手动 Key、`CommandCodeQuotaClient`、设置账号行与凭据 Sheet、Popover / 菜单栏 / 悬浮窗。按设计不进入主窗口用量统计 |
+| [草案-Antigravity支持-设计方案.md](草案-Antigravity支持-设计方案.md) | 已落地：`AntigravityCredentials` 读 `~/.gemini/jetski-standalone-oauth-token`(兜底 `oauth_creds.json`) + 双 client 刷新、`AntigravityQuotaClient` 四段云端富化、Popover / 菜单栏 / 悬浮窗 / 设置 / Onboarding。无本地日志，不进入用量统计 |
+| [草案-OpenCodeGo支持-设计方案.md](草案-OpenCodeGo支持-设计方案.md) | **未实施**：`QuotaApp` 中没有 opencodeGo，也没有对应的凭据 / 额度客户端。注意区分——`OpencodeScanner`(`~/.local/share/opencode/opencode.db`)是已落地的**本地用量**扫描器，与本草案的 OpenCode Go **订阅额度**不是一回事 |
 | [草案-用量统计增强与对话明细-需求.md](草案-用量统计增强与对话明细-需求.md) | 单对话能力已并入常驻文档;仅保留未实施后续候选 |
 | [草案-用量统计增强与对话明细-技术方案.md](草案-用量统计增强与对话明细-技术方案.md) | 原宽范围方案已收窄;仅保留后续技术候选 |
-| [草案-Cursor支持-设计方案.md](草案-Cursor支持-设计方案.md) | 新增 Cursor 额度 + 用量统计的设计方案(认证/接口/映射/风险);代码实现已完成(额度链路、远端用量拉取与独立缓存、历史懒加载、全部 UI 与文档同步),待用真实已登录的 Cursor.app 做端到端验收 |
-| [草案-CommandCode支持-设计方案.md](草案-CommandCode支持-设计方案.md) | Command Code GOAT 订阅额度的产品边界、凭据方案、接口映射、安全策略与验收基线；第一版只进入设置账号与 Popover，不进入主窗口统计 |
-| [草案-Antigravity支持-设计方案.md](草案-Antigravity支持-设计方案.md) | Antigravity（Google Gemini Code Assist）额度 Cloud Mode 设计方案（本机凭据复用 + 云端配额直连，无需本地 IDE/App）；代码实现已完成，待真机云端配额回填与周/5h 窗口验收 |
 
 ## 历史参考
 
@@ -39,6 +40,6 @@
 
 ## 维护规则
 
-- 改代码时,顺手把对应小节回写到上述四份文档之一。代码与文档冲突时**以代码为准**,并修正文档。
+- 改代码时,顺手把对应小节回写到上面六份常驻文档之一。代码与文档冲突时**以代码为准**,并修正文档。
 - 不在文档里写计划性 / 时间表内容;那些放 GitHub Issue 或 commit message。
-- 新增大型功能可在主目录下添加单独的设计草案(命名 `XX-某功能.md`);落地后并入相应规范文档并把草案移到 `历史参考/`。
+- 新增大型功能可在本目录下添加单独的设计草案(命名 `草案-某功能-设计方案.md`);落地后把有效内容并入相应规范文档,草案本身保留为追溯材料并在上表标注真实状态。

@@ -4,7 +4,11 @@
 
 ## 项目概况
 
-cc-bar 是一个原生 macOS 菜单栏 App，用 Swift / SwiftUI 实现，用于展示 Codex 和 Claude Code 的额度、刷新状态、本地用量统计和桌面悬浮窗。
+cc-bar 是一个原生 macOS 菜单栏 App，用 Swift / SwiftUI 实现。
+
+- 额度 Provider（`QuotaApp`）：Codex、Claude Code、Antigravity、Cursor、Command Code，外加用户手动导入的其他 Codex 账号。
+- 本地用量数据源（`UsageApp`）：Codex、Claude Code、Pi、OpenCode 走本机日志扫描，Cursor 走远端计量。
+- 展示位：菜单栏标签、Popover、主窗口（统计 / 设置）、桌面悬浮窗、首次启动引导。
 
 项目主体功能已开发完成，后续以新需求和迭代为主，不再按初始里程碑推进。
 
@@ -28,6 +32,10 @@ cc-bar 是一个原生 macOS 菜单栏 App，用 Swift / SwiftUI 实现，用于
 - `docs/技术实现.md`：架构、模块、关键流程、并发与持久化
 - `docs/设计风格.md`：视觉规范、颜色、字体、状态色、组件尺寸、双语词表
 - `docs/界面布局.md`：菜单栏、Popover、主窗口、悬浮窗、设置、引导的逐界面尺寸与字段
+- `docs/打包发布.md`：`scripts/build.sh` 与 GitHub Actions 发布流程、Developer ID 公证归档
+- `docs/历史用量数据补录指南.md`：Claude 日志被自动清理后如何补录历史用量（一次性操作手册）
+
+`docs/` 下的 `草案-*.md` 是各功能的设计方案，落地状态见 `docs/README.md` 的草案表。
 
 历史参考(已归档)位于 `docs/历史参考/`,含 `实施里程碑.md`、`设计稿/`、`外部项目分析/`。新需求**不**受里程碑顺序约束;需要对照外部项目行为时,优先看 `外部项目分析/` 已整理的笔记。
 
@@ -47,11 +55,11 @@ cc-bar 是一个原生 macOS 菜单栏 App，用 Swift / SwiftUI 实现，用于
 - UI 优先使用 SwiftUI / AppKit 系统默认控件和 macOS 原生风格。
 - 视觉规则以 `docs/设计风格.md` 为准：
   - Codex 使用石墨灰识别色，Claude Code 使用桃橙识别色；识别色仅用于 tile / logo 等品牌识别，不再用于额度状态着色。
-  - 额度状态色按剩余比例分 4 档交通灯（统一走 `statusColor`）：剩余 `>50%` 绿、`20%~50%` 黄、`<20%` 橙、`=0` 红。
+  - 额度状态色按剩余比例分 4 档（统一走 `statusColor`）：剩余 `>50%` 中性石墨灰、`20%~50%` 黄、`<20%` 橙、`=0` 红。
   - 数字使用 `.monospacedDigit()`。
   - 图标优先使用 SF Symbols。
 - 不自造大面积背景、玻璃阴影、Web 风格控件或无关装饰。
-- 菜单栏和 Popover 中 Codex 永远排在 Claude 前。
+- 菜单栏和 Popover 中 Provider 顺序固定：Codex → Claude Code → Antigravity → Cursor → Command Code（由 `QuotaProviderDescriptor.allProviders` 定义）。
 - 网络请求失败时保留已有快照，不要清空可展示数据。
 - 429 后必须遵守现有退避策略，不要为了手动刷新绕过限流。
 

@@ -1,5 +1,7 @@
 # 重新支持 Antigravity 用量查询实现方案（OpenUsage / CodexBar 架构）
 
+> 状态：**已落地**。`Core/Credentials/AntigravityCredentials.swift`（jetski 优先 + `oauth_creds.json` 兜底、双 client 刷新、secret 从本机官方组件提取）与 `Core/Quota/AntigravityQuotaClient.swift`（`loadCodeAssist` + `retrieveUserQuotaSummary` + `fetchAvailableModels` + `retrieveUserQuota` 四段富化）已实现，Popover、菜单栏、悬浮窗、设置账号行与 Onboarding 均已接入，Provider 默认开启。行为已同步到产品需求 §1/§3/§5、技术实现 §5.5/§6.1、设计风格 §4.2 与界面布局。Antigravity 没有本地日志，不进入主窗口用量统计。本文保留为设计与调研的追溯材料。
+
 本方案旨在为 cc-bar 重新接入 **Antigravity（Google Antigravity / Gemini Code Assist）** 的额度与状态展示。
 与旧版必须强依赖运行中本地进程（`ps` / `lsof` / 本地 127.0.0.1 端口）不同，本次接入采用与 **OpenUsage**、**CodexBar** 及现有 Codex/Claude 完全对齐的**「本机凭据复用 + 云端配额直连」**架构。电脑无需打开 VSCode / Antigravity App，菜单栏即可在后台静默刷新实时额度。
 
