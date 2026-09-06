@@ -2,7 +2,7 @@ import SwiftUI
 
 // MARK: - SettingsRootView
 //
-// 见 docs/04-界面布局.md §4。
+// 见 docs/界面布局.md §4。
 // 使用 prototype 的 PrefsGroup + PrefsRow 卡片结构,放弃 Form .grouped。
 
 struct SettingsRootView: View {

@@ -100,6 +100,13 @@ struct ProviderDisplaySettings: Sendable, Codable, Equatable {
     /// Cursor 与 Command Code 首次出现时保持关闭；只有用户主动开启后，
     /// 才会进入远端刷新链路，避免未配置的机器产生后台失败状态。
     /// Antigravity 默认开启（云端凭据直连，无本地进程依赖）。
+    ///
+    /// Command Code 的 `menuBar` / `floatingHUD` 刻意留 true，与 Cursor 的三项全 false 不同：
+    /// 子开关只在 `enabled` 为真时才生效（见 `effectiveMenuBarVisibility` /
+    /// `effectiveFloatingVisibility`），所以关闭状态下两者行为完全一致；差别在用户后来打开
+    /// 总开关的那一刻——Command Code 直接出现在菜单栏和悬浮窗，Cursor 还要再开两个子开关。
+    /// 这是有意的：Cursor 额度与它的统计服务是两个独立入口，默认不替用户决定展示位。
+    /// 改这两个值会改变已装机用户开启 Provider 后的首屏，不要当成笔误「对齐」掉。
     static func defaults(for app: QuotaApp) -> ProviderDisplaySettings {
         switch app {
         case .codex, .claude, .antigravity:
@@ -185,7 +192,7 @@ final class SettingsStore {
     // 菜单栏
     var menuBarWindow: MenuBarWindowChoice { didSet { defaults.set(menuBarWindow.rawValue, forKey: Keys.menuBarWindow) } }
 
-    // 悬浮窗（占位，M8 接）
+    // 悬浮窗
     var floatingEnabled: Bool { didSet { defaults.set(floatingEnabled, forKey: Keys.floatingEnabled) } }
     var floatingShowCodex: Bool {
         get { isProviderShownInFloatingHUD(.codex) }

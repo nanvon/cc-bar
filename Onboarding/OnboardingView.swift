@@ -3,7 +3,7 @@ import AppKit
 
 // MARK: - OnboardingView
 //
-// 见 docs/04-界面布局.md §5。
+// 见 docs/界面布局.md §5。
 // 4 步:Welcome / Detect accounts / Configure / Ready。
 // 首次启动时显示;完成后写入 SettingsStore.didCompleteOnboarding = true。
 

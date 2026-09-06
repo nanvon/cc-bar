@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - Language model
 //
-// 见 docs/03-设计风格.md §5。
+// 见 docs/设计风格.md §5。
 // 应用界面只显示一种语言:跟随系统(根据 Locale.current 解析为 zh / en)、中文、English。
 // 调用方使用全局 `tr(en, zh)` 选词,由 SettingsStore.shared.resolvedLanguage 决定渲染哪一种。
 

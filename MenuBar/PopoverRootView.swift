@@ -3,10 +3,11 @@ import AppKit
 
 // MARK: - PopoverRootView
 //
-// 见 docs/04-界面布局.md §1。
-// 结构:Header(标题 + 状态点 + 统计/刷新/设置 三个一级图标 + ⋯ kebab) /
-//      Codex block(tile + 服务名/plan + reset / 56pt 环 + weekly 条 + stats 行) /
-//      Claude block(同上)。footer 已合并到 header,不再单独存在。
+// 见 docs/界面布局.md §1。
+// 结构:Header(标题 + 副标题 + 状态点 + 刷新 / 统计 / 设置 / 退出 四个一级图标) /
+//      每个已启用 Provider 一个 ServiceBlockView(tile + 服务名/plan + 主额度大字 +
+//      进度条 + reset + today/week cost + 次要额度行),block 间 0.5pt Divider。
+// footer 与 kebab 菜单都已移除,退出是 header 上的一级图标。
 
 struct PopoverRootView: View {
     @Environment(AppState.self) private var appState

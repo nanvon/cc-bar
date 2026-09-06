@@ -5,7 +5,7 @@ import AppKit
 //
 // Provider 识别色定义在 Asset Catalog (*Accent)。
 // Xcode 自动从 .xcassets 生成对应 Color,通过 QuotaApp.tintColor 统一访问。
-// 见 docs/03-设计风格.md §4.2。
+// 见 docs/设计风格.md §4.2。
 
 extension QuotaApp {
     var tintColor: Color {
@@ -47,7 +47,7 @@ extension UsageApp {
 
 /// 按剩余百分比解析 4 档状态色:>50% → normal / 20~50% → warning / <20% → low / <=0 → empty。
 ///
-/// 见 docs/03-设计风格.md §4.3。Popover / Floating / Stats KPI 全部走这里。
+/// 见 docs/设计风格.md §4.3。Popover / Floating / Stats KPI 全部走这里。
 /// `tint`(服务识别色)当前不参与额度着色,保留参数以备将来切回「服务色打底」方案。
 func statusColor(remainingPercent: Double?, tint: Color) -> Color {
     guard let value = remainingPercent else { return .secondary }
@@ -127,7 +127,7 @@ struct ResetTimeText: View {
 
 // MARK: - Panel background / stroke (浅深色对照)
 //
-// 见 docs/03-设计风格.md §12.3。
+// 见 docs/设计风格.md §12.3。
 // Stats KPI 卡、Daily usage panel、Settings PrefsGroup body、Onboarding DetectedAccount 全部用这一对。
 
 private struct PanelBackground: View {
@@ -181,7 +181,7 @@ extension View {
 
 // MARK: - ServiceMark (色块)
 //
-// 见 docs/03-设计风格.md §11.1。
+// 见 docs/设计风格.md §11.1。
 // prototype 用的是 8×8 squircle(圆角 2pt),不是圆。
 
 struct ServiceMark: View {
@@ -198,7 +198,7 @@ struct ServiceMark: View {
 
 // MARK: - ServiceTile (带 logo 的 squircle)
 //
-// 见 docs/03-设计风格.md §11.2。
+// 见 docs/设计风格.md §11.2。
 // Popover 服务行左侧、Stats sidebar 服务条目、Onboarding 账号列表都用。
 
 struct ServiceTile: View {
@@ -267,9 +267,9 @@ private enum LogoCache {
 
 // MARK: - ProgressRing (进度环)
 //
-// 见 docs/03-设计风格.md §11.3。
-// Popover 56/5.5、Stats limits 32/4、HUD dual rings 26/3.5、HUD single 34/4。
-// value 取 0...1,值越大环越满。颜色由调用方传入(通常用 statusColor)。
+// 见 docs/设计风格.md §11.3(已废弃)。
+// 组件保留,但当前界面没有调用点:Popover 主额度改用大字 + 横条,Stats 的
+// Current limits 面板已移除。value 取 0...1,值越大环越满。颜色由调用方传入(通常用 statusColor)。
 
 struct ProgressRing<Center: View>: View {
     let value: Double
@@ -309,7 +309,7 @@ extension ProgressRing where Center == EmptyView {
 
 // MARK: - ProgressBar (横条)
 //
-// 见 docs/03-设计风格.md §11.4。
+// 见 docs/设计风格.md §11.4。
 // Popover weekly 5/2.5、HUD 4/2、Dense compact 3/1.5、BigStat 6/3。
 
 struct ProgressBar: View {
@@ -339,7 +339,7 @@ struct ProgressBar: View {
 
 // MARK: - Bilingual label helpers
 //
-// 见 docs/03-设计风格.md §5。
+// 见 docs/设计风格.md §5。
 // 单语切换 · 由 SettingsStore.shared.resolvedLanguage 决定渲染中文还是英文。
 // 调用方保留 `english` + `chinese` 两个字段,组件内自动选词,无需迁移调用点。
 
@@ -375,7 +375,7 @@ struct BilingualStack: View {
 
 // MARK: - Spacing tokens (4pt 基线)
 //
-// 见 docs/03-设计风格.md §10。
+// 见 docs/设计风格.md §10。
 
 enum CCSpacing {
     static let xxs: CGFloat = 2
@@ -469,7 +469,7 @@ extension View {
 // MARK: - PopoverIconButtonStyle
 //
 // Popover 顶部 26×22 圆角 5pt borderless 图标按钮。
-// hover 浅灰背景 + 手型光标,匹配 docs/04-界面布局.md §1.3。
+// hover 浅灰背景 + 手型光标,匹配 docs/界面布局.md §1.3。
 
 struct PopoverIconButtonStyle: ButtonStyle {
     @State private var hovering = false

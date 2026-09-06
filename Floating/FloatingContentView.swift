@@ -2,7 +2,7 @@ import SwiftUI
 
 // MARK: - FloatingContentView
 //
-// 见 docs/04-界面布局.md §2。
+// 见 docs/界面布局.md §2。
 // 默认变体:Two-row pill。
 // 结构:14pt 圆角 HUD 容器 + .hudWindow material 背景 + 两行 pill。
 // 每行:18pt ServiceTile + flex 4pt bar + 34pt 百分比(服务色)。
