@@ -287,8 +287,10 @@ nonisolated struct ConversationDetail: Sendable, Equatable {
 /// 其他用户目录）只按字符串归组（status = .unverified）。非沙盒 App 访问这些路径
 /// 会触发系统“文件与文件夹”授权弹窗，惊扰用户且并无收益。
 nonisolated struct ConversationProjectResolver {
+    /// 全部小写：`allowsFileSystemCheck` 会先把路径分量小写化再比对，
+    /// 这里若留首字母大写则永远命中不到，等于分级失效。
     private static let protectedHomeFolders: Set<String> = [
-        "Desktop", "Documents", "Downloads", "Music", "Pictures", "Movies",
+        "desktop", "documents", "downloads", "music", "pictures", "movies",
     ]
 
     private var cache: [String: ConversationProject] = [:]

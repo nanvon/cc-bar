@@ -210,7 +210,9 @@ final class PiJSONLScannerTests: XCTestCase {
         let result = PiJSONLScanner.scan(previous: [:], seenEntryIds: [], root: tempDir)
         XCTAssertEqual(result.entries.count, 2)
 
-        let expected = Decimal(string: "0.035")
+        // gpt-5.5-codex 标准价：input $5 / output $30 / cacheRead $0.50 每百万 token。
+        // assistantLine 默认还带 20 个 cacheRead token，总价 0.005 + 0.03 + 0.00001。
+        let expected = Decimal(string: "0.03501")
         for entry in result.entries {
             XCTAssertEqual(entry.costUSD, expected)
             XCTAssertEqual(entry.costBreakdown?.total, expected)
