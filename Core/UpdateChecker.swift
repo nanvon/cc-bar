@@ -130,20 +130,31 @@ enum UpdateChecker {
     }
 
     /// 把版本字符串解析为数字分量:`v1.0.2` / `1.0` → [1, 0, 2]。
-    /// 前缀 `v` 忽略,遇到非纯数字段(如 `-beta.1` 后缀)截断后续分量;首段非数字返回 nil。
+    /// 前缀 `v` 忽略;分量带预发布后缀时保留其数字前缀并截断后续分量
+    /// (`1.0.2-beta.1` → [1, 0, 2]);首段取不出数字返回 nil。
     static func numericComponents(of version: String) -> [Int]? {
         var clean = version.trimmingCharacters(in: .whitespacesAndNewlines)
         if clean.hasPrefix("v") || clean.hasPrefix("V") {
             clean.removeFirst()
         }
         let parts = clean.split(separator: ".", omittingEmptySubsequences: false)
-        guard let first = parts.first, let firstNumber = Int(first) else { return nil }
+        guard let first = parts.first, let head = leadingNumber(of: first) else { return nil }
 
-        var result = [firstNumber]
+        var result = [head.value]
+        // 首段就带后缀(如 `1-beta.2`)时,后面的分量属于预发布标识,不再计入版本号。
+        guard head.isPure else { return result }
         for part in parts.dropFirst() {
-            guard let number = Int(part) else { break }
-            result.append(number)
+            guard let component = leadingNumber(of: part) else { break }
+            result.append(component.value)
+            if !component.isPure { break }
         }
         return result
+    }
+
+    /// 取分量的前导十进制数字:`2` → (2, 纯数字),`2-beta` → (2, 带后缀),`beta` / `` → nil。
+    private static func leadingNumber(of part: Substring) -> (value: Int, isPure: Bool)? {
+        let digits = part.prefix { $0.isASCII && $0.isNumber }
+        guard let value = Int(digits) else { return nil }
+        return (value, digits.count == part.count)
     }
 }
