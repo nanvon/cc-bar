@@ -225,7 +225,9 @@ final class AppState {
             // load 时修复过超长周期记录：旧 rollup 桶按污染窗口切分过，必须重算。
             // 放在初始重建之后，避免与全量重建的桶清空互相干扰（两者都能自愈，
             // 前一置位后一幂等）。
-            if !pendingCycleRepairs.isEmpty {
+            // 两种情况都只需要一次受限重建（最近 `rebuildWindowDays` 天）：
+            // 超长周期被回写起点，或启动时丢弃过落在窗口内的孤儿周期桶。
+            if !pendingCycleRepairs.isEmpty || usageService.hasPendingOrphanCycleRebuild {
                 pendingCycleRepairs = []
                 await usageService.rebuildCycleUsageForRecentChanges()
             }
@@ -1049,9 +1051,19 @@ final class AppState {
     }
 
     private func cycleUsagePartition(for payload: QuotaCyclePayload) -> [String] {
-        payload.records.flatMap { cycle in
+        let now = Date()
+        return payload.records.flatMap { cycle in
+            // 活跃周期的右边界排除在指纹之外：服务端 resets_at 会持续漂移（实测 Codex
+            // five-hour 近 1:1 跟随墙钟，39 分钟漂 2279 秒），任何有限容差都会被周期性
+            // 击穿。而活跃周期的 endAt 只决定它还能容纳多少后续用量，不改变已归集用量的
+            // 切分方式——新条目本来就由常规增量扫描持续灌入。把它计入指纹会让几乎每次
+            // 额度采样都触发一次受限重建。周期结束后边界固定，指纹此时变化一次，
+            // 那才是真正需要重灌的时刻。
+            let boundary = cycle.isComplete(at: now)
+                ? "\(cycle.endAt.timeIntervalSince1970)"
+                : "active"
             let cycleBoundary = [
-                "cycle|\(cycle.id)|\(cycle.startAt.timeIntervalSince1970)|\(cycle.endAt.timeIntervalSince1970)",
+                "cycle|\(cycle.id)|\(cycle.startAt.timeIntervalSince1970)|\(boundary)",
             ]
             let allowanceBoundaries = cycle.allowanceSegments.map { segment in
                 "allowance|\(segment.id)|\(segment.startAt.timeIntervalSince1970)|\(segment.endAt?.timeIntervalSince1970 ?? -1)"

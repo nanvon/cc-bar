@@ -23,6 +23,12 @@ final class UsageService {
     private var loadedCycleGeneration: String?
     private var cycleInitialRebuildCompletedAt: Date?
     private var cycleInitialRebuildCompletedApps: Set<UsageApp> = []
+    /// 启动时丢弃过孤儿周期桶，且它们落在受限重建窗口内；由 AppState 在 bootstrap
+    /// 末尾触发一次窗口重建补回。
+    private(set) var hasPendingOrphanCycleRebuild = false
+    /// 存在窗口之外、受限重建补不回的周期用量缺口。设置页据此提示用户手动重算；
+    /// 手动「重新计算用量」成功后清除。
+    private(set) var cycleUsageNeedsManualRecalculation = false
     /// Cursor 远端日桶独立于本地 scan-state / usage-rollup 的持久化状态。
     private var cursorUsageCache = CursorUsageCachePayload()
     private var cursorRemoteAccountID: String?
@@ -84,14 +90,25 @@ final class UsageService {
             conversationAggregator.load(infos: conversationPayload.infos, buckets: conversationPayload.buckets)
             loadedRollupGeneration = payload.generationID
             let validCycleIDs = Set(appState.quotaCycles.records.map(\.id))
-            let rollupCycleIDs = Set(cyclePayload.buckets.map(\.cycleID))
-            if cyclePayload.generationID == payload.generationID,
-               rollupCycleIDs.isSubset(of: validCycleIDs) {
-                cycleAggregator.load(from: cyclePayload.buckets)
+            if cyclePayload.generationID == payload.generationID {
+                // 周期记录每次载入都会被 `cleaningUpLegacyPayload` 剔除残片 / 合并重叠，
+                // rollup 里因此常残留指向已消失 cycleID 的孤儿桶。旧实现把这看作整份
+                // rollup 失效，清空聚合器并触发一次不带窗口的全历史重建（实测 2.4GB、
+                // 约 100 秒 CPU），而实际只有孤儿桶是脏的：其余桶与初始重建标记都仍
+                // 有效。这里只丢弃孤儿桶，落在重建窗口内的那部分交给受限重建补回，
+                // 窗口之外的置位提示、等用户手动重算，不再自动全量重扫。
+                let orphanedCycleIDs = Set(cyclePayload.buckets.map(\.cycleID))
+                    .subtracting(validCycleIDs)
+                cycleAggregator.load(from: cyclePayload.buckets.filter {
+                    validCycleIDs.contains($0.cycleID)
+                })
                 loadedCycleGeneration = cyclePayload.generationID
                 cycleInitialRebuildCompletedAt = cyclePayload.initialRebuildCompletedAt
                 cycleInitialRebuildCompletedApps = cyclePayload.effectiveInitialRebuildCompletedApps
+                classifyOrphanedCycleBuckets(orphanedCycleIDs)
             } else {
+                // 代次不一致说明周期 rollup 与主 rollup 不是同一次扫描的产物，
+                // 无从判断哪些桶可信，只能整份丢弃、由初始重建重灌。
                 cycleAggregator.load(from: [])
                 loadedCycleGeneration = nil
                 cycleInitialRebuildCompletedAt = nil
@@ -399,6 +416,25 @@ final class UsageService {
     /// 窗口外（大于此天数）的历史归属早已固化，不需要重扫，给足余量即可。
     nonisolated private static let rebuildWindowDays = 8
 
+    /// 孤儿周期桶分流。能被受限重建窗口覆盖的记下来、启动后补算一次；窗口之外的
+    /// 只能靠用户手动「重新计算用量」，置位提示标记而不是自动全量重扫。
+    /// cycleID 末段是该周期 `endAt` 的 epoch 秒，据此把孤儿桶定位到时间轴上。
+    private func classifyOrphanedCycleBuckets(_ orphanedCycleIDs: Set<String>) {
+        guard !orphanedCycleIDs.isEmpty else { return }
+        let windowStart = Calendar(identifier: .gregorian)
+            .date(byAdding: .day, value: -Self.rebuildWindowDays, to: Date())
+            ?? Date()
+        for id in orphanedCycleIDs {
+            // 反解不出重置时刻的 ID 一律按窗口外处理：宁可提示用户重算，
+            // 也不要静默少算一段用量。
+            if let resetAt = QuotaCycleStore.resetInstant(fromCycleID: id), resetAt >= windowStart {
+                hasPendingOrphanCycleRebuild = true
+            } else {
+                cycleUsageNeedsManualRecalculation = true
+            }
+        }
+    }
+
     /// 周期窗口滚动 / 账号段变化后的受限重建：只重扫最近 `rebuildWindowDays` 天的日志，
     /// 仅重算受影响周期内的桶，历史桶保留。
     /// 触发频率高（5h / weekly 滚动，每天数次），必须保持轻量；
@@ -422,6 +458,9 @@ final class UsageService {
         // 先提交上次常规扫描之后新追加的日志，推进主 watermark。
         // 否则它们会先被下面的窗口重扫灌入，再被下一次常规增量扫描重复计入。
         guard await drainPendingUsageBeforeCycleRebuild() else { return }
+        // 本轮窗口重建即将覆盖启动时被丢弃的窗口内孤儿桶；drain 失败提前返回时
+        // 不清标记，留给下一次触发。
+        hasPendingOrphanCycleRebuild = false
 
         let calendar = Calendar(identifier: .gregorian)
         let now = Date()
@@ -812,6 +851,9 @@ final class UsageService {
         requiresFullRebuild = true
         if await runScan(prev: ScanState(), reportProgress: true) {
             requiresFullRebuild = false
+            // 全量重扫已按现有周期记录重灌全部桶，窗口外的缺口就此补齐。
+            cycleUsageNeedsManualRecalculation = false
+            hasPendingOrphanCycleRebuild = false
             if await refreshMissingPricingIfNeeded() {
                 // 强制重算没有 scanNow 的 repeat 循环；缺价刷新拿到新价格后就在这里
                 // 立即再做一次全量扫描，避免必须等待下一次定时扫描。

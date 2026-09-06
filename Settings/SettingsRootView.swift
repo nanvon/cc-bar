@@ -465,6 +465,20 @@ struct SettingsRootView: View {
                 chineseDesc: "重新扫描全部本地日志，补齐缺价并按当前定价表重算所有费用"
             ) {
                 HStack(spacing: 8) {
+                    // 启动时丢弃过重建窗口之外的孤儿周期桶：那段用量补不回来，
+                    // 只能由用户手动重算。不自动全量重扫，但也不能静默少算。
+                    if appState.usageService.cycleUsageNeedsManualRecalculation, !isRecalculatingUsage {
+                        HStack(spacing: 4) {
+                            Image(systemName: "exclamationmark.triangle")
+                            Text(tr("Cycle usage incomplete", "周期用量不完整"))
+                        }
+                        .font(.system(size: 11))
+                        .foregroundStyle(.orange)
+                        .help(tr(
+                            "Some historical cycle usage could not be restored from cache. Recalculate to fill it in.",
+                            "部分历史周期的用量无法从缓存恢复，点「重新计算」补齐"
+                        ))
+                    }
                     if let progress = appState.usageService.scanProgress, isRecalculatingUsage {
                         Text(scanProgressText(progress))
                             .font(.system(size: 11))

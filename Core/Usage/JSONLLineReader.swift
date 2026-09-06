@@ -99,8 +99,12 @@ enum JSONLLineReader {
         batchLines: Int,
         onBatch: (ArraySlice<String>) -> Void
     ) {
-        guard let text = String(data: data, encoding: .utf8) else { return }
-        let lines = text.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
+        // 按 `\n` 字节切段、逐段构造 String，而不是先整段转 String 再 `split(separator:)`。
+        // 后者按 Character 切分，要逐位判定 grapheme cluster 边界；本机 sample 实测这一步
+        // 的采样数（1361）高于逐行 JSONSerialization 本身（855），是扫描的头号开销。
+        // 换行符是 ASCII，因此「整段可解码」与「每行都可解码」等价：任一行解码失败即整段
+        // 失败，与旧实现的「整段解码失败则不产出行」逐字节等价。
+        guard let lines = decodingLines(data) else { return }
         var index = lines.startIndex
         while index < lines.endIndex {
             let batchEnd = min(index + batchLines, lines.endIndex)
@@ -109,6 +113,31 @@ enum JSONLLineReader {
             }
             index = batchEnd
         }
+    }
+
+    /// 按换行字节切分并逐行 UTF-8 解码；任一行解码失败返回 nil（整段作废）。
+    /// 空行按旧实现的 `omittingEmptySubsequences: true` 语义跳过。
+    nonisolated private static func decodingLines(_ data: Data) -> [String]? {
+        let newline = UInt8(ascii: "\n")
+        var lines: [String] = []
+        var lineStart = data.startIndex
+        while lineStart < data.endIndex {
+            guard let breakIndex = data[lineStart...].firstIndex(of: newline) else { break }
+            if breakIndex > lineStart {
+                guard let line = String(data: data[lineStart..<breakIndex], encoding: .utf8) else {
+                    return nil
+                }
+                lines.append(line)
+            }
+            lineStart = data.index(after: breakIndex)
+        }
+        // 末尾无换行的残段：`streamLines` 只会交付到最后一个换行为止，这里是防御性处理，
+        // 语义与旧实现的 `split` 保留末段一致。
+        if lineStart < data.endIndex {
+            guard let line = String(data: data[lineStart...], encoding: .utf8) else { return nil }
+            lines.append(line)
+        }
+        return lines
     }
 
     nonisolated private static func failureStreamOutcome(for url: URL) -> StreamOutcome {

@@ -843,6 +843,15 @@ enum QuotaCycleStore {
         return "\(accountKey)|\(limitID)|\(resetSecond)"
     }
 
+    /// 从 `cycleID` 反解该周期的重置时刻。ID 形如 `accountKey|limitID|resetSecond`，
+    /// 末段是 `endAt` 的 epoch 秒（见 `cycleID(accountKey:limitID:endAt:)`）。
+    /// 周期记录被 `cleaningUpLegacyPayload` 合并 / 剔除后，用量 rollup 里会残留只剩
+    /// cycleID 的孤儿桶；用它把这段用量定位到时间轴上，判断能否由受限重建补回。
+    nonisolated static func resetInstant(fromCycleID id: String) -> Date? {
+        guard let second = id.split(separator: "|").last.flatMap({ Int($0) }) else { return nil }
+        return Date(timeIntervalSince1970: TimeInterval(second))
+    }
+
     nonisolated private static func preferredSource(
         _ current: QuotaSnapshotSource,
         _ incoming: QuotaSnapshotSource
