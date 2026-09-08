@@ -81,8 +81,8 @@ private struct WelcomeStep: View {
                 .kerning(-0.4)
 
             Text(tr(
-                "Track Codex and Claude Code quota right from your menu bar. We'll detect local providers automatically.",
-                "在菜单栏即时查看 Codex 与 Claude Code 的额度,我们将自动检测本机服务。"
+                "Track your AI subscription quota & local usage right from your menu bar. We'll detect local providers automatically.",
+                "在菜单栏即时查看 AI 订阅服务额度与本地用量，我们将自动检测本机服务。"
             ))
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)

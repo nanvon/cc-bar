@@ -5,7 +5,7 @@
 <h1 align="center">cc-bar</h1>
 
 <p align="center">
-  <b>Native macOS Menu Bar AI Quota Monitor & Local Usage Dashboard</b><br>
+  <b>Native macOS AI Subscription Quota Monitor & Local Session Analytics</b><br>
   Real-time remaining quotas for Codex, Claude Code, Antigravity, Cursor, and Command Code, with granular local token & cost analytics.
 </p>
 

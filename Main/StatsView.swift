@@ -902,7 +902,7 @@ struct StatsView: View {
             if visibleUsageApps.isEmpty {
                 placeholderHeight(
                     60,
-                    message: tr("No services selected · enable in Settings → Stats services", "未选择任何服务 · 到「设置 → 统计服务」开启")
+                    message: tr("No services selected · enable in Settings → Services & Accounts", "未选择任何服务 · 到「设置 → 服务与账号」开启")
                 )
             } else if visibleUsageApps.count > 3 {
                 LazyVGrid(

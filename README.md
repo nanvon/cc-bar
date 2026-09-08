@@ -5,7 +5,7 @@
 <h1 align="center">cc-bar</h1>
 
 <p align="center">
-  <b>macOS 原生菜单栏 AI 额度监控与本地用量看板</b><br>
+  <b>macOS 原生 AI 订阅额度监控与本地会话统计工具</b><br>
   实时追踪 Codex、Claude Code、Antigravity、Cursor 与 Command Code 配额状态，精准分析本地会话 Token 与费用。
 </p>
 

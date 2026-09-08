@@ -1,59 +1,63 @@
 import SwiftUI
 
+// MARK: - SettingsCategory
+
+enum SettingsCategory: String, CaseIterable, Identifiable {
+    case services
+    case appearance
+    case data
+    case general
+
+    var id: String { rawValue }
+
+    var englishTitle: String {
+        switch self {
+        case .services: return "Services & Accounts"
+        case .appearance: return "Appearance & Display"
+        case .data: return "Data & Refresh"
+        case .general: return "General"
+        }
+    }
+
+    var chineseTitle: String {
+        switch self {
+        case .services: return "服务与账号"
+        case .appearance: return "外观与显示"
+        case .data: return "数据与刷新"
+        case .general: return "通用"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .services: return "server.rack"
+        case .appearance: return "macwindow"
+        case .data: return "arrow.triangle.2.circlepath"
+        case .general: return "gearshape"
+        }
+    }
+}
+
 // MARK: - SettingsRootView
-//
-// 见 docs/界面布局.md §4。
-// 使用 prototype 的 PrefsGroup + PrefsRow 卡片结构,放弃 Form .grouped。
 
 struct SettingsRootView: View {
     @Environment(AppState.self) private var appState
+    @State private var selectedCategory: SettingsCategory = .services
     @State private var launchAtLoginMessage: String?
     @State private var launchAtLoginMessageIsError = false
     @State private var isRecalculatingUsage = false
     @State private var pricingCatalogMessage: String?
     @State private var pricingCatalogMessageIsError = false
-
-    /// 重算进度文案。`filesTotal == 0` 表示该数据源无总量概念（SQLite 按行回报）。
-    private func scanProgressText(_ progress: ScanProgress) -> String {
-        let appName: String
-        switch progress.app {
-        case .codex: appName = "Codex"
-        case .claude: appName = "Claude Code"
-        case .cursor: appName = "Cursor"
-        case .pi: appName = "Pi"
-        case .opencode: appName = "OpenCode"
-        }
-        if progress.filesTotal > 0 {
-            return tr(
-                "Scanning \(appName): \(progress.filesCompleted)/\(progress.filesTotal) files",
-                "正在扫描 \(appName)：\(progress.filesCompleted)/\(progress.filesTotal) 个文件"
-            )
-        }
-        return tr(
-            "Scanning \(appName): \(progress.linesParsed) items",
-            "正在扫描 \(appName)：已处理 \(progress.linesParsed) 条"
-        )
-    }
-
     @State private var showCodexResetCreditsSheet = false
     @State private var showCommandCodeSheet = false
 
     var body: some View {
         @Bindable var settings = SettingsStore.shared
 
-        ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                accountsGroup(settings: settings)
-                statsServicesGroup(settings: settings)
-                menuBarGroup(settings: settings)
-                floatingGroup(settings: settings)
-                refreshGroup(settings: settings)
-                generalGroup(settings: settings)
-                footer
-            }
-            .padding(.horizontal, 28)
-            .padding(.vertical, 20)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
+        HStack(spacing: 0) {
+            sidebar
+            Divider()
+            contentArea(settings: settings)
         }
         .sheet(isPresented: $showCommandCodeSheet) {
             CommandCodeCredentialSheet()
@@ -75,213 +79,183 @@ struct SettingsRootView: View {
         }
     }
 
-    // MARK: Accounts
+    // MARK: - Sidebar
 
-    private func accountsGroup(settings: SettingsStore) -> some View {
+    private var sidebar: some View {
         VStack(alignment: .leading, spacing: 16) {
-            // 主账号（自动检测）
-            PrefsGroup(
-                title: "Accounts",
-                chinese: "账号",
-                desc: "Auto-detected on your Mac. Toggle which services to display.",
-                chineseDesc: "自动检测,自行勾选要显示的"
-            ) {
-                AccountRow(
-                    title: "Codex",
-                    subtitle: "OpenAI",
-                    tint: .codexAccent,
-                    logoName: "codex",
-                    fallback: "C",
-                    email: appState.codexAccount?.email,
-                    plan: appState.codexAccount?.planType,
-                    availability: appState.codexAccount == nil ? .notDetected : .connected,
-                    isOn: Binding(
-                        get: { settings.showCodex },
-                        set: { settings.showCodex = $0 }
-                    ),
-                    accessory: appState.codexAccount != nil ? AnyView(codexResetCreditsButton) : nil
-                )
-                AccountRow(
-                    title: "Claude Code",
-                    subtitle: "Anthropic",
-                    tint: .claudeAccent,
-                    logoName: "claude",
-                    fallback: "K",
-                    email: appState.claudeAccount?.email,
-                    plan: appState.claudeAccount?.subscriptionType,
-                    availability: appState.claudeAccount == nil ? .notDetected : .connected,
-                    isOn: Binding(
-                        get: { settings.showClaude },
-                        set: { settings.showClaude = $0 }
-                    )
-                )
-                AccountRow(
-                    title: "Antigravity",
-                    subtitle: "Google",
-                    tint: .antigravityAccent,
-                    logoName: "antigravity",
-                    fallback: "A",
-                    email: appState.antigravityAccount?.email,
-                    plan: appState.antigravityAccount?.planType ?? appState.antigravityQuota?.planType,
-                    availability: appState.antigravityAccount == nil ? .notDetected : .connected,
-                    isOn: Binding(
-                        get: { settings.showAntigravity },
-                        set: { newValue in
-                            settings.showAntigravity = newValue
-                            if newValue {
-                                Task { await appState.refreshQuotas(reason: .userInitiated) }
-                            }
-                        }
-                    )
-                )
-                AccountRow(
-                    title: "Cursor",
-                    subtitle: "Cursor",
-                    tint: .gray,
-                    logoName: "cursor",
-                    fallback: "C",
-                    email: appState.cursorAccount?.email,
-                    plan: appState.cursorQuota?.planType,
-                    availability: appState.cursorAccount == nil ? .notDetected : .connected,
-                    isOn: Binding(
-                        get: { settings.isProviderEnabled(.cursor) },
-                        set: { setCursorProviderEnabled($0, settings: settings) }
-                    )
-                )
-                AccountRow(
-                    title: "Command Code",
-                    subtitle: "Command Code",
-                    tint: QuotaApp.commandCode.tintColor,
-                    logoName: "commandcode",
-                    fallback: "⌘",
-                    email: appState.commandCodeAccount?.login,
-                    plan: appState.commandCodeQuota?.planType ?? appState.commandCodeAccount?.planType,
-                    availability: appState.commandCodeAccount == nil ? .notDetected : .connected,
-                    isOn: Binding(
-                        get: { settings.isProviderEnabled(.commandCode) },
-                        set: { setCommandCodeProviderEnabled($0, settings: settings) }
-                    ),
-                    accessory: AnyView(commandCodeCredentialButton)
-                )
-            }
-
-            // 其他 Codex 账号（手动导入）
-            PrefsGroup(
-                title: "Other Codex Accounts",
-                chinese: "其他 Codex 账号",
-                desc: "Paste auth.json to monitor additional Codex accounts (view only).",
-                chineseDesc: "粘贴 auth.json 添加更多 Codex 账号额度，仅查看，不会切换 CLI 登录状态"
-            ) {
-                ImportedCodexAccountsView()
-            }
-        }
-    }
-
-    private func setCursorProviderEnabled(_ enabled: Bool, settings: SettingsStore) {
-        settings.setProviderEnabled(enabled, for: .cursor)
-        guard enabled else { return }
-        Task {
-            await appState.refreshQuotas(reason: .userInitiated)
-        }
-    }
-
-    private func setCommandCodeProviderEnabled(_ enabled: Bool, settings: SettingsStore) {
-        settings.setProviderEnabled(enabled, for: .commandCode)
-        guard enabled else { return }
-        Task {
-            await appState.refreshQuotas(reason: .userInitiated)
-        }
-    }
-
-    private var commandCodeCredentialButton: some View {
-        Button {
-            showCommandCodeSheet = true
-        } label: {
-            Image(systemName: "key")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-        }
-        .buttonStyle(.plain)
-        .focusEffectDisabled()
-        .help(tr("Command Code credentials", "Command Code 凭据设置"))
-    }
-
-    /// 主账号「使用限额重置」入口(🎁),点击打开弹窗。
-    private var codexResetCreditsButton: some View {
-        Button {
-            showCodexResetCreditsSheet = true
-        } label: {
-            Image(systemName: "gift")
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-        }
-        .buttonStyle(.plain)
-        .focusEffectDisabled()
-        .help(tr("Reset credits", "使用限额重置"))
-    }
-
-    // MARK: Stats services
-
-    private func statsServicesGroup(settings: SettingsStore) -> some View {
-        PrefsGroup(
-            title: "Stats services",
-            chinese: "统计服务",
-            desc: "Choose which services count in usage statistics.",
-            chineseDesc: "勾选要计入用量统计的服务,关闭后从统计中隐藏"
-        ) {
-            // Cursor 没有本地日志，但它的 Dashboard 日桶在统计页有独立入口；默认仍关闭。
-            // Stats 与额度卡片可独立显示，用户开启任一入口后才进入远端刷新链路。
-            // 账号未登录时不额外提示或置灰，与 Pi / OpenCode 保持同一套渲染规则；
-            // 统计页由 SettingsStore.isUsageServiceEffectivelyVisible 兜底不渲染空服务行。
-            ForEach(UsageApp.allCases, id: \.self) { app in
-                PrefsRow(
-                    label: app.displayName,
-                    chinese: app.displayName,
-                    leading: AnyView(ServiceMark(color: app.tintColor, size: 8))
-                ) {
-                    Toggle("", isOn: Binding(
-                        get: { settings.isUsageServiceVisible(app) },
-                        set: { visible in
-                            settings.setUsageServiceVisible(visible, for: app)
-                            guard app == .cursor else { return }
-                            if visible {
-                                Task {
-                                    await appState.refreshQuotas(reason: .userInitiated)
-                                }
-                            }
-                        }
-                    ))
-                        .labelsHidden()
-                        .toggleStyle(.switch)
-                        .tint(.green)
+            sidebarGroup(title: "Preferences", chinese: "偏好设置") {
+                ForEach(SettingsCategory.allCases) { category in
+                    sidebarItem(category: category)
                 }
             }
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 14)
+        .frame(width: 200)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background(.regularMaterial)
+    }
+
+    @ViewBuilder
+    private func sidebarGroup<Content: View>(
+        title: String,
+        chinese: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(tr(title, chinese).uppercased())
+                .font(.system(size: 10, weight: .semibold))
+                .kerning(0.4)
+                .foregroundStyle(.tertiary)
+                .padding(.horizontal, 6)
+                .padding(.bottom, 4)
+            content()
         }
     }
 
-    // MARK: Menu Bar
+    private func sidebarItem(category: SettingsCategory) -> some View {
+        let active = selectedCategory == category
+        return Button {
+            selectedCategory = category
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: category.icon)
+                    .font(.system(size: 12))
+                    .frame(width: 14, height: 14)
+                    .foregroundStyle(active ? Color.white : Color.secondary)
 
-    private func menuBarGroup(settings: SettingsStore) -> some View {
+                Text(tr(category.englishTitle, category.chineseTitle))
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(active ? Color.white : Color.primary)
+
+                Spacer()
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(active ? Color.accentColor : Color.clear)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusEffectDisabled()
+        .pointingHandCursor()
+        .accessibilityAddTraits(active ? [.isSelected] : [])
+    }
+
+    // MARK: - Content Area
+
+    private func contentArea(settings: SettingsStore) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                switch selectedCategory {
+                case .services:
+                    servicesSection(settings: settings)
+                case .appearance:
+                    appearanceSection(settings: settings)
+                case .data:
+                    dataSection(settings: settings)
+                case .general:
+                    generalSection(settings: settings)
+                }
+            }
+            .padding(.horizontal, 36)
+            .padding(.vertical, 24)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+        .id(selectedCategory)
+    }
+
+    // MARK: - Section 1: Services & Accounts
+
+    @ViewBuilder
+    private func servicesSection(settings: SettingsStore) -> some View {
+        // 已接入服务聚合卡片
+        PrefsGroup(
+            title: "Connected Services",
+            chinese: "已接入服务",
+            desc: "Configure quota monitoring, menu bar, floating HUD, and usage stats per service.",
+            chineseDesc: "按服务配置配额监控、菜单栏、悬浮窗与本地统计"
+        ) {
+            let providers = QuotaProviderDescriptor.allProviders
+            ForEach(providers, id: \.id) { provider in
+                let info = accountInfo(for: provider.app)
+                let usageApp = provider.app.usageApp
+                ServiceSettingsCard(
+                    provider: provider,
+                    email: info.email,
+                    plan: info.plan,
+                    availability: info.availability,
+                    accessory: accessoryView(for: provider.app),
+                    isEnabled: isProviderEnabledBinding(for: provider.app, settings: settings),
+                    showInMenuBar: menuBarBinding(for: provider.app, settings: settings),
+                    showInFloatingHUD: floatingBinding(for: provider.app, settings: settings),
+                    floatingHUDGloballyEnabled: settings.floatingEnabled,
+                    usageApp: usageApp,
+                    isUsageVisible: usageApp.map { usageStatsBinding(for: $0, settings: settings) }
+                )
+
+                InsetDivider()
+            }
+
+            // 本地用量服务：Pi
+            let piInfo = usageServiceInfo(for: .pi)
+            ServiceSettingsCard(
+                logoName: "pi",
+                fallback: "P",
+                tint: UsageApp.pi.tintColor,
+                title: "Pi",
+                vendor: "pi.dev",
+                detailText: piInfo.detailText,
+                availability: piInfo.availability,
+                isEnabled: usageStatsBinding(for: .pi, settings: settings),
+                supportsMenuBar: false,
+                supportsFloatingHUD: false,
+                isUsageVisible: usageStatsBinding(for: .pi, settings: settings)
+            )
+
+            InsetDivider()
+
+            // 本地用量服务：OpenCode
+            let opencodeInfo = usageServiceInfo(for: .opencode)
+            ServiceSettingsCard(
+                logoName: "opencode",
+                fallback: "O",
+                tint: UsageApp.opencode.tintColor,
+                title: "OpenCode",
+                vendor: "opencode.ai",
+                detailText: opencodeInfo.detailText,
+                availability: opencodeInfo.availability,
+                isEnabled: usageStatsBinding(for: .opencode, settings: settings),
+                supportsMenuBar: false,
+                supportsFloatingHUD: false,
+                isUsageVisible: usageStatsBinding(for: .opencode, settings: settings)
+            )
+        }
+
+        // 其他 Codex 账号（手动导入）
+        PrefsGroup(
+            title: "Other Codex Accounts",
+            chinese: "其他 Codex 账号",
+            desc: "Paste auth.json to monitor additional Codex accounts (view only).",
+            chineseDesc: "粘贴 auth.json 添加更多 Codex 账号额度，仅查看，不会切换 CLI 登录状态"
+        ) {
+            ImportedCodexAccountsView()
+        }
+    }
+
+    // MARK: - Section 2: Appearance & Display
+
+    @ViewBuilder
+    private func appearanceSection(settings: SettingsStore) -> some View {
         PrefsGroup(
             title: "Menu Bar",
             chinese: "菜单栏",
-            desc: "What appears next to the icon.",
-            chineseDesc: "图标旁显示什么"
+            desc: "Global menu bar preferences.",
+            chineseDesc: "菜单栏全局偏好"
         ) {
-            ForEach(QuotaProviderDescriptor.menuBarProviders) { provider in
-                PrefsRow(
-                    label: "Show \(provider.title)",
-                    chinese: "显示 \(provider.title)"
-                ) {
-                    Toggle("", isOn: Binding(
-                        get: { settings.isProviderShownInMenuBar(provider.app) },
-                        set: { settings.setProviderShownInMenuBar($0, for: provider.app) }
-                    ))
-                        .labelsHidden()
-                        .toggleStyle(.switch)
-                        .tint(.green)
-                }
-            }
             PrefsRow(
                 label: "Quota period",
                 chinese: "额度周期",
@@ -298,18 +272,19 @@ struct SettingsRootView: View {
                 .fixedSize()
             }
         }
-    }
 
-    // MARK: Floating HUD
-
-    private func floatingGroup(settings: SettingsStore) -> some View {
         PrefsGroup(
             title: "Floating HUD",
             chinese: "桌面悬浮窗",
             desc: "A small always-on-top window pinned to your desktop.",
             chineseDesc: "桌面常驻的小悬浮窗"
         ) {
-            PrefsRow(label: "Show floating window", chinese: "显示悬浮窗") {
+            PrefsRow(
+                label: "Show floating window",
+                chinese: "显示悬浮窗",
+                desc: "Toggle global HUD visibility. Service rows can be configured in Services & Accounts.",
+                chineseDesc: "控制桌面悬浮窗总开关。各服务具体行可在「服务与账号」中独立勾选"
+            ) {
                 Toggle("", isOn: Binding(
                     get: { settings.floatingEnabled },
                     set: { newValue in
@@ -321,35 +296,65 @@ struct SettingsRootView: View {
                 .toggleStyle(.switch)
                 .tint(.green)
             }
-            ForEach(QuotaProviderDescriptor.floatingProviders) { provider in
-                PrefsRow(
-                    label: "Show \(provider.title) row",
-                    chinese: "显示 \(provider.title) 行"
-                ) {
-                    Toggle("", isOn: Binding(
-                        get: { settings.isProviderShownInFloatingHUD(provider.app) },
-                        set: { newValue in
-                            settings.setProviderShownInFloatingHUD(newValue, for: provider.app)
-                            FloatingPanelController.shared.sync()
-                        }
-                    ))
+        }
+
+        PrefsGroup(
+            title: "Display Details",
+            chinese: "显示细节"
+        ) {
+            PrefsRow(
+                label: "Reset time",
+                chinese: "重置时间",
+                desc: "How quota reset time is shown in the popover.",
+                chineseDesc: "弹出窗口中额度重置时间的显示方式"
+            ) {
+                Picker("", selection: Binding(
+                    get: { settings.resetTimeDisplay },
+                    set: { settings.resetTimeDisplay = $0 }
+                )) {
+                    Text(tr("Remaining", "剩余时长")).tag(ResetTimeDisplay.relative)
+                    Text(tr("Exact time", "具体时间")).tag(ResetTimeDisplay.absolute)
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .fixedSize()
+            }
+            InsetDivider()
+            PrefsRow(
+                label: "Service status dot",
+                chinese: "服务状态圆点",
+                desc: "Show OpenAI / Anthropic status next to each service in the popover.",
+                chineseDesc: "在弹出窗口为每个服务显示官方状态页圆点"
+            ) {
+                Toggle("", isOn: Binding(get: { settings.showServiceStatus }, set: { settings.showServiceStatus = $0 }))
                     .labelsHidden()
                     .toggleStyle(.switch)
                     .tint(.green)
-                    .disabled(!settings.floatingEnabled)
-                }
+            }
+            InsetDivider()
+            PrefsRow(
+                label: "Privacy mode",
+                chinese: "隐私模式",
+                desc: "Hide provider emails in the popover and names for other Codex accounts.",
+                chineseDesc: "弹出窗口中隐藏 Provider 邮箱，并隐藏 Codex 副账号名称"
+            ) {
+                Toggle("", isOn: Binding(get: { settings.privacyMode }, set: { settings.privacyMode = $0 }))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .tint(.green)
             }
         }
     }
 
-    // MARK: Refresh
+    // MARK: - Section 3: Data & Refresh
 
-    private func refreshGroup(settings: SettingsStore) -> some View {
+    @ViewBuilder
+    private func dataSection(settings: SettingsStore) -> some View {
         PrefsGroup(
-            title: "Refresh",
-            chinese: "刷新",
-            desc: "How often the app polls usage in the background.",
-            chineseDesc: "后台轮询用量的频率"
+            title: "Polling Intervals",
+            chinese: "后台刷新",
+            desc: "How often the app polls usage and logs in the background.",
+            chineseDesc: "后台轮询额度与日志的频率"
         ) {
             PrefsRow(label: "Quota refresh", chinese: "额度刷新") {
                 Picker("", selection: Binding(
@@ -367,6 +372,7 @@ struct SettingsRootView: View {
                 .pickerStyle(.menu)
                 .fixedSize()
             }
+            InsetDivider()
             PrefsRow(label: "Log scan", chinese: "日志扫描") {
                 Picker("", selection: Binding(
                     get: { settings.usageInterval },
@@ -383,23 +389,7 @@ struct SettingsRootView: View {
                 .pickerStyle(.menu)
                 .fixedSize()
             }
-            PrefsRow(
-                label: "Reset time",
-                chinese: "重置时间",
-                desc: "How quota reset time is shown.",
-                chineseDesc: "额度重置时间的显示方式"
-            ) {
-                Picker("", selection: Binding(
-                    get: { settings.resetTimeDisplay },
-                    set: { settings.resetTimeDisplay = $0 }
-                )) {
-                    Text(tr("Remaining", "剩余时长")).tag(ResetTimeDisplay.relative)
-                    Text(tr("Exact time", "具体时间")).tag(ResetTimeDisplay.absolute)
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
-                .fixedSize()
-            }
+            InsetDivider()
             PrefsRow(label: "Last refresh", chinese: "上次刷新") {
                 HStack(spacing: 6) {
                     if appState.isRefreshing {
@@ -411,17 +401,14 @@ struct SettingsRootView: View {
                         .monospacedDigit()
                 }
             }
-            PrefsRow(
-                label: "Service status dot",
-                chinese: "服务状态圆点",
-                desc: "Show OpenAI / Anthropic status next to each service in the popover.",
-                chineseDesc: "在弹出窗口为每个服务显示官方状态页圆点"
-            ) {
-                Toggle("", isOn: Binding(get: { settings.showServiceStatus }, set: { settings.showServiceStatus = $0 }))
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-                    .tint(.green)
-            }
+        }
+
+        PrefsGroup(
+            title: "Data Maintenance",
+            chinese: "数据维护",
+            desc: "Model pricing catalogs and historical usage calculation.",
+            chineseDesc: "模型价格目录与历史用量计算"
+        ) {
             PrefsRow(
                 label: "Price catalog",
                 chinese: "价格目录",
@@ -458,6 +445,7 @@ struct SettingsRootView: View {
                     .disabled(appState.usageService.isRefreshingPricingCatalog)
                 }
             }
+            InsetDivider()
             PrefsRow(
                 label: "Recalculate usage",
                 chinese: "重新计算用量",
@@ -465,8 +453,6 @@ struct SettingsRootView: View {
                 chineseDesc: "重新扫描全部本地日志，补齐缺价并按当前定价表重算所有费用"
             ) {
                 HStack(spacing: 8) {
-                    // 启动时丢弃过重建窗口之外的孤儿周期桶：那段用量补不回来，
-                    // 只能由用户手动重算。不自动全量重扫，但也不能静默少算。
                     if appState.usageService.cycleUsageNeedsManualRecalculation, !isRecalculatingUsage {
                         HStack(spacing: 4) {
                             Image(systemName: "exclamationmark.triangle")
@@ -508,10 +494,11 @@ struct SettingsRootView: View {
         }
     }
 
-    // MARK: General
+    // MARK: - Section 4: General
 
-    private func generalGroup(settings: SettingsStore) -> some View {
-        PrefsGroup(title: "General", chinese: "通用") {
+    @ViewBuilder
+    private func generalSection(settings: SettingsStore) -> some View {
+        PrefsGroup(title: "System", chinese: "系统") {
             PrefsRow(label: "Language", chinese: "语言") {
                 Picker("", selection: Binding(
                     get: { settings.appLanguage },
@@ -525,17 +512,7 @@ struct SettingsRootView: View {
                 .pickerStyle(.menu)
                 .fixedSize()
             }
-            PrefsRow(
-                label: "Privacy mode",
-                chinese: "隐私模式",
-                desc: "Hide provider emails in the popover and names for other Codex accounts.",
-                chineseDesc: "弹出窗口中隐藏 Provider 邮箱,并隐藏 Codex 副账号名称"
-            ) {
-                Toggle("", isOn: Binding(get: { settings.privacyMode }, set: { settings.privacyMode = $0 }))
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-                    .tint(.green)
-            }
+            InsetDivider()
             PrefsRow(label: "Launch at login", chinese: "开机自动启动") {
                 Toggle("", isOn: Binding(
                     get: { settings.launchAtLogin },
@@ -560,6 +537,7 @@ struct SettingsRootView: View {
                 .tint(.green)
             }
             if let launchAtLoginMessage {
+                InsetDivider()
                 PrefsRow(
                     label: launchAtLoginMessageIsError ? "Error" : "Status",
                     chinese: launchAtLoginMessageIsError ? "错误" : "状态"
@@ -572,12 +550,16 @@ struct SettingsRootView: View {
                         .frame(maxWidth: 360, alignment: .trailing)
                 }
             }
+        }
+
+        PrefsGroup(title: "Updates & About", chinese: "更新与关于") {
             PrefsRow(label: "Version", chinese: "版本") {
                 Text(appVersion)
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
             }
+            InsetDivider()
             PrefsRow(
                 label: "Check for updates",
                 chinese: "检查更新",
@@ -611,6 +593,7 @@ struct SettingsRootView: View {
                     .disabled(isUpdateCheckInProgress)
                 }
             }
+            InsetDivider()
             PrefsRow(label: "Check at launch", chinese: "启动时自动检查") {
                 Toggle("", isOn: Binding(
                     get: { settings.autoCheckForUpdates },
@@ -621,6 +604,203 @@ struct SettingsRootView: View {
                 .tint(.green)
             }
         }
+
+        footer
+    }
+
+    // MARK: - Bindings & Actions Helpers
+
+    private func isProviderEnabledBinding(for app: QuotaApp, settings: SettingsStore) -> Binding<Bool> {
+        Binding(
+            get: { settings.isProviderEnabled(app) },
+            set: { newValue in
+                switch app {
+                case .codex:
+                    settings.showCodex = newValue
+                case .claude:
+                    settings.showClaude = newValue
+                case .antigravity:
+                    settings.showAntigravity = newValue
+                    if newValue {
+                        Task { await appState.refreshQuotas(reason: .userInitiated) }
+                    }
+                case .cursor:
+                    setCursorProviderEnabled(newValue, settings: settings)
+                case .commandCode:
+                    setCommandCodeProviderEnabled(newValue, settings: settings)
+                }
+            }
+        )
+    }
+
+    private func menuBarBinding(for app: QuotaApp, settings: SettingsStore) -> Binding<Bool> {
+        Binding(
+            get: { settings.isProviderShownInMenuBar(app) },
+            set: { settings.setProviderShownInMenuBar($0, for: app) }
+        )
+    }
+
+    private func floatingBinding(for app: QuotaApp, settings: SettingsStore) -> Binding<Bool> {
+        Binding(
+            get: { settings.isProviderShownInFloatingHUD(app) },
+            set: { newValue in
+                settings.setProviderShownInFloatingHUD(newValue, for: app)
+                FloatingPanelController.shared.sync()
+            }
+        )
+    }
+
+    private func usageStatsBinding(for usageApp: UsageApp, settings: SettingsStore) -> Binding<Bool> {
+        Binding(
+            get: { settings.isUsageServiceVisible(usageApp) },
+            set: { visible in
+                settings.setUsageServiceVisible(visible, for: usageApp)
+                if usageApp == .cursor, visible {
+                    Task { await appState.refreshQuotas(reason: .userInitiated) }
+                }
+            }
+        )
+    }
+
+    private func setCursorProviderEnabled(_ enabled: Bool, settings: SettingsStore) {
+        settings.setProviderEnabled(enabled, for: .cursor)
+        guard enabled else { return }
+        Task {
+            await appState.refreshQuotas(reason: .userInitiated)
+        }
+    }
+
+    private func setCommandCodeProviderEnabled(_ enabled: Bool, settings: SettingsStore) {
+        settings.setProviderEnabled(enabled, for: .commandCode)
+        guard enabled else { return }
+        Task {
+            await appState.refreshQuotas(reason: .userInitiated)
+        }
+    }
+
+    private func accountInfo(for app: QuotaApp) -> (email: String?, plan: String?, availability: AccountAvailability) {
+        switch app {
+        case .codex:
+            return (
+                email: appState.codexAccount?.email,
+                plan: appState.codexAccount?.planType?.capitalized,
+                availability: appState.codexAccount == nil ? .notDetected : .connected
+            )
+        case .claude:
+            return (
+                email: appState.claudeAccount?.email,
+                plan: appState.claudeAccount?.subscriptionType?.capitalized,
+                availability: appState.claudeAccount == nil ? .notDetected : .connected
+            )
+        case .antigravity:
+            return (
+                email: appState.antigravityAccount?.email,
+                plan: (appState.antigravityAccount?.planType ?? appState.antigravityQuota?.planType)?.capitalized,
+                availability: appState.antigravityAccount == nil ? .notDetected : .connected
+            )
+        case .cursor:
+            return (
+                email: appState.cursorAccount?.email,
+                plan: appState.cursorQuota?.planType,
+                availability: appState.cursorAccount == nil ? .notDetected : .connected
+            )
+        case .commandCode:
+            return (
+                email: appState.commandCodeAccount?.email ?? appState.commandCodeAccount?.login,
+                plan: appState.commandCodeQuota?.planType ?? appState.commandCodeAccount?.planType,
+                availability: appState.commandCodeAccount == nil ? .notDetected : .connected
+            )
+        }
+    }
+
+    private func usageServiceInfo(for app: UsageApp) -> (detailText: String, availability: AccountAvailability) {
+        let fileManager = FileManager.default
+        let home = fileManager.homeDirectoryForCurrentUser
+        switch app {
+        case .pi:
+            let sessionsDir = home.appendingPathComponent(".pi/agent/sessions", isDirectory: true)
+            let configDir = home.appendingPathComponent(".pi", isDirectory: true)
+            let detected = fileManager.fileExists(atPath: sessionsDir.path) || fileManager.fileExists(atPath: configDir.path)
+            return (
+                detailText: detected
+                    ? tr("Local logs detected (~/.pi)", "已检测到本地日志 (~/.pi)")
+                    : tr("No logs detected (~/.pi)", "未检测到本地日志 (~/.pi)"),
+                availability: detected ? .connected : .notDetected
+            )
+        case .opencode:
+            let dbURL = home.appendingPathComponent(".local/share/opencode/opencode.db", isDirectory: false)
+            let configDir = home.appendingPathComponent(".config/opencode", isDirectory: true)
+            let shareDir = home.appendingPathComponent(".local/share/opencode", isDirectory: true)
+            let detected = fileManager.fileExists(atPath: dbURL.path)
+                || fileManager.fileExists(atPath: configDir.path)
+                || fileManager.fileExists(atPath: shareDir.path)
+            return (
+                detailText: detected
+                    ? tr("Local database detected (~/.local/share/opencode)", "已检测到本地数据库 (~/.local/share/opencode)")
+                    : tr("No database detected (~/.local/share/opencode)", "未检测到本地数据库 (~/.local/share/opencode)"),
+                availability: detected ? .connected : .notDetected
+            )
+        default:
+            return (detailText: "", availability: .connected)
+        }
+    }
+
+    private func accessoryView(for app: QuotaApp) -> AnyView? {
+        switch app {
+        case .codex:
+            return appState.codexAccount != nil ? AnyView(codexResetCreditsButton) : nil
+        case .commandCode:
+            return AnyView(commandCodeCredentialButton)
+        default:
+            return nil
+        }
+    }
+
+    private var commandCodeCredentialButton: some View {
+        Button {
+            showCommandCodeSheet = true
+        } label: {
+            Image(systemName: "key")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+        .focusEffectDisabled()
+        .help(tr("Command Code credentials", "Command Code 凭据设置"))
+    }
+
+    private var codexResetCreditsButton: some View {
+        Button {
+            showCodexResetCreditsSheet = true
+        } label: {
+            Image(systemName: "gift")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+        .focusEffectDisabled()
+        .help(tr("Reset credits", "使用限额重置"))
+    }
+
+    private func scanProgressText(_ progress: ScanProgress) -> String {
+        let appName: String
+        switch progress.app {
+        case .codex: appName = "Codex"
+        case .claude: appName = "Claude Code"
+        case .cursor: appName = "Cursor"
+        case .pi: appName = "Pi"
+        case .opencode: appName = "OpenCode"
+        }
+        if progress.filesTotal > 0 {
+            return tr(
+                "Scanning \(appName): \(progress.filesCompleted)/\(progress.filesTotal) files",
+                "正在扫描 \(appName)：\(progress.filesCompleted)/\(progress.filesTotal) 个文件"
+            )
+        }
+        return tr(
+            "Scanning \(appName): \(progress.linesParsed) items",
+            "正在扫描 \(appName)：已处理 \(progress.linesParsed) 条"
+        )
     }
 
     // MARK: Update check helpers
@@ -679,8 +859,8 @@ struct SettingsRootView: View {
 
     private var footer: some View {
         HStack(spacing: 8) {
-            Text(tr("CCBar \(shortVersion) · multi-service quota & local usage stats",
-                    "CCBar \(shortVersion) · 多服务额度与本地用量统计"))
+            Text(tr("CCBar \(shortVersion) · AI subscription quota & local usage stats",
+                    "CCBar \(shortVersion) · AI 订阅服务额度查询与本地用量统计"))
                 .font(.system(size: 11))
                 .foregroundStyle(.tertiary)
             Spacer()
@@ -758,101 +938,226 @@ private struct PrefsRow<Trailing: View>: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             if let leading { leading }
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(tr(label, chinese))
-                    .font(.system(size: 12.5))
+                    .font(.system(size: 13))
                 if let desc, let chineseDesc {
                     Text(tr(desc, chineseDesc))
-                        .font(.system(size: 10.5))
+                        .font(.system(size: 11))
                         .foregroundStyle(.tertiary)
                 }
             }
             Spacer()
             trailing()
         }
-        .padding(.vertical, 10)
-        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .padding(.horizontal, 16)
     }
 }
 
-// MARK: - AccountRow
+// MARK: - InsetDivider
 
-private struct AccountRow: View {
-    let title: String
-    let subtitle: String
-    let tint: Color
-    let logoName: String
-    let fallback: String
-    let email: String?
-    let plan: String?
-    let availability: AccountAvailability
-    @Binding var isOn: Bool
-    /// 可选的额外控件(如 Codex 主账号的重置次数入口),放在状态徽标与开关之间。
-    var accessory: AnyView? = nil
+private struct InsetDivider: View {
+    var leading: CGFloat = 16
+    var trailing: CGFloat = 16
 
     var body: some View {
-        HStack(spacing: 11) {
-            ServiceTile(logoName: logoName, fallback: fallback, tint: tint, size: 28, logoSize: 16, cornerRadius: 7)
-
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 4) {
-                    Text(title)
-                        .font(.system(size: 12.5, weight: .semibold))
-                    Text("· \(subtitle)")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.tertiary)
-                }
-                Text(detailText)
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer()
-
-            HStack(spacing: 8) {
-                statusBadge
-
-                if let accessory { accessory }
-
-                Toggle("", isOn: $isOn)
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-                    .tint(.green)
-            }
-        }
-        .padding(.vertical, 12)
-        .padding(.horizontal, 14)
+        Rectangle()
+            .fill(Color.primary.opacity(0.06))
+            .frame(height: 0.5)
+            .padding(.leading, leading)
+            .padding(.trailing, trailing)
     }
+}
 
-    private var detailText: String {
+// MARK: - ServiceSettingsCard
+
+private struct ServiceSettingsCard: View {
+    let logoName: String
+    let fallback: String
+    let tint: Color
+    let title: String
+    let vendor: String
+    let detailText: String
+    let availability: AccountAvailability
+    let accessory: AnyView?
+    @Binding var isEnabled: Bool
+    @Binding var showInMenuBar: Bool
+    var supportsMenuBar: Bool = true
+    @Binding var showInFloatingHUD: Bool
+    var supportsFloatingHUD: Bool = true
+    var floatingHUDGloballyEnabled: Bool
+    var isUsageVisible: Binding<Bool>?
+
+    init(
+        provider: QuotaProviderDescriptor,
+        email: String?,
+        plan: String?,
+        availability: AccountAvailability,
+        accessory: AnyView?,
+        isEnabled: Binding<Bool>,
+        showInMenuBar: Binding<Bool>,
+        showInFloatingHUD: Binding<Bool>,
+        floatingHUDGloballyEnabled: Bool,
+        usageApp: UsageApp?,
+        isUsageVisible: Binding<Bool>?
+    ) {
+        self.logoName = provider.logoName
+        self.fallback = provider.fallback
+        self.tint = provider.app.tintColor
+        self.title = provider.title
+        self.vendor = provider.vendor
+        self.availability = availability
+        self.accessory = accessory
+        self._isEnabled = isEnabled
+        self._showInMenuBar = showInMenuBar
+        self.supportsMenuBar = provider.supportsMenuBar
+        self._showInFloatingHUD = showInFloatingHUD
+        self.supportsFloatingHUD = provider.supportsFloatingHUD
+        self.floatingHUDGloballyEnabled = floatingHUDGloballyEnabled
+        self.isUsageVisible = isUsageVisible
+
         if let email {
             if let plan, !plan.isEmpty {
-                return "\(email) · \(plan)"
+                self.detailText = "\(email) · \(plan)"
+            } else {
+                self.detailText = email
             }
-            return email
+        } else {
+            switch availability {
+            case .connected: self.detailText = plan ?? tr("Connected", "已连接")
+            case .notDetected: self.detailText = tr("Not detected", "未检测到")
+            }
         }
-        switch availability {
-        case .connected: return plan ?? tr("Connected", "已连接")
-        case .notDetected: return tr("Not detected", "未检测到")
+    }
+
+    init(
+        logoName: String,
+        fallback: String,
+        tint: Color,
+        title: String,
+        vendor: String,
+        detailText: String,
+        availability: AccountAvailability,
+        accessory: AnyView? = nil,
+        isEnabled: Binding<Bool>,
+        showInMenuBar: Binding<Bool> = .constant(false),
+        supportsMenuBar: Bool = false,
+        showInFloatingHUD: Binding<Bool> = .constant(false),
+        supportsFloatingHUD: Bool = false,
+        floatingHUDGloballyEnabled: Bool = false,
+        isUsageVisible: Binding<Bool>? = nil
+    ) {
+        self.logoName = logoName
+        self.fallback = fallback
+        self.tint = tint
+        self.title = title
+        self.vendor = vendor
+        self.detailText = detailText
+        self.availability = availability
+        self.accessory = accessory
+        self._isEnabled = isEnabled
+        self._showInMenuBar = showInMenuBar
+        self.supportsMenuBar = supportsMenuBar
+        self._showInFloatingHUD = showInFloatingHUD
+        self.supportsFloatingHUD = supportsFloatingHUD
+        self.floatingHUDGloballyEnabled = floatingHUDGloballyEnabled
+        self.isUsageVisible = isUsageVisible
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header: Logo + 账号与服务信息 + 状态 + 弹窗操作 + 总开关
+            HStack(spacing: 12) {
+                ServiceTile(
+                    logoName: logoName,
+                    fallback: fallback,
+                    tint: tint,
+                    size: 30,
+                    logoSize: 17,
+                    cornerRadius: 7
+                )
+
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 5) {
+                        Text(title)
+                            .font(.system(size: 13, weight: .semibold))
+                        Text("· \(vendor)")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.tertiary)
+                    }
+                    Text(detailText)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                HStack(spacing: 10) {
+                    statusBadge
+
+                    if let accessory { accessory }
+
+                    Toggle("", isOn: $isEnabled)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .tint(.green)
+                }
+            }
+            .padding(.top, 14)
+            .padding(.bottom, isEnabled ? 8 : 14)
+            .padding(.horizontal, 16)
+
+            // 子选项：仅当总开关开启时显示展示位置 Checkbox 行（无硬分割线，自然呼吸间距）
+            if isEnabled {
+                HStack(spacing: 12) {
+                    Text(tr("Display destinations", "展示位置"))
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+
+                    Spacer()
+
+                    HStack(spacing: 16) {
+                        DisplayDestinationCheckbox(
+                            title: tr("Menu Bar", "菜单栏"),
+                            isOn: $showInMenuBar,
+                            disabled: !supportsMenuBar,
+                            disabledHelp: supportsMenuBar ? nil : tr("Local usage only, no subscription quota", "仅支持本地用量，无订阅配额")
+                        )
+
+                        DisplayDestinationCheckbox(
+                            title: tr("Floating HUD", "悬浮窗"),
+                            isOn: $showInFloatingHUD,
+                            disabled: !supportsFloatingHUD || !floatingHUDGloballyEnabled,
+                            disabledHelp: !supportsFloatingHUD
+                                ? tr("Local usage only, no subscription quota", "仅支持本地用量，无订阅配额")
+                                : (floatingHUDGloballyEnabled ? nil : tr("Enable Floating HUD in Appearance & Display first", "需先在「外观与显示」中开启桌面悬浮窗"))
+                        )
+
+                        if let isUsageVisible {
+                            DisplayDestinationCheckbox(
+                                title: tr("Usage Stats", "用量统计"),
+                                isOn: isUsageVisible
+                            )
+                        }
+                    }
+                }
+                .padding(.top, 0)
+                .padding(.bottom, 12)
+                .padding(.horizontal, 16)
+            }
         }
     }
 
     @ViewBuilder
     private var statusBadge: some View {
-        if availability == .connected {
-            HStack(spacing: 4) {
-                Circle().fill(Color.green).frame(width: 6, height: 6)
-                Text(tr("Connected", "已连接"))
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.green)
-            }
-        } else {
-            HStack(spacing: 4) {
-                Circle().fill(availability == .notDetected ? Color.orange : Color.secondary).frame(width: 6, height: 6)
-                Text(statusText)
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(availability == .notDetected ? Color.orange : Color.secondary)
-            }
+        HStack(spacing: 4) {
+            Circle()
+                .fill(availability == .connected ? Color.green : (availability == .notDetected ? Color.orange : Color.secondary))
+                .frame(width: 6, height: 6)
+            Text(statusText)
+                .font(.system(size: 10.5))
+                .foregroundStyle(availability == .connected ? Color.green : (availability == .notDetected ? Color.orange : Color.secondary))
         }
     }
 
@@ -860,6 +1165,101 @@ private struct AccountRow: View {
         switch availability {
         case .connected: tr("Connected", "已连接")
         case .notDetected: tr("Not detected", "未检测到")
+        }
+    }
+}
+
+// MARK: - DisplayDestinationCheckbox
+
+private struct DisplayDestinationCheckbox: View {
+    let title: String
+    @Binding var isOn: Bool
+    var disabled: Bool = false
+    var disabledHelp: String? = nil
+
+    @State private var showTooltip = false
+    @State private var hoverTask: Task<Void, Never>? = nil
+
+    var body: some View {
+        let button = Button {
+            if disabled {
+                if disabledHelp != nil {
+                    showTooltip = true
+                }
+            } else {
+                isOn.toggle()
+            }
+        } label: {
+            HStack(spacing: 5.5) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 3.5, style: .continuous)
+                        .fill(
+                            isOn
+                                ? (disabled ? Color.primary.opacity(0.03) : Color.primary.opacity(0.045))
+                                : Color.clear
+                        )
+                        .frame(width: 13, height: 13)
+
+                    RoundedRectangle(cornerRadius: 3.5, style: .continuous)
+                        .strokeBorder(
+                            isOn
+                                ? (disabled ? Color.primary.opacity(0.08) : Color.primary.opacity(0.16))
+                                : Color.primary.opacity(disabled ? 0.06 : 0.12),
+                            lineWidth: 0.8
+                        )
+                        .frame(width: 13, height: 13)
+
+                    if isOn {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 8, weight: .medium))
+                            .foregroundStyle(disabled ? Color.secondary.opacity(0.3) : Color.secondary)
+                    }
+                }
+
+                Text(title)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(
+                        disabled
+                            ? Color.secondary.opacity(0.35)
+                            : (isOn ? Color.secondary : Color.secondary.opacity(0.65))
+                    )
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            guard disabled, let disabledHelp, !disabledHelp.isEmpty else { return }
+            hoverTask?.cancel()
+            if hovering {
+                hoverTask = Task {
+                    try? await Task.sleep(nanoseconds: 250_000_000)
+                    guard !Task.isCancelled else { return }
+                    showTooltip = true
+                }
+            } else {
+                showTooltip = false
+            }
+        }
+        .onDisappear {
+            hoverTask?.cancel()
+            hoverTask = nil
+        }
+        .popover(isPresented: $showTooltip, arrowEdge: .top) {
+            if let disabledHelp, !disabledHelp.isEmpty {
+                Text(disabledHelp)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .fixedSize()
+            }
+        }
+        .help(disabled ? (disabledHelp ?? "") : "")
+
+        if disabled {
+            button
+        } else {
+            button.pointingHandCursor()
         }
     }
 }

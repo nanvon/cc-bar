@@ -7,12 +7,13 @@ nonisolated enum QuotaApp: String, Sendable, Codable, CaseIterable, Hashable {
     case cursor
     case commandCode
 
-    /// 对应的本地用量数据源；`nil` = 该服务没有可解析的本地日志。
+    /// 对应的用量数据源；`nil` = 该服务无用量统计数据（如仅提供额度监控）。
     var usageApp: UsageApp? {
         switch self {
         case .codex: return .codex
         case .claude: return .claude
-        case .antigravity, .cursor, .commandCode: return nil
+        case .cursor: return .cursor
+        case .antigravity, .commandCode: return nil
         }
     }
 }

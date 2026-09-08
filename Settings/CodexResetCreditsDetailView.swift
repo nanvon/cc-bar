@@ -21,6 +21,21 @@ struct CodexResetCreditsSheet: View {
     let fetchCredits: () async -> Result<CodexResetCreditsClient.Fetched, QuotaError>
 
     @State private var state: CodexResetCreditsState = .loading
+    @State private var listContentHeight: CGFloat = 0
+
+    /// 列表区最大高度：约可容纳 5 条卡片完全展开不滚动，超过时内部滚动。
+    private let maxListHeight: CGFloat = 330
+
+    private var resolvedListHeight: CGFloat {
+        if listContentHeight > 0 {
+            return min(listContentHeight, maxListHeight)
+        }
+        if case .success(let fetched) = state, !fetched.credits.isEmpty {
+            let count = CGFloat(fetched.credits.count)
+            return min(max(count * 64 - 8, 56), maxListHeight)
+        }
+        return 0
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -40,7 +55,14 @@ struct CodexResetCreditsSheet: View {
             // 底部操作栏
             footerView
         }
-        .frame(width: 420, height: 300)
+        .frame(width: 440)
+        .fixedSize(horizontal: true, vertical: true)
+        .animation(.easeInOut(duration: 0.2), value: listContentHeight)
+        .onPreferenceChange(ResetCreditsListHeightKey.self) { measured in
+            if measured > 0 {
+                listContentHeight = measured
+            }
+        }
         .task {
             await loadData()
         }
@@ -82,7 +104,8 @@ struct CodexResetCreditsSheet: View {
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(maxWidth: .infinity)
+            .frame(height: 140)
 
         case .failure(let message):
             VStack(spacing: 10) {
@@ -100,7 +123,8 @@ struct CodexResetCreditsSheet: View {
                 .buttonStyle(.bordered)
                 .controlSize(.small)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(maxWidth: .infinity)
+            .frame(height: 140)
 
         case .success(let fetched):
             VStack(alignment: .leading, spacing: 12) {
@@ -131,7 +155,8 @@ struct CodexResetCreditsSheet: View {
                             .font(.system(size: 12))
                             .foregroundStyle(.secondary)
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 120)
                 } else {
                     ScrollView {
                         VStack(spacing: 8) {
@@ -140,10 +165,19 @@ struct CodexResetCreditsSheet: View {
                             }
                         }
                         .padding(.vertical, 2)
+                        .background(
+                            GeometryReader { geo in
+                                Color.clear.preference(
+                                    key: ResetCreditsListHeightKey.self,
+                                    value: geo.size.height
+                                )
+                            }
+                        )
                     }
+                    .frame(height: resolvedListHeight > 0 ? resolvedListHeight : nil)
                 }
             }
-            .frame(maxHeight: .infinity, alignment: .top)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
     }
 
@@ -230,3 +264,13 @@ struct CodexResetCreditsSheet: View {
         return f
     }()
 }
+
+// MARK: - PreferenceKey
+
+private struct ResetCreditsListHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
