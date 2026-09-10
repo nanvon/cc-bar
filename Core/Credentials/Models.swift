@@ -3,6 +3,9 @@ import Foundation
 enum CredentialSource: String, Sendable {
     case file
     case keychain
+    /// Claude Desktop 的 Electron token 缓存。只借用其中的 access_token，
+    /// 永不读取 / 使用其 refresh_token，详见 `ClaudeDesktopAuth`。
+    case desktop
 }
 
 struct CodexAccount: Sendable, Equatable {
@@ -26,6 +29,10 @@ struct CodexAccount: Sendable, Equatable {
 struct ClaudeAccount: Sendable, Equatable {
     var source: CredentialSource
     var email: String?
+    /// 来自 `~/.claude.json` 的 `oauthAccount`，用于和 Claude Desktop 的凭据缓存
+    /// 做账号比对——两边同属一个账号才允许借用 Desktop 的 access_token。
+    var accountUuid: String?
+    var organizationUuid: String?
     var subscriptionType: String?
     var expiresAt: Date?
     var expiredGuess: Bool

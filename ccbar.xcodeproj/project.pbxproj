@@ -21,6 +21,7 @@
 		49C1BC13000000000001AABB /* CursorUsageCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BC13000000000001AAAA /* CursorUsageCache.swift */; };
 		49C1B103000000000001AABB /* CodexAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B103000000000001AAAA /* CodexAuth.swift */; };
 		49C1B104000000000001AABB /* ClaudeAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B104000000000001AAAA /* ClaudeAuth.swift */; };
+		49C1B198000000000001AABB /* ClaudeDesktopAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B198000000000001AAAA /* ClaudeDesktopAuth.swift */; };
 		49C1B105000000000001AABB /* Settings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B105000000000001AAAA /* Settings.swift */; };
 		49C1B106000000000001AABB /* QuotaCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B106000000000001AAAA /* QuotaCache.swift */; };
 		49C1B107000000000001AABB /* ScanCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B107000000000001AAAA /* ScanCache.swift */; };
@@ -133,6 +134,7 @@
 		49C1BC13000000000001AAAA /* CursorUsageCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CursorUsageCache.swift; sourceTree = "<group>"; };
 		49C1B103000000000001AAAA /* CodexAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexAuth.swift; sourceTree = "<group>"; };
 		49C1B104000000000001AAAA /* ClaudeAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeAuth.swift; sourceTree = "<group>"; };
+		49C1B198000000000001AAAA /* ClaudeDesktopAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeDesktopAuth.swift; sourceTree = "<group>"; };
 		49C1B105000000000001AAAA /* Settings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Settings.swift; sourceTree = "<group>"; };
 		49C1B106000000000001AAAA /* QuotaCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaCache.swift; sourceTree = "<group>"; };
 		49C1B107000000000001AAAA /* ScanCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanCache.swift; sourceTree = "<group>"; };
@@ -325,6 +327,7 @@
 				49C1CC02000000000001AAAA /* CommandCodeAuth.swift */,
 				49C1B103000000000001AAAA /* CodexAuth.swift */,
 				49C1B104000000000001AAAA /* ClaudeAuth.swift */,
+				49C1B198000000000001AAAA /* ClaudeDesktopAuth.swift */,
 				49C1B191000000000001AAAA /* ImportedCodexAccount.swift */,
 				49C1B192000000000001AAAA /* ImportedCodexStore.swift */,
 			);
@@ -608,6 +611,7 @@
 				49C1BC13000000000001AABB /* CursorUsageCache.swift in Sources */,
 				49C1B103000000000001AABB /* CodexAuth.swift in Sources */,
 				49C1B104000000000001AABB /* ClaudeAuth.swift in Sources */,
+				49C1B198000000000001AABB /* ClaudeDesktopAuth.swift in Sources */,
 				49C1B105000000000001AABB /* Settings.swift in Sources */,
 				49C1B106000000000001AABB /* QuotaCache.swift in Sources */,
 				49C1B120000000000001AABB /* QuotaModels.swift in Sources */,

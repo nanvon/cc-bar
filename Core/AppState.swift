@@ -473,7 +473,10 @@ final class AppState {
         }
         if let record = quotaCache.claude, claudeAccount != nil {
             recordQuotaCycles(
-                accountKey: QuotaHistoryAccountKey.claudePrimary(email: claudeAccount?.email),
+                accountKey: QuotaHistoryAccountKey.claudePrimary(
+                    email: claudeAccount?.email,
+                    accountUuid: claudeAccount?.accountUuid
+                ),
                 app: .claude,
                 snapshot: record.snapshot,
                 source: .cache,
@@ -974,7 +977,10 @@ final class AppState {
 
     private func recordClaudeQuotaHistory(snapshot: QuotaSnapshot, sampledAt: Date) {
         recordQuotaHistory(
-            accountKey: QuotaHistoryAccountKey.claudePrimary(email: claudeAccount?.email),
+            accountKey: QuotaHistoryAccountKey.claudePrimary(
+                    email: claudeAccount?.email,
+                    accountUuid: claudeAccount?.accountUuid
+                ),
             app: .claude,
             kind: .claudePrimary,
             snapshot: snapshot,
@@ -1141,28 +1147,55 @@ final class AppState {
         settings.didShowKeychainPrompt = true
     }
 
+    /// 读取 Claude 账号。Claude Code CLI 与 Claude Desktop 是两个平等的凭据源：
+    /// 有 CLI 凭据就用它（邮箱等身份信息更全），完全没有时改从 Claude Desktop 认
+    /// 账号——只用 Desktop、从没跑过 `claude` 的用户不该被判成"未配置 Claude"。
     private func loadClaude() async {
         do {
             let next = try await Task.detached(priority: .utility) {
                 try ClaudeAuth.load()
             }.value
-            if claudeIdentityChanged(previous: claudeAccount, next: next) {
-                resetClaudeQuotaState()
-            }
-            self.claudeAccount = next
-            migrateLegacyClaudeAccountData(
-                to: QuotaHistoryAccountKey.claudePrimary(email: next.email)
-            )
-            self.claudeError = nil
+            adoptClaudeAccount(next)
         } catch {
-            self.claudeAccount = nil
-            self.claudeError = "\(error)"
+            // CLI 侧没有可用凭据，再问 Claude Desktop。
+            let desktop = await Task.detached(priority: .utility) {
+                ClaudeDesktopAuth.discoverAccount()
+            }.value
+            guard let desktop else {
+                self.claudeAccount = nil
+                self.claudeError = "\(error)"
+                return
+            }
+            adoptClaudeAccount(desktop)
         }
     }
 
+    private func adoptClaudeAccount(_ next: ClaudeAccount) {
+        if claudeIdentityChanged(previous: claudeAccount, next: next) {
+            resetClaudeQuotaState()
+        }
+        self.claudeAccount = next
+        migrateLegacyClaudeAccountData(
+            to: QuotaHistoryAccountKey.claudePrimary(email: next.email, accountUuid: next.accountUuid)
+        )
+        self.claudeError = nil
+    }
+
+    /// 账号是否真的换人了。`accountUuid` 优先于邮箱：同一个账号在 CLI 源能读到邮箱、
+    /// 在 Desktop 源读不到，若按邮箱比较会把"CLI 凭据被清理后改走 Desktop"误判成
+    /// 换号，进而清空既有额度快照与缓存。两边信息都不足时保守认为没变——错判成
+    /// "没变"只是多留一份旧快照，错判成"变了"会抹掉用户的数据。
     private func claudeIdentityChanged(previous: ClaudeAccount?, next: ClaudeAccount) -> Bool {
         guard let previous else { return false }
-        return previous.email != next.email
+        if let previousUuid = previous.accountUuid?.lowercased(),
+           let nextUuid = next.accountUuid?.lowercased()
+        {
+            return previousUuid != nextUuid
+        }
+        if let previousEmail = previous.email, let nextEmail = next.email {
+            return previousEmail != nextEmail
+        }
+        return false
     }
 
     private func migrateLegacyClaudeAccountData(to accountKey: String) {
@@ -1778,7 +1811,10 @@ final class AppState {
         saveQuotaCache()
         recordClaudeQuotaHistory(snapshot: mergedSnapshot, sampledAt: updatedAt)
         recordQuotaCycles(
-            accountKey: QuotaHistoryAccountKey.claudePrimary(email: claudeAccount?.email),
+            accountKey: QuotaHistoryAccountKey.claudePrimary(
+                    email: claudeAccount?.email,
+                    accountUuid: claudeAccount?.accountUuid
+                ),
             app: .claude,
             snapshot: mergedSnapshot,
             source: source,

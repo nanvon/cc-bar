@@ -98,12 +98,24 @@ enum QuotaHistoryAccountKey {
         "codex:imported:\(id)"
     }
 
-    nonisolated static func claudePrimary(email: String?) -> String {
-        guard let email = nonEmpty(email)?.lowercased() else {
-            return "claude:primary"
+    /// Claude 主账号的历史 / 周期数据 key。
+    ///
+    /// 邮箱优先，且**有邮箱时的取值与历史版本完全一致**——绝不能因为新增回退路径
+    /// 就改变老用户的 key，那会让既有时间线与周期记录整条断裂。
+    ///
+    /// `accountUuid` 回退是给纯 Claude Desktop 用户的：他们从没跑过 `claude`，
+    /// 没有 `~/.claude.json`，因而拿不到邮箱，但 Desktop 的凭据缓存里带着
+    /// accountUuid。用独立前缀区分，避免和邮箱派生的 key 撞上。
+    nonisolated static func claudePrimary(email: String?, accountUuid: String? = nil) -> String {
+        if let email = nonEmpty(email)?.lowercased() {
+            let digest = SHA256.hash(data: Data(email.utf8))
+            return "claude:primary:\(digest.map { String(format: "%02x", $0) }.joined())"
         }
-        let digest = SHA256.hash(data: Data(email.utf8))
-        return "claude:primary:\(digest.map { String(format: "%02x", $0) }.joined())"
+        if let uuid = nonEmpty(accountUuid)?.lowercased() {
+            let digest = SHA256.hash(data: Data(uuid.utf8))
+            return "claude:primary:uuid:\(digest.map { String(format: "%02x", $0) }.joined())"
+        }
+        return "claude:primary"
     }
 
     nonisolated static func antigravityPrimary(email: String?) -> String {

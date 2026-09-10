@@ -18,6 +18,11 @@ import os
 /// 就直接采用;否则向上报 `credentialsExpired`,由 AppState 保留上一次快照并在
 /// 用户手动刷新时走 `claude` CLI 兜底取数(CLI 用自己的会话身份,刷新是安全的)。
 ///
+/// 重读落空后还有一层:借 Claude Desktop 缓存里同一账号的 access_token
+/// (`ClaudeDesktopAuth`)。CLI 的 token 只有 8 小时有效期,用户改用 Claude Desktop
+/// 聊天时不会刷新它,隔夜必然过期;而 Desktop 那份有效期以月计。同样只借不刷,
+/// 不碰任何 refresh_token,所以上面那条"不刷新"的结论依然成立。
+///
 /// 同类工具的做法可参考:OpenChamber 与 cc-switch 完全只读;CodexBar 刷新但只写
 /// 自己的缓存条目,从不回写 `Claude Code-credentials`。
 nonisolated enum ClaudeTokenRefresher {
@@ -55,15 +60,34 @@ nonisolated enum ClaudeTokenRefresher {
         if !isExpired(expiresAt: account.expiresAt) {
             return .success(current)
         }
-        guard let fresh = await Coordinator.shared.adoptFresh(source: account.source) else {
-            log.info("stored Claude credentials are expired; waiting for Claude Code to refresh")
-            return .failure(.credentialsExpired)
+        if let fresh = await Coordinator.shared.adoptFresh(source: account.source) {
+            account.accessToken = fresh.accessToken
+            account.refreshToken = fresh.refreshToken ?? account.refreshToken
+            account.expiresAt = fresh.expiresAt
+            account.expiredGuess = false
+            return .success(fresh.accessToken)
         }
-        account.accessToken = fresh.accessToken
-        account.refreshToken = fresh.refreshToken ?? account.refreshToken
-        account.expiresAt = fresh.expiresAt
-        account.expiredGuess = false
-        return .success(fresh.accessToken)
+        // Claude Code 那份也过期了(用户多半改用 Claude Desktop 聊天,它不会刷新
+        // CLI 的 8 小时 token)。借 Desktop 缓存里同一账号的 access_token 顶上——
+        // 只借不刷,不碰它的 refresh_token,详见 `ClaudeDesktopAuth`。
+        if let borrowed = borrowDesktopToken(for: account) {
+            account.accessToken = borrowed.accessToken
+            account.expiresAt = borrowed.expiresAt
+            account.expiredGuess = false
+            account.source = .desktop
+            return .success(borrowed.accessToken)
+        }
+        log.info("stored Claude credentials are expired; waiting for Claude Code to refresh")
+        return .failure(.credentialsExpired)
+    }
+
+    /// 借用 Claude Desktop 的 access_token。Desktop 没装 / 没登录 / 不是同一账号 /
+    /// 用户拒绝过钥匙串授权时都返回 nil,调用方据此退回 `credentialsExpired`。
+    nonisolated private static func borrowDesktopToken(
+        for account: ClaudeAccount
+    ) -> ClaudeDesktopAuth.BorrowedToken? {
+        guard ClaudeDesktopAuth.hasCredentialMaterial else { return nil }
+        return ClaudeDesktopAuth.borrowToken(for: account)
     }
 
     nonisolated static func isExpired(expiresAt: Date?, skew: TimeInterval = refreshSkew) -> Bool {
@@ -117,6 +141,9 @@ nonisolated enum ClaudeTokenRefresher {
         switch source {
         case .file: return peekFile()
         case .keychain: return peekKeychain()
+        // Desktop 的凭据不由 Claude Code 写,"重读一次、期待它刚刷新过"这套对它没有
+        // 意义;真要换 Desktop 的新 token 走的是 `borrowDesktopToken`。
+        case .desktop: return nil
         }
     }
 
@@ -162,6 +189,8 @@ nonisolated enum ClaudeTokenRefresher {
         switch source {
         case .file: return fileMtimeWithinPoliteWindow()
         case .keychain: return keychainMdatWithinPoliteWindow()
+        // 同上:Desktop 源没有"礼让 Claude Code 写完"这一说。
+        case .desktop: return false
         }
     }
 

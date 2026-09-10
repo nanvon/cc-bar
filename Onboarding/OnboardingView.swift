@@ -237,6 +237,7 @@ private struct DetectAccountsStep: View {
         switch appState.claudeAccount?.source {
         case .file: return "~/.claude/.credentials.json"
         case .keychain: return "Keychain · claude-code"
+        case .desktop: return "Claude Desktop"
         case .none: return "—"
         }
     }

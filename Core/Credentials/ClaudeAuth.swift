@@ -3,24 +3,42 @@ import Foundation
 enum ClaudeAuth {
     nonisolated static func load() throws -> ClaudeAccount {
         var account = try loadFromFile() ?? loadFromKeychain()
-        if account.email == nil, let email = loadEmailFromConfig() {
-            account.email = email
+        let profile = loadProfileFromConfig()
+        if account.email == nil {
+            account.email = profile.email
         }
+        account.accountUuid = profile.accountUuid
+        account.organizationUuid = profile.organizationUuid
         return account
     }
 
+    /// `~/.claude.json` 顶层 `oauthAccount` 里的账号信息。
+    nonisolated struct ConfigProfile: Sendable {
+        var email: String?
+        var accountUuid: String?
+        var organizationUuid: String?
+    }
+
     /// Claude 的 OAuth 凭据本身不含邮箱，CLI 登录时会把账号信息额外写到
-    /// `~/.claude.json` 顶层的 `oauthAccount` 字段。这里只读 emailAddress 作为兜底。
-    nonisolated private static func loadEmailFromConfig() -> String? {
+    /// `~/.claude.json` 顶层的 `oauthAccount` 字段。这里读 emailAddress 作为邮箱兜底，
+    /// 并取出 accountUuid / organizationUuid——`ClaudeDesktopAuth` 用它们判定
+    /// Claude Desktop 缓存里的凭据是否属于同一个账号。
+    nonisolated private static func loadProfileFromConfig() -> ConfigProfile {
         let url = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".claude.json")
         guard let data = try? Data(contentsOf: url),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let oauth = root["oauthAccount"] as? [String: Any],
-              let email = oauth["emailAddress"] as? String,
-              !email.isEmpty
-        else { return nil }
-        return email
+              let oauth = root["oauthAccount"] as? [String: Any]
+        else { return ConfigProfile() }
+        func nonEmpty(_ key: String) -> String? {
+            guard let value = oauth[key] as? String, !value.isEmpty else { return nil }
+            return value
+        }
+        return ConfigProfile(
+            email: nonEmpty("emailAddress"),
+            accountUuid: nonEmpty("accountUuid"),
+            organizationUuid: nonEmpty("organizationUuid")
+        )
     }
 
     nonisolated private static func loadFromFile() throws -> ClaudeAccount? {
