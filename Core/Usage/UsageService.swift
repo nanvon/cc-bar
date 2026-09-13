@@ -384,7 +384,10 @@ final class UsageService {
     /// 手动刷新（`refreshNow`）与强制重算（`forceRescan`）直接走 `scanNow` / 全量路径，
     /// 不受门控影响，用户点了就一定扫。
     func scanPeriodically() async {
-        guard UsageLogWatcher.shared.shouldScan() else { return }
+        guard UsageLogWatcher.shared.shouldScan() else {
+            AppLog.debug(.usage, "usage scan skipped; no log changes since last scan")
+            return
+        }
         await scanNow()
     }
 
@@ -664,7 +667,7 @@ final class UsageService {
             : "cycle usage rebuild incomplete: \(failedProviderNames) logs unreadable; previous data preserved"
         if let affectedCycleIDs, affectedCycleIDs.isEmpty, !failedApps.isEmpty {
             lastError = rebuildWarning
-            print("[CycleUsage 周期用量] rebuild deferred providers=\(failedProviderNames)")
+            AppLog.warn(.usage, "cycle usage rebuild deferred providers=\(failedProviderNames)")
             return
         }
         let started = Date()
@@ -718,10 +721,10 @@ final class UsageService {
             let elapsed = String(format: "%.2fs", Date().timeIntervalSince(started))
             let tag = initialRebuildApps.isEmpty ? "range rebuild" : "initial rebuild"
             let status = failedApps.isEmpty ? "completed" : "partially completed"
-            print("[CycleUsage 周期用量] \(tag) \(status) elapsed=\(elapsed)")
+            AppLog.info(.usage, "cycle usage \(tag) \(status) elapsed=\(elapsed)")
         } catch {
             lastError = "cycle usage rebuild failed: \(error)"
-            print("[CycleUsage 周期用量] cycle usage rebuild failed: \(error)")
+            AppLog.error(.usage, "cycle usage rebuild failed: \(Redact.error(error))")
         }
     }
 
@@ -1103,7 +1106,7 @@ final class UsageService {
             requiresFullRebuild = true
             cachedScanState = nil
             lastError = persistenceError
-            print("[UsageScan 用量扫描] 持久化失败 persistence failed: \(persistenceError)")
+            AppLog.error(.usage, "usage scan persistence failed: \(Redact.message(persistenceError))")
             return false
         }
 
@@ -1123,7 +1126,13 @@ final class UsageService {
         publishTotals()
 
         let elapsed = String(format: "%.2fs", Date().timeIntervalSince(started))
-        print("[UsageScan 用量扫描] claude files=\(claude.filesScanned) lines=\(claude.linesParsed) new=\(claude.entries.count); codex files=\(codex.filesScanned) lines=\(codex.linesParsed) new=\(codex.entries.count); pi files=\(pi.filesScanned) lines=\(pi.linesParsed) new=\(pi.entries.count); opencode messages=\(opencode.messagesRead) new=\(opencode.entries.count); unreadable=\(failedFileCount); elapsed=\(elapsed)")
+        AppLog.info(.usage, """
+            usage scan claude files=\(claude.filesScanned) lines=\(claude.linesParsed) new=\(claude.entries.count); \
+            codex files=\(codex.filesScanned) lines=\(codex.linesParsed) new=\(codex.entries.count); \
+            pi files=\(pi.filesScanned) lines=\(pi.linesParsed) new=\(pi.entries.count); \
+            opencode messages=\(opencode.messagesRead) new=\(opencode.entries.count); \
+            unreadable=\(failedFileCount); elapsed=\(elapsed)
+            """)
         return true
     }
 

@@ -50,6 +50,10 @@ struct SettingsRootView: View {
     @State private var pricingCatalogMessageIsError = false
     @State private var showCodexResetCreditsSheet = false
     @State private var showCommandCodeSheet = false
+    @State private var isExportingDiagnostics = false
+    @State private var diagnosticsMessage: String?
+    @State private var diagnosticsMessageIsError = false
+    @State private var showDiagnosticsConfirm = false
 
     var body: some View {
         @Bindable var settings = SettingsStore.shared
@@ -61,6 +65,16 @@ struct SettingsRootView: View {
         }
         .sheet(isPresented: $showCommandCodeSheet) {
             CommandCodeCredentialSheet()
+        }
+        .confirmationDialog(
+            tr("Export diagnostics?", "导出诊断日志？"),
+            isPresented: $showDiagnosticsConfirm,
+            titleVisibility: .visible
+        ) {
+            Button(tr("Export", "导出")) { exportDiagnostics() }
+            Button(tr("Cancel", "取消"), role: .cancel) {}
+        } message: {
+            Text(diagnosticsDisclosure)
         }
         .sheet(isPresented: $showCodexResetCreditsSheet) {
             CodexResetCreditsSheet(
@@ -552,6 +566,67 @@ struct SettingsRootView: View {
             }
         }
 
+        PrefsGroup(title: "Diagnostics", chinese: "诊断") {
+            PrefsRow(
+                label: "Export diagnostics",
+                chinese: "导出诊断日志",
+                desc: "Package redacted logs and app state into a zip you can send to the developer.",
+                chineseDesc: "把脱敏后的日志与运行状态打包成 zip，可直接发给开发者"
+            ) {
+                HStack(spacing: 8) {
+                    if let diagnosticsMessage {
+                        Text(diagnosticsMessage)
+                            .font(.system(size: 11))
+                            .foregroundStyle(diagnosticsMessageIsError ? Color.red : Color.secondary)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.trailing)
+                            .frame(maxWidth: 300, alignment: .trailing)
+                    }
+                    Button {
+                        showDiagnosticsConfirm = true
+                    } label: {
+                        if isExportingDiagnostics {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Text(tr("Export", "导出"))
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(isExportingDiagnostics)
+                }
+            }
+            InsetDivider()
+            PrefsRow(
+                label: "Reveal log folder",
+                chinese: "打开日志目录",
+                desc: "Logs live in ~/Library/Logs/CCBar and are kept to about 8 MB.",
+                chineseDesc: "日志存放在 ~/Library/Logs/CCBar，总量约 8 MB 上限"
+            ) {
+                Button(tr("Open", "打开")) {
+                    DiagnosticsBundle.revealLogDirectory()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+            InsetDivider()
+            PrefsRow(
+                label: "Verbose logging",
+                chinese: "详细日志",
+                desc: "Record extra detail for troubleshooting. Turn it off when you are done.",
+                chineseDesc: "记录更详细的排查信息，排查完建议关闭"
+            ) {
+                Toggle("", isOn: Binding(
+                    get: { settings.verboseLogging },
+                    set: { settings.verboseLogging = $0 }
+                ))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .tint(.green)
+            }
+        }
+
         PrefsGroup(title: "Updates & About", chinese: "更新与关于") {
             PrefsRow(label: "Version", chinese: "版本") {
                 Text(appVersion)
@@ -801,6 +876,48 @@ struct SettingsRootView: View {
             "Scanning \(appName): \(progress.linesParsed) items",
             "正在扫描 \(appName)：已处理 \(progress.linesParsed) 条"
         )
+    }
+
+    // MARK: Diagnostics helpers
+
+    /// 导出前必须把"包含什么 / 不包含什么"说清楚。用户对"把日志发给开发者"的顾虑
+    /// 只能靠明确告知消解，不能靠一句"已脱敏"带过。
+    private var diagnosticsDisclosure: String {
+        tr(
+            """
+            The zip contains the app version, macOS version, your settings, each service's \
+            status and last error, and local log scan statistics.
+
+            It does not contain sign-in tokens, plain-text email addresses, conversation \
+            content, file contents, or project names. Nothing is uploaded — the file is \
+            saved locally and it is up to you whether to send it.
+            """,
+            """
+            压缩包内含：App 版本、macOS 版本、你的设置项、各服务的状态与最后一次错误、\
+            本地日志扫描统计。
+
+            不含：登录令牌、明文邮箱、对话内容、文件内容、项目名。App 不会上传任何内容，\
+            文件只保存在本机，发不发由你决定。
+            """
+        )
+    }
+
+    private func exportDiagnostics() {
+        isExportingDiagnostics = true
+        diagnosticsMessage = nil
+        diagnosticsMessageIsError = false
+        Task {
+            do {
+                let url = try await DiagnosticsBundle.export(appState: appState)
+                DiagnosticsBundle.revealInFinder(url)
+                diagnosticsMessage = tr("Revealed in Finder", "已在 Finder 中显示")
+            } catch {
+                diagnosticsMessage = tr("Export failed", "导出失败")
+                diagnosticsMessageIsError = true
+                AppLog.error(.app, "diagnostics export failed: \(Redact.error(error))")
+            }
+            isExportingDiagnostics = false
+        }
     }
 
     // MARK: Update check helpers

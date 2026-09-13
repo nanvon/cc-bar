@@ -25,6 +25,7 @@
 | [草案-CommandCode支持-设计方案.md](草案-CommandCode支持-设计方案.md) | 已落地：`CommandCodeAuth` 五级凭据扫描 + Keychain 手动 Key、`CommandCodeQuotaClient`、设置账号行与凭据 Sheet、Popover / 菜单栏 / 悬浮窗。按设计不进入主窗口用量统计 |
 | [草案-Antigravity支持-设计方案.md](草案-Antigravity支持-设计方案.md) | 已落地：`AntigravityCredentials` 读 `~/.gemini/jetski-standalone-oauth-token`(兜底 `oauth_creds.json`) + 双 client 刷新、`AntigravityQuotaClient` 四段云端富化、Popover / 菜单栏 / 悬浮窗 / 设置 / Onboarding。无本地日志，不进入用量统计 |
 | [草案-OpenCodeGo支持-设计方案.md](草案-OpenCodeGo支持-设计方案.md) | **未实施**：`QuotaApp` 中没有 opencodeGo，也没有对应的凭据 / 额度客户端。注意区分——`OpencodeScanner`(`~/.local/share/opencode/opencode.db`)是已落地的**本地用量**扫描器，与本草案的 OpenCode Go **订阅额度**不是一回事 |
+| [草案-诊断日志-设计方案.md](草案-诊断日志-设计方案.md) | 已落地：`AppLog` 门面 + `Redact` 脱敏 + `DiagnosticsBundle` 导出，全部 `print` 与散落的 `os.Logger` 已收编，设置页「通用 → 诊断」提供导出 / 打开日志目录 / 详细日志。行为已并入 `技术实现.md` §15 与 `界面布局.md` §4.5.4；草案保留脱敏规则表与取舍依据的追溯细节 |
 | [草案-用量统计增强与对话明细-需求.md](草案-用量统计增强与对话明细-需求.md) | 单对话能力已并入常驻文档;仅保留未实施后续候选 |
 | [草案-用量统计增强与对话明细-技术方案.md](草案-用量统计增强与对话明细-技术方案.md) | 原宽范围方案已收窄;仅保留后续技术候选 |
 

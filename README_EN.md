@@ -121,9 +121,13 @@ cc-bar strictly adheres to **local-first and least-privilege** principles. All u
 ### System Permissions & Zero-Telemetry Guarantee
 * **Zero Protected-Folder Access**: For protected directories (Desktop, Documents, Downloads, Music, Pictures, Movies) and for any path outside the home directory, project grouping relies exclusively on **in-memory string splitting**. It never invokes filesystem APIs on those paths, avoiding macOS privacy permission prompts.
 * **No Telemetry**: Contains zero tracking SDKs, analytics libraries, or external reporting services.
+* **Diagnostic Logs Stay Local**: Runtime logs live in `~/Library/Logs/CCBar/` (rotated, capped at roughly 8 MB) and are redacted by default — no sign-in tokens, plain-text email addresses, conversation content, file contents, or project names; accounts appear only as one-way hashes. Nothing is ever uploaded.
 
 > [!TIP]
 > If you prefer not to run pre-compiled binaries, you are encouraged to audit the source code and [build from source](#-building-from-source).
+
+> [!NOTE]
+> **Reporting a problem**: open Settings → General → Diagnostics → Export diagnostics. After you confirm the disclosure, a zip is created and revealed in Finder — attach it to an [Issue](https://github.com/nanvon/cc-bar/issues). The `summary.txt` inside is plain text, so you can read it yourself before sending.
 
 ---
 

@@ -225,6 +225,15 @@ final class SettingsStore {
     /// 启动时自动检查 GitHub 是否有新版本(默认关;手动检查始终可用)
     var autoCheckForUpdates: Bool { didSet { defaults.set(autoCheckForUpdates, forKey: Keys.autoCheckForUpdates) } }
 
+    /// 详细日志(默认关)。打开后 `AppLog` 的 debug 级别才落盘,排查完建议关掉。
+    /// 与 `privacyMode` 无关——那是界面打码,日志脱敏始终无条件生效。
+    var verboseLogging: Bool {
+        didSet {
+            defaults.set(verboseLogging, forKey: Keys.verboseLogging)
+            AppLog.shared.setVerbose(verboseLogging)
+        }
+    }
+
     /// 是否已经向用户解释过"接下来会出现 Keychain 授权弹窗"
     var didShowKeychainPrompt: Bool {
         didSet { defaults.set(didShowKeychainPrompt, forKey: Keys.didShowKeychainPrompt) }
@@ -263,6 +272,7 @@ final class SettingsStore {
         launchAtLogin = Self.isLaunchAtLoginOn(SMAppService.mainApp.status)
         privacyMode = defaults.object(forKey: Keys.privacyMode) as? Bool ?? true
         autoCheckForUpdates = defaults.object(forKey: Keys.autoCheckForUpdates) as? Bool ?? false
+        verboseLogging = defaults.object(forKey: Keys.verboseLogging) as? Bool ?? false
         didShowKeychainPrompt = defaults.object(forKey: Keys.didShowKeychainPrompt) as? Bool ?? false
         didCompleteOnboarding = defaults.object(forKey: Keys.didCompleteOnboarding) as? Bool ?? false
         let ccpRaw = defaults.string(forKey: Keys.commandCodeCredentialPreference) ?? CommandCodeCredentialPreference.automatic.rawValue
@@ -510,6 +520,8 @@ final class SettingsStore {
         static let appLanguage = "ccbar.settings.appLanguage"
         static let privacyMode = "ccbar.settings.privacyMode"
         static let autoCheckForUpdates = "ccbar.settings.autoCheckForUpdates"
+        /// 与 `AppLog` 共用同一个 key:门面在 init 时直接读 UserDefaults,不能等 SettingsStore 建好。
+        static let verboseLogging = AppLog.verboseLoggingDefaultsKey
         static let didShowKeychainPrompt = "ccbar.settings.didShowKeychainPrompt"
         static let didCompleteOnboarding = "ccbar.settings.didCompleteOnboarding"
         static let floatingFrameX = "ccbar.settings.floatingFrame.x"

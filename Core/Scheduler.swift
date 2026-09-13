@@ -37,6 +37,9 @@ final class Scheduler {
     private var isDisplayIdle = false {
         didSet {
             guard isDisplayIdle != oldValue else { return }
+            AppLog.debug(.app, isDisplayIdle
+                ? "display idle; polling slowed by \(Int(Self.powerSavingFactor))x"
+                : "display active; polling restored and refreshing now")
             if isDisplayIdle {
                 // 降频立刻生效：把已排期但还很远的任务重排到新间隔上，
                 // 避免刚进入锁屏还按原频率再跑几轮。

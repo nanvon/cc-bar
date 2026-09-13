@@ -1,5 +1,4 @@
 import Foundation
-import os
 
 /// Claude 凭据读取器。
 ///
@@ -26,8 +25,6 @@ import os
 /// 同类工具的做法可参考:OpenChamber 与 cc-switch 完全只读;CodexBar 刷新但只写
 /// 自己的缓存条目,从不回写 `Claude Code-credentials`。
 nonisolated enum ClaudeTokenRefresher {
-    private static let log = Logger(subsystem: "com.cc-bar", category: "claude-credentials")
-
     /// access_token 临期判定 skew。判定"手上这份还能不能用"。
     nonisolated static let refreshSkew: TimeInterval = 30
     /// 采用存储里那份时的临期 skew。比 `refreshSkew` 宽松——只要够撑完这次取数即可,
@@ -77,7 +74,7 @@ nonisolated enum ClaudeTokenRefresher {
             account.source = .desktop
             return .success(borrowed.accessToken)
         }
-        log.info("stored Claude credentials are expired; waiting for Claude Code to refresh")
+        AppLog.info(.credentials, "stored Claude credentials are expired; waiting for Claude Code to refresh")
         return .failure(.credentialsExpired)
     }
 

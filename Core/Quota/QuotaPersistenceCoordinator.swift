@@ -63,7 +63,7 @@ actor QuotaPersistenceCoordinator {
                 try writer(next)
                 lastWrittenSequence = max(lastWrittenSequence, next.sequence)
             } catch {
-                print("[quota-persistence] 写盘失败: \(error)")
+                AppLog.error(.persistence, "quota write failed: \(Redact.error(error))")
             }
         }
     }

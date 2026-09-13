@@ -241,7 +241,10 @@ nonisolated final class PricingCatalogStore: @unchecked Sendable {
                         }
                     }
                     persist()
-                    print("[PricingCatalog 价格目录] 条目异常缩水，保留旧缓存 suspicious shrink, kept old cache: \(url.lastPathComponent) old=\(previousSource.standardRates.count) new=\(rates.standard.count)")
+                    AppLog.warn(.pricing, """
+                        suspicious shrink, kept old cache: \(url.lastPathComponent) \
+                        old=\(previousSource.standardRates.count) new=\(rates.standard.count)
+                        """)
                     return false
                 }
                 mutatePending { payload in
@@ -266,7 +269,7 @@ nonisolated final class PricingCatalogStore: @unchecked Sendable {
                     }
                 }
                 persist()
-                print("[PricingCatalog 价格目录] 解析失败，保留旧缓存 decode failed, kept old cache: \(url.lastPathComponent) \(error)")
+                AppLog.warn(.pricing, "decode failed, kept old cache: \(url.lastPathComponent) \(Redact.error(error))")
                 return false
             }
 
@@ -275,7 +278,7 @@ nonisolated final class PricingCatalogStore: @unchecked Sendable {
                 source.update(&payload) { $0.failedAt = now }
             }
             persist()
-            print("[PricingCatalog 价格目录] 拉取失败，保留旧缓存 fetch failed, kept old cache: \(url.lastPathComponent) \(err)")
+            AppLog.warn(.pricing, "fetch failed, kept old cache: \(url.lastPathComponent) \(Redact.error(err))")
             return false
         }
     }
@@ -298,7 +301,7 @@ nonisolated final class PricingCatalogStore: @unchecked Sendable {
         do {
             try PricingCatalogCache.save(snapshot)
         } catch {
-            print("[PricingCatalog 价格目录] 写盘失败 save failed: \(error)")
+            AppLog.error(.pricing, "price catalog save failed: \(Redact.error(error))")
         }
     }
 }

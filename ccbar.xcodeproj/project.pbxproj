@@ -50,6 +50,10 @@
 		49C1BF05000000000001AABB /* UsageEquivalenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BF05000000000001AAAA /* UsageEquivalenceTests.swift */; };
 		49C1B131000000000001AABB /* Scheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B131000000000001AAAA /* Scheduler.swift */; };
 		49C1B132000000000001AABB /* L10n.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B132000000000001AAAA /* L10n.swift */; };
+		49C1BD01000000000001AABB /* AppLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BD01000000000001AAAA /* AppLog.swift */; };
+		49C1BD02000000000001AABB /* Redact.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BD02000000000001AAAA /* Redact.swift */; };
+		49C1BD03000000000001AABB /* DiagnosticsBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BD03000000000001AAAA /* DiagnosticsBundle.swift */; };
+		49C1BD04000000000001AABB /* RedactTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BD04000000000001AAAA /* RedactTests.swift */; };
 		49C1B140000000000001AABB /* codex.svg in Resources */ = {isa = PBXBuildFile; fileRef = 49C1B140000000000001AAAA /* codex.svg */; };
 		49C1B141000000000001AABB /* claude.svg in Resources */ = {isa = PBXBuildFile; fileRef = 49C1B141000000000001AAAA /* claude.svg */; };
 		49C1B143000000000001AABB /* antigravity.svg in Resources */ = {isa = PBXBuildFile; fileRef = 49C1B143000000000001AAAA /* antigravity.svg */; };
@@ -163,6 +167,10 @@
 		49C1BF05000000000001AAAA /* UsageEquivalenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageEquivalenceTests.swift; sourceTree = "<group>"; };
 		49C1B131000000000001AAAA /* Scheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Scheduler.swift; sourceTree = "<group>"; };
 		49C1B132000000000001AAAA /* L10n.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = L10n.swift; sourceTree = "<group>"; };
+		49C1BD01000000000001AAAA /* AppLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLog.swift; sourceTree = "<group>"; };
+		49C1BD02000000000001AAAA /* Redact.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Redact.swift; sourceTree = "<group>"; };
+		49C1BD03000000000001AAAA /* DiagnosticsBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsBundle.swift; sourceTree = "<group>"; };
+		49C1BD04000000000001AAAA /* RedactTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RedactTests.swift; sourceTree = "<group>"; };
 		49C1B140000000000001AAAA /* codex.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = codex.svg; sourceTree = "<group>"; };
 		49C1B141000000000001AAAA /* claude.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = claude.svg; sourceTree = "<group>"; };
 		49C1B143000000000001AAAA /* antigravity.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = antigravity.svg; sourceTree = "<group>"; };
@@ -278,6 +286,7 @@
 				49C1B15F000000000001AAAA /* Usage */,
 				49C1B15B000000000001AAAA /* Pricing */,
 				49C1B111000000000001AAAA /* Storage */,
+				49C1BD00000000000001AAAA /* Diagnostics */,
 			);
 			path = Core;
 			sourceTree = "<group>";
@@ -383,6 +392,16 @@
 			path = Logos;
 			sourceTree = "<group>";
 		};
+		49C1BD00000000000001AAAA /* Diagnostics */ = {
+			isa = PBXGroup;
+			children = (
+				49C1BD01000000000001AAAA /* AppLog.swift */,
+				49C1BD02000000000001AAAA /* Redact.swift */,
+				49C1BD03000000000001AAAA /* DiagnosticsBundle.swift */,
+			);
+			path = Diagnostics;
+			sourceTree = "<group>";
+		};
 		49C1B15B000000000001AAAA /* Pricing */ = {
 			isa = PBXGroup;
 			children = (
@@ -459,6 +478,7 @@
 				49C1BF04000000000001AAAA /* ScannerIncrementalTests.swift */,
 				49C1BF05000000000001AAAA /* UsageEquivalenceTests.swift */,
 				49C1BF07000000000001AAAA /* QuotaPersistenceCoordinatorTests.swift */,
+				49C1BD04000000000001AAAA /* RedactTests.swift */,
 				49C1B31000000000000FAAAA /* PiJSONLScannerTests.swift */,
 				49C1B91000000000000FAAAA /* OpencodeScannerTests.swift */,
 				49C1BF0A000000000001AAAA /* ConversationProjectResolverTests.swift */,
@@ -630,6 +650,9 @@
 				49C1B126000000000001AABB /* ServiceStatusClient.swift in Sources */,
 				49C1B131000000000001AABB /* Scheduler.swift in Sources */,
 				49C1B132000000000001AABB /* L10n.swift in Sources */,
+				49C1BD01000000000001AABB /* AppLog.swift in Sources */,
+				49C1BD02000000000001AABB /* Redact.swift in Sources */,
+				49C1BD03000000000001AABB /* DiagnosticsBundle.swift in Sources */,
 				49C1BF08000000000001AABB /* UpdateChecker.swift in Sources */,
 				49C1B107000000000001AABB /* ScanCache.swift in Sources */,
 				49C1B196000000000001AABB /* ImportedUsageBackfill.swift in Sources */,
@@ -685,6 +708,7 @@
 				49C1BF04000000000001AABB /* ScannerIncrementalTests.swift in Sources */,
 				49C1BF05000000000001AABB /* UsageEquivalenceTests.swift in Sources */,
 				49C1BF07000000000001AABB /* QuotaPersistenceCoordinatorTests.swift in Sources */,
+				49C1BD04000000000001AABB /* RedactTests.swift in Sources */,
 				49C1BF09000000000001AABB /* UpdateCheckerTests.swift in Sources */,
 				49C1B31000000000000FAABB /* PiJSONLScannerTests.swift in Sources */,
 				49C1B91000000000000FAABB /* OpencodeScannerTests.swift in Sources */,

@@ -296,6 +296,11 @@ final class AppState {
             showCommandCode: SettingsStore.shared.isProviderEnabled(.commandCode),
             hasVisibleImported: importedCodexAccounts.contains(where: \.visibleInPopover)
         )
+        AppLog.debug(.quota, """
+            refresh plan reason=\(reason) codex=\(plan.refreshCodex) claude=\(plan.refreshClaude) \
+            antigravity=\(plan.refreshAntigravity) cursor=\(plan.refreshCursor) \
+            commandCode=\(plan.refreshCommandCode) imported=\(plan.refreshImported)
+            """)
         if plan.refreshCodex {
             await loadCodex()
             await loadCodexQuota(reason: reason)
@@ -352,7 +357,7 @@ final class AppState {
         do {
             return try await ServiceStatusClient.fetch(from: url)
         } catch {
-            print("[service-status] \(tag) fetch failed: \(error)")
+            AppLog.warn(.app, "service status \(tag) fetch failed: \(Redact.error(error))")
             return nil
         }
     }
@@ -373,10 +378,10 @@ final class AppState {
                 updateStatus = .upToDate(latest: info.tag)
             }
         } catch UpdateChecker.CheckError.rateLimited {
-            print("[update-check] rate limited by GitHub")
+            AppLog.warn(.app, "update check rate limited by GitHub")
             updateStatus = .rateLimited
         } catch {
-            print("[update-check] fetch failed: \(error)")
+            AppLog.warn(.app, "update check failed: \(Redact.error(error))")
             updateStatus = .failed
         }
     }
@@ -614,7 +619,7 @@ final class AppState {
         guard let idx = list.firstIndex(where: { $0.id == id }) else { return }
         mutate(&list[idx])
         do { try ImportedCodexStore.saveAll(list) } catch {
-            print("[imported-codex] save metadata failed: \(error)")
+            AppLog.error(.credentials, "imported codex save metadata failed: \(Redact.error(error))")
             return
         }
         reloadImportedCodexAccounts()
@@ -636,7 +641,7 @@ final class AppState {
         }
         guard reordered.map(\.id) != list.map(\.id) else { return }
         do { try ImportedCodexStore.saveAll(reordered) } catch {
-            print("[imported-codex] reorder failed: \(error)")
+            AppLog.error(.credentials, "imported codex reorder failed: \(Redact.error(error))")
             return
         }
         reloadImportedCodexAccounts()
@@ -647,7 +652,7 @@ final class AppState {
         ImportedCodexStore.deleteTokens(accountId: id)
         let list = ImportedCodexStore.loadAll().filter { $0.id != id }
         do { try ImportedCodexStore.saveAll(list) } catch {
-            print("[imported-codex] delete failed: \(error)")
+            AppLog.error(.credentials, "imported codex delete failed: \(Redact.error(error))")
         }
         reloadImportedCodexAccounts()
     }
@@ -863,7 +868,7 @@ final class AppState {
         do {
             try ImportedCodexStore.saveTokensIfChanged(tokens, accountId: id)
         } catch {
-            print("[imported-codex] sync primary tokens failed: \(error)")
+            AppLog.error(.credentials, "imported codex sync primary tokens failed: \(Redact.error(error))")
         }
     }
 
@@ -1737,7 +1742,9 @@ final class AppState {
         case .success(let snapshot):
             storeClaude(snapshot: snapshot, source: .cliFallback)
         case .failure(let err):
-            markClaudeFailure("\(apiError.description); cli fallback failed: \(err.description)", error: err)
+            // 同上:兜底自己为什么失败留在日志里,UI 只说最初的失败原因。
+            AppLog.warn(.quota, "claude CLI fallback failed: \(Redact.message(err.description))")
+            markClaudeFailure(apiError.userMessage, error: apiError)
         }
     }
 
@@ -1939,74 +1946,176 @@ final class AppState {
         tr("No sign-in found", "未找到登录信息")
     }
 
+    /// 整机凭据状态快照,凭据加载后记一次。
+    ///
+    /// 邮箱 / account_id / userID 一律折成 `acct#xxxxxxxx`(见 `Redact.account`):这份日志
+    /// 用户会导出发给开发者,不能带明文 PII。token 任何形态都不写,只写 `hasAccess` /
+    /// `hasRefresh` 布尔值——它们足以区分"没读到凭据"和"读到了但拉取失败"。
     private func logCredentialSummary() {
         if let c = codexAccount {
-            print("[Credentials 凭据] Codex: email=\(c.email ?? "—") plan=\(c.planType ?? "—") account_id=\(c.accountId ?? "—") expiredGuess=\(c.expiredGuess) hasAccessToken=\(c.accessToken != nil) hasRefreshToken=\(c.refreshToken != nil)")
+            AppLog.info(.credentials, """
+                codex account=\(Redact.account(c.email)) id=\(Redact.account(c.accountId)) \
+                plan=\(c.planType ?? "—") expiredGuess=\(c.expiredGuess) \
+                hasAccess=\(c.accessToken != nil) hasRefresh=\(c.refreshToken != nil)
+                """)
         } else {
-            print("[Credentials 凭据] Codex 未加载: error=\(codexError ?? "unknown")")
+            AppLog.info(.credentials, "codex not loaded: \(Redact.message(codexError))")
         }
         if let c = claudeAccount {
-            print("[Credentials 凭据] Claude: source=\(c.source.rawValue) email=\(c.email ?? "—") plan=\(c.subscriptionType ?? "—") expiresAt=\(c.expiresAt.map { "\($0)" } ?? "—") expiredGuess=\(c.expiredGuess) hasAccessToken=\(c.accessToken != nil)")
+            AppLog.info(.credentials, """
+                claude source=\(c.source.rawValue) account=\(Redact.account(c.email)) \
+                plan=\(c.subscriptionType ?? "—") expiresAt=\(logStamp(c.expiresAt)) \
+                expiredGuess=\(c.expiredGuess) hasAccess=\(c.accessToken != nil)
+                """)
         } else {
-            print("[Credentials 凭据] Claude 未加载: error=\(claudeError ?? "unknown")")
+            AppLog.info(.credentials, "claude not loaded: \(Redact.message(claudeError))")
         }
         if let c = antigravityAccount {
-            print("[Credentials 凭据] Antigravity: email=\(c.email ?? "—") plan=\(c.planType ?? "—") expiry=\(c.expiryDate.map { "\($0)" } ?? "—") hasAccessToken=\(c.accessToken != nil)")
+            AppLog.info(.credentials, """
+                antigravity account=\(Redact.account(c.email)) plan=\(c.planType ?? "—") \
+                expiry=\(logStamp(c.expiryDate)) hasAccess=\(c.accessToken != nil)
+                """)
         } else {
-            print("[Credentials 凭据] Antigravity 未加载: error=\(antigravityError ?? "unknown")")
+            AppLog.info(.credentials, "antigravity not loaded: \(Redact.message(antigravityError))")
         }
         if let c = cursorAccount {
-            print("[Credentials 凭据] Cursor: userID=\(c.userID) email=\(c.email ?? "—") expiresAt=\(c.expiresAt) hasAccessToken=true")
+            AppLog.info(.credentials, """
+                cursor account=\(Redact.account(c.email)) id=\(Redact.account(c.userID)) \
+                expiresAt=\(logStamp(c.expiresAt)) hasAccess=true
+                """)
         } else {
-            print("[Credentials 凭据] Cursor 未加载: error=\(cursorError ?? "unknown")")
+            AppLog.info(.credentials, "cursor not loaded: \(Redact.message(cursorError))")
         }
         if let c = commandCodeAccount {
-            print("[Credentials 凭据] Command Code: login=\(c.login ?? "—") source=\(c.source.displayName) plan=\(c.planType ?? "—")")
+            AppLog.info(.credentials, """
+                command code account=\(Redact.account(c.login)) source=\(c.source.displayName) \
+                plan=\(c.planType ?? "—")
+                """)
         } else {
-            print("[Credentials 凭据] Command Code 未加载: error=\(commandCodeError ?? "unknown")")
+            AppLog.info(.credentials, "command code not loaded: \(Redact.message(commandCodeError))")
         }
     }
 
+    /// 上一轮已写进日志的额度行，key 见 `logQuotaSummary` 里的分配。
+    /// 稳态下额度几小时不变，逐轮重记同样的内容只会把真正的错误埋进几千行噪声里，
+    /// 也白白唤醒磁盘；因此只有内容变化才写。
+    private var lastQuotaLogLines: [String: String] = [:]
+    /// 上一次无条件全量记录的时刻。没有它，长期无变化时日志会完全静默，
+    /// 开发者分不清"一切正常"和"采样早就停了"。
+    private var lastQuotaLogHeartbeatAt: Date?
+    private static let quotaLogHeartbeatInterval: TimeInterval = 60 * 60
+
+    /// 整机额度状态快照,每轮额度刷新后评估一次。全部是聚合数值与失败原因,不含账号标识。
+    ///
+    /// 两条约束：
+    /// - **未启用的 Provider 不记失败行**。没开 Cursor 却每轮记一条 `cursor fetch failed`,
+    ///   既是噪声也会误导开发者以为真的有故障。
+    /// - **内容不变就不写**,只在变化、出错或到达心跳间隔时落盘。
     private func logQuotaSummary() {
-        if let q = codexQuota {
-            print("[Quota 额度] Codex: source=\(codexQuotaSource?.rawValue ?? "—") plan=\(q.planType ?? "—") \(format(q))")
-        } else {
-            print("[Quota 额度] Codex 拉取失败: error=\(codexQuotaError ?? "unknown")")
-        }
-        if let q = claudeQuota {
-            print("[Quota 额度] Claude: source=\(claudeQuotaSource?.rawValue ?? "—") \(format(q))")
-            for limit in q.modelLimits {
-                print("       └─ \(limit.displayName ?? limit.id)=\(format(window: limit.window))")
+        let settings = SettingsStore.shared
+        var lines: [(key: String, level: AppLogLevel, text: String)] = []
+
+        if settings.isProviderEnabled(.codex) {
+            if let q = codexQuota {
+                lines.append((
+                    "codex", .info,
+                    "codex source=\(codexQuotaSource?.rawValue ?? "—") plan=\(q.planType ?? "—") \(format(q))"
+                ))
+            } else {
+                lines.append(("codex", .warn, "codex fetch failed: \(Redact.message(codexQuotaError))"))
             }
-        } else {
-            print("[Quota 额度] Claude 拉取失败: error=\(claudeQuotaError ?? "unknown")")
         }
-        if let q = antigravityQuota {
-            var antigravityExtra = ""
-            if let gw = q.geminiWindow { antigravityExtra += " GM=\(format(window: gw))" }
-            if let gw = q.geminiWeekly { antigravityExtra += " GW=\(format(window: gw))" }
-            print("[Quota 额度] Antigravity: source=\(antigravityQuotaSource?.rawValue ?? "—") plan=\(q.planType ?? "—") \(format(q))\(antigravityExtra)")
-        } else if SettingsStore.shared.isProviderEnabled(.antigravity) {
-            print("[Quota 额度] Antigravity 拉取失败: error=\(antigravityQuotaError ?? antigravityError ?? "unknown")")
+        if settings.isProviderEnabled(.claude) {
+            if let q = claudeQuota {
+                lines.append((
+                    "claude", .info,
+                    "claude source=\(claudeQuotaSource?.rawValue ?? "—") \(format(q))"
+                ))
+                for limit in q.modelLimits {
+                    lines.append((
+                        "claude.model.\(limit.id)", .info,
+                        "claude model \(limit.displayName ?? limit.id)=\(format(window: limit.window))"
+                    ))
+                }
+            } else {
+                lines.append(("claude", .warn, "claude fetch failed: \(Redact.message(claudeQuotaError))"))
+            }
         }
-        if let q = cursorQuota {
-            print("[Quota 额度] Cursor: source=\(cursorQuotaSource?.rawValue ?? "—") plan=\(q.planType ?? "—") \(format(q))")
-        } else {
-            print("[Quota 额度] Cursor 拉取失败: error=\(cursorQuotaError ?? cursorError ?? "unknown")")
+        if settings.isProviderEnabled(.antigravity) {
+            if let q = antigravityQuota {
+                var extra = ""
+                if let gw = q.geminiWindow { extra += " GM=\(format(window: gw))" }
+                if let gw = q.geminiWeekly { extra += " GW=\(format(window: gw))" }
+                lines.append((
+                    "antigravity", .info,
+                    "antigravity source=\(antigravityQuotaSource?.rawValue ?? "—") plan=\(q.planType ?? "—") \(format(q))\(extra)"
+                ))
+            } else {
+                lines.append((
+                    "antigravity", .warn,
+                    "antigravity fetch failed: \(Redact.message(antigravityQuotaError ?? antigravityError))"
+                ))
+            }
         }
-        if let q = commandCodeQuota {
-            print("[Quota 额度] Command Code: source=\(commandCodeQuotaSource?.rawValue ?? "—") plan=\(q.planType ?? "—") \(format(q))")
-        } else if SettingsStore.shared.isProviderEnabled(.commandCode) {
-            print("[Quota 额度] Command Code 拉取失败: error=\(commandCodeQuotaError ?? commandCodeError ?? "unknown")")
+        if settings.isProviderEnabled(.cursor) {
+            if let q = cursorQuota {
+                lines.append((
+                    "cursor", .info,
+                    "cursor source=\(cursorQuotaSource?.rawValue ?? "—") plan=\(q.planType ?? "—") \(format(q))"
+                ))
+            } else {
+                lines.append((
+                    "cursor", .warn,
+                    "cursor fetch failed: \(Redact.message(cursorQuotaError ?? cursorError))"
+                ))
+            }
+        }
+        if settings.isProviderEnabled(.commandCode) {
+            if let q = commandCodeQuota {
+                lines.append((
+                    "commandCode", .info,
+                    "command code source=\(commandCodeQuotaSource?.rawValue ?? "—") plan=\(q.planType ?? "—") \(format(q))"
+                ))
+            } else {
+                lines.append((
+                    "commandCode", .warn,
+                    "command code fetch failed: \(Redact.message(commandCodeQuotaError ?? commandCodeError))"
+                ))
+            }
         }
         // 远端用量和额度是两个独立接口，失败原因必须单独可见，
         // 否则统计页只剩一句"暂不可用"，无法区分未登录和拉取失败。
-        if let error = usageService.cursorRemoteUsageError {
-            print("[Usage 用量] Cursor 远端拉取失败: error=\(error)")
-        } else {
-            let covered = usageService.cursorUsageCoveredDayRanges
-            print("[Usage 用量] Cursor 远端已覆盖 \(covered.count) 段自然日区间")
+        if settings.isProviderEnabled(.cursor) || settings.isUsageServiceVisible(.cursor) {
+            if let error = usageService.cursorRemoteUsageError {
+                lines.append((
+                    "cursor.usage", .warn,
+                    "cursor remote usage fetch failed: \(Redact.message(error))"
+                ))
+            } else {
+                lines.append((
+                    "cursor.usage", .info,
+                    "cursor remote usage covers \(usageService.cursorUsageCoveredDayRanges.count) day range(s)"
+                ))
+            }
         }
+
+        let now = Date()
+        let heartbeatDue = lastQuotaLogHeartbeatAt
+            .map { now.timeIntervalSince($0) >= Self.quotaLogHeartbeatInterval } ?? true
+        var written: [String: String] = [:]
+        for line in lines {
+            written[line.key] = line.text
+            if !heartbeatDue, lastQuotaLogLines[line.key] == line.text { continue }
+            AppLog.log(line.level, .quota, line.text)
+        }
+        lastQuotaLogLines = written
+        if heartbeatDue { lastQuotaLogHeartbeatAt = now }
+    }
+
+    /// 日志与诊断摘要里的绝对时间戳,与日志行时间戳同一格式。
+    private func logStamp(_ date: Date?) -> String {
+        guard let date else { return "—" }
+        return AppLog.timestamp(date)
     }
 
     private func format(_ q: QuotaSnapshot) -> String {
@@ -2020,16 +2129,12 @@ final class AppState {
         return parts.joined(separator: " ")
     }
 
+    /// 日志用的窗口描述。重置时间写**绝对时间戳**而不是"还剩几分钟"：相对值每轮都在变，
+    /// 会让 `logQuotaSummary` 的按内容去重彻底失效；绝对时间也更容易和用户说的
+    /// "大概几点出的问题"对上。
     private func format(window w: QuotaWindow) -> String {
         let pct = String(format: "%.1f%% left", w.remainingPercent)
-        let reset: String
-        if let r = w.resetsAt {
-            let mins = Int(r.timeIntervalSinceNow / 60)
-            reset = mins > 0 ? "resets in ~\(mins)m" : "resets now"
-        } else {
-            reset = "resets ?"
-        }
-        return "\(pct) (\(reset))"
+        return "\(pct) (resets \(logStamp(w.resetsAt)))"
     }
 
     private func relativeAge(from date: Date) -> String {

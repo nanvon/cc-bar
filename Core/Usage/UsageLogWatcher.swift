@@ -124,7 +124,7 @@ final class UsageLogWatcher {
         ) else {
             // 建流失败：保持放行，行为与没有门控时一致。
             changeFlag.raise()
-            print("[UsageLogWatcher 日志监听] FSEventStreamCreate failed; falling back to full scan each cycle")
+            AppLog.warn(.usage, "FSEventStreamCreate failed; falling back to full scan each cycle")
             return
         }
 
@@ -133,7 +133,7 @@ final class UsageLogWatcher {
             FSEventStreamInvalidate(created)
             FSEventStreamRelease(created)
             changeFlag.raise()
-            print("[UsageLogWatcher 日志监听] FSEventStreamStart failed; falling back to full scan each cycle")
+            AppLog.warn(.usage, "FSEventStreamStart failed; falling back to full scan each cycle")
             return
         }
         stream = created

@@ -1,5 +1,4 @@
 import Foundation
-import os
 
 /// Codex 凭据续期。
 ///
@@ -16,8 +15,6 @@ import os
 /// 3. 写回失败不吞掉:重试一次,仍失败则大声记日志并继续返回本次刷到的 token
 ///    (它这次会话仍然可用),避免"服务端已轮换、盘上还留着废票"的静默损坏。
 nonisolated enum CodexTokenRefresher {
-    private static let log = Logger(subsystem: "com.cc-bar", category: "codex-refresh")
-
     static let clientID = "app_EMoamEEZ73f0CkXaXp7hrann"
     static let tokenEndpoint = URL(string: "https://auth.openai.com/oauth/token")!
     static let refreshSkew: TimeInterval = 300
@@ -261,7 +258,7 @@ nonisolated enum CodexTokenRefresher {
             try write(refreshed, writeBack: writeBack)
             return
         } catch {
-            log.warning("token write-back failed, retrying: \(String(describing: error), privacy: .public)")
+            AppLog.warn(.credentials, "codex token write-back failed, retrying: \(Redact.error(error))")
         }
         try? await Task.sleep(nanoseconds: UInt64(writeBackRetryDelay * 1_000_000_000))
         do {
@@ -269,13 +266,10 @@ nonisolated enum CodexTokenRefresher {
         } catch {
             // 服务端已经轮换过 token,而盘上还是旧的那份废票。下次启动会登录失效,
             // 需要用户重新 `codex login`。这条日志是排查这类"莫名掉线"的唯一线索。
-            log.error(
-                """
-                token write-back failed twice (\(writeBack.coordinationKey, privacy: .public)); \
-                stored credentials now hold a rotated-away token: \
-                \(String(describing: error), privacy: .public)
-                """
-            )
+            AppLog.error(.credentials, """
+                codex token write-back failed twice (\(writeBack.coordinationKey)); \
+                stored credentials now hold a rotated-away token: \(Redact.error(error))
+                """)
         }
     }
 

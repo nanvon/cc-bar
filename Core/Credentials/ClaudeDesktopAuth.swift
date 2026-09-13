@@ -2,7 +2,6 @@ import CommonCrypto
 import Foundation
 import LocalAuthentication
 import Security
-import os
 
 /// Claude Desktop 的 Electron 凭据缓存读取器。
 ///
@@ -44,8 +43,6 @@ import os
 /// `acct:<accountUuid>|<clientID>:<orgUuid>:<audience>:<scopes>:`,
 /// 值含 `token` / `refreshToken` / `expiresAt` 等字段——本文件只取 `token`。
 nonisolated enum ClaudeDesktopAuth {
-    private static let log = Logger(subsystem: "com.cc-bar", category: "claude-desktop-credentials")
-
     private static let configRelativePath = "Library/Application Support/Claude/config.json"
     private static let safeStorageService = "Claude Safe Storage"
     private static let safeStorageAccount = "Claude Key"
@@ -77,11 +74,11 @@ nonisolated enum ClaudeDesktopAuth {
         guard let accountUuid = account.accountUuid?.lowercased(),
               let organizationUuid = account.organizationUuid?.lowercased()
         else {
-            log.info("skip Claude Desktop: local account identity unknown")
+            AppLog.info(.credentials, "skip Claude Desktop: local account identity unknown")
             return nil
         }
         guard !hasUserDeniedAccess else {
-            log.info("skip Claude Desktop: user previously denied keychain access")
+            AppLog.info(.credentials, "skip Claude Desktop: user previously denied keychain access")
             return nil
         }
         guard let key = deriveEncryptionKey() else { return nil }
@@ -91,10 +88,10 @@ nonisolated enum ClaudeDesktopAuth {
             $0.accountUuid == accountUuid && $0.organizationUuid == organizationUuid
         }
         guard let best = bestUsable(among: matching) else {
-            log.info("no usable Claude Desktop token for this account (\(entries.count) entries scanned)")
+            AppLog.info(.credentials, "no usable Claude Desktop token for this account (\(entries.count) entries scanned)")
             return nil
         }
-        log.info("using Claude Desktop access token (official client: \(best.clientID == claudeCodeClientID))")
+        AppLog.info(.credentials, "using Claude Desktop access token (official client: \(best.clientID == claudeCodeClientID))")
         return BorrowedToken(
             accessToken: best.accessToken,
             expiresAt: best.expiresAt,
@@ -122,11 +119,11 @@ nonisolated enum ClaudeDesktopAuth {
             entries.filter { $0.accountUuid == uuid }
         } ?? entries
         guard let best = bestUsable(among: scoped) ?? bestUsable(among: entries) else {
-            log.info("Claude Desktop has no usable token to identify an account")
+            AppLog.info(.credentials, "Claude Desktop has no usable token to identify an account")
             return nil
         }
 
-        log.info("discovered Claude account from Claude Desktop (no CLI credentials present)")
+        AppLog.info(.credentials, "discovered Claude account from Claude Desktop (no CLI credentials present)")
         return ClaudeAccount(
             source: .desktop,
             email: nil,
@@ -205,7 +202,7 @@ nonisolated enum ClaudeDesktopAuth {
             return password
         case .denied:
             UserDefaults.standard.set(true, forKey: denialDefaultsKey)
-            log.info("user denied Claude Safe Storage access; will not ask again automatically")
+            AppLog.info(.credentials, "user denied Claude Safe Storage access; will not ask again automatically")
             return nil
         case .missing:
             return nil
@@ -340,7 +337,7 @@ nonisolated enum ClaudeDesktopAuth {
     private static func decryptSafeStorage(base64: String, key: Data) -> String? {
         guard let blob = Data(base64Encoded: base64), blob.count > 3 else { return nil }
         guard blob.prefix(3) == Data("v10".utf8) else {
-            log.info("unexpected Claude Desktop safeStorage prefix; skipping")
+            AppLog.info(.credentials, "unexpected Claude Desktop safeStorage prefix; skipping")
             return nil
         }
         let ciphertext = blob.dropFirst(3)

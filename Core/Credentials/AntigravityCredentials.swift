@@ -1,5 +1,4 @@
 import Foundation
-import os
 
 /// Antigravity（Google Antigravity / Gemini Code Assist）凭据管理。
 ///
@@ -32,7 +31,6 @@ nonisolated enum CredentialFileSource: String, Sendable, Equatable {
 }
 
 nonisolated enum AntigravityCredentials {
-    private static let log = Logger(subsystem: "com.cc-bar", category: "antigravity-credentials")
     /// Gemini CLI（最常见，~/.gemini/oauth_creds.json 即此 client）。客户端 ID 是公开标识。
     static let clientID = "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com"
     /// Antigravity 原生 client（部分新版 jetski 使用）。客户端 ID 是公开标识。
@@ -435,7 +433,7 @@ nonisolated enum AntigravityCredentials {
             }
             let out = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
             try out.write(to: url, options: [.atomic])
-            log.info("antigravity oauth_creds.json refreshed")
+            AppLog.info(.credentials, "antigravity oauth_creds.json refreshed")
         case .jetski:
             let url = jetskiTokenURL(homeDirectory: home)
             var root: [String: Any] = [:]
@@ -454,7 +452,7 @@ nonisolated enum AntigravityCredentials {
             root["token"] = tokenDict
             let out = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
             try out.write(to: url, options: [.atomic])
-            log.info("antigravity jetski token refreshed")
+            AppLog.info(.credentials, "antigravity jetski token refreshed")
         }
     }
 
