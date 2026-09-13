@@ -245,7 +245,7 @@ struct CodexResetCreditsSheet: View {
         case .success(let fetched):
             state = .success(fetched)
         case .failure(let err):
-            state = .failure(err.description)
+            state = .failure(err.userMessage)
         }
     }
 

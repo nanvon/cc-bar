@@ -64,7 +64,7 @@ nonisolated enum AntigravityQuotaClient {
         do {
             (data, resp) = try await URLSession.shared.data(for: req)
         } catch {
-            return .failure(.transport(String(describing: error)))
+            return .failure(.from(transport: error))
         }
         guard let http = resp as? HTTPURLResponse else {
             return .failure(.transport("non-http"))

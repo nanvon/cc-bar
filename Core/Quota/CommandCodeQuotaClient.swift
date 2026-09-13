@@ -163,7 +163,7 @@ enum CommandCodeQuotaClient {
             }
             return .success(data)
         } catch {
-            return .failure(.transport(error.localizedDescription))
+            return .failure(.from(transport: error))
         }
     }
 

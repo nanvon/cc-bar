@@ -135,6 +135,10 @@ nonisolated struct QuotaRefreshState: Sendable, Equatable {
     var lastAttemptAt: Date?
     var backoffUntil: Date?
     var lastError: String?
+    /// `lastError` 是不是网络类失败。`lastError` 只是一句展示文案,结构信息在这里留一份,
+    /// 让 header 能判断"所有服务都败在网络上"并说"网络不可用",而不是笼统的"刷新失败"。
+    /// 与 `lastError` 同生共死:每个 `markXxxFailure` 设值,每个 `storeXxx` 清零。
+    var lastErrorIsNetwork: Bool = false
     var inFlight: Bool = false
     var source: QuotaSnapshotSource?
 }
@@ -426,9 +430,50 @@ nonisolated struct QuotaSnapshot: Sendable, Equatable, Codable {
     }
 }
 
+/// 网络层失败的成因。
+///
+/// 存在的理由:`URLError` 直接插值进字符串会得到
+/// `URLError(_nsError: Error Domain=NSURLErrorDomain Code=-1009 "…" UserInfo={…})`
+/// 这种调试转储,Popover 截断后只剩一截乱码,用户既看不出是断网还是账号问题。
+/// 把它在**产生错误的地方**收敛成有限几类,UI 才能给出一句人话。
+nonisolated enum NetworkFailureKind: String, Sendable, Equatable, Codable {
+    /// 本机没有网络。
+    case offline
+    /// 连不上目标主机:代理断线、端口不通、DNS 解析失败。代理挂掉最常落在这里。
+    case cannotConnect
+    /// 超时。代理进程还在、但不再转发流量时最常见。
+    case timedOut
+    /// TLS 握手失败。中间人代理的证书未被系统信任时会走到这里。
+    case tls
+    /// 其余 `URLError`,以及非 `URLError` 的传输失败。
+    case other
+
+    nonisolated init(_ code: URLError.Code) {
+        switch code {
+        case .notConnectedToInternet, .dataNotAllowed, .internationalRoamingOff:
+            self = .offline
+        case .cannotConnectToHost, .cannotFindHost, .networkConnectionLost,
+             .dnsLookupFailed, .resourceUnavailable:
+            self = .cannotConnect
+        case .timedOut:
+            self = .timedOut
+        case .secureConnectionFailed, .serverCertificateHasBadDate,
+             .serverCertificateUntrusted, .serverCertificateHasUnknownRoot,
+             .serverCertificateNotYetValid, .clientCertificateRejected,
+             .clientCertificateRequired, .appTransportSecurityRequiresSecureConnection:
+            self = .tls
+        default:
+            self = .other
+        }
+    }
+}
+
 nonisolated enum QuotaError: Error, CustomStringConvertible {
     case missingToken
     case http(Int, String)
+    /// 网络不可达一类的失败,见 `NetworkFailureKind`。
+    case network(NetworkFailureKind)
+    /// 非网络的传输失败(子进程、URL 构造等本地环节)。网络失败一律走 `.network`。
     case transport(String)
     case decode(String)
     case tokenRefreshFailed(String)
@@ -442,12 +487,20 @@ nonisolated enum QuotaError: Error, CustomStringConvertible {
         switch self {
         case .missingToken: return "missing access token"
         case .http(let code, let msg): return "http \(code): \(msg)"
+        case .network(let kind): return "network: \(kind.rawValue)"
         case .transport(let msg): return "transport: \(msg)"
         case .decode(let msg): return "decode: \(msg)"
         case .tokenRefreshFailed(let msg): return "token refresh failed: \(msg)"
         case .credentialsExpired:
-            return "Claude 凭据已过期,请打开 Claude Code(或在终端运行 claude)刷新登录后再回来"
+            return "claude credentials expired; waiting for Claude Code to refresh"
         }
+    }
+
+    /// 把 `URLSession` 抛出的错误收敛成 `QuotaError`。
+    /// 所有取数 / 续期链路的 `catch` 都应走这里,不要再把原始 error 插值成字符串。
+    nonisolated static func from(transport error: Error) -> QuotaError {
+        guard let urlError = error as? URLError else { return .network(.other) }
+        return .network(NetworkFailureKind(urlError.code))
     }
 
     var httpStatusCode: Int? {
@@ -468,5 +521,115 @@ nonisolated enum QuotaError: Error, CustomStringConvertible {
     var isCredentialsExpired: Bool {
         if case .credentialsExpired = self { return true }
         return false
+    }
+
+    /// 是否为网络不可达一类的失败(断网、代理断线、超时、TLS)。
+    var isNetworkFailure: Bool {
+        if case .network = self { return true }
+        return false
+    }
+
+    /// HTTP 错误体看起来是 HTML 页面而不是 API 的 JSON 回应。
+    ///
+    /// 企业代理登录页、网关 502 页面都长这样。此时 401 / 403 说明的是
+    /// "请求没走到 API",而不是"账号真的失效了"——不能据此提示用户重新登录。
+    var looksLikeInterceptedResponse: Bool {
+        guard case .http(_, let body) = self else { return false }
+        let head = body
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .prefix(200)
+            .lowercased()
+        guard !head.isEmpty else { return false }
+        return head.hasPrefix("<") || head.contains("<html") || head.contains("<!doctype")
+    }
+}
+
+// MARK: - 用户可见文案
+//
+// 分层:`description` 是技术串,只进日志与调试;UI 一律用 `userMessage`。
+// 见 docs/界面布局.md §1.4.5。
+//
+// 旧实现把 `err.description` 直接塞进 Popover,于是断网时用户看到的是
+// `transport: URLError(_nsError: Error Domain=NSURLErro…`——既不可读,也分不清
+// 到底是网络问题还是账号问题。
+
+@MainActor
+extension NetworkFailureKind {
+    var userMessage: String {
+        switch self {
+        case .offline:
+            return tr("No network connection", "网络未连接")
+        case .cannotConnect:
+            return tr(
+                "Can't reach the service — check your network or proxy",
+                "连不上服务,请检查网络或代理"
+            )
+        case .timedOut:
+            return tr(
+                "Connection timed out — check your network or proxy",
+                "连接超时,请检查网络或代理"
+            )
+        case .tls:
+            // 不提 TLS / 握手 / 证书:那是协议术语。用户能做的就是检查代理,
+            // 而中间人代理的证书没被系统信任正是这一档最常见的成因。
+            return tr(
+                "Secure connection failed — check your proxy settings",
+                "安全连接失败,请检查代理设置"
+            )
+        case .other:
+            return tr("Network connection failed", "网络连接失败")
+        }
+    }
+}
+
+@MainActor
+extension QuotaError {
+    /// Popover / 其他账号行展示用的一句话。短、可读、双语,不含技术细节。
+    var userMessage: String {
+        switch self {
+        case .missingToken:
+            return tr("Not signed in", "未登录")
+        case .credentialsExpired:
+            return tr(
+                "Sign-in expired — open Claude Code to sign in again",
+                "登录已过期,请打开 Claude Code 重新登录"
+            )
+        case .network(let kind):
+            return kind.userMessage
+        case .http(let code, _):
+            return Self.httpMessage(code: code, intercepted: looksLikeInterceptedResponse)
+        case .decode:
+            return tr("Got an unreadable response", "返回的数据无法识别")
+        case .tokenRefreshFailed:
+            // 不说"令牌":那是实现词。失败在哪一步(没有 refresh_token / 响应里
+            // 没有 access_token / 候选 client 全失败)对用户没有可操作性,细节留在
+            // description 与日志里。也不直接写"请重新登录"——刷新端点临时 5xx
+            // 也会走到这里,那时让用户去重新登录是白折腾。
+            return tr("Couldn't renew your sign-in", "登录续期失败")
+        case .transport:
+            return tr("Couldn't fetch the data", "获取数据失败")
+        }
+    }
+
+    /// 状态码只在**兜底的未知档**露出来——那时它是唯一线索。401 / 429 / 5xx 这些
+    /// 常见档对用户没有信息量,完整的 `http {code}: {body}` 本来就在 description
+    /// 和日志里,不必占用 Popover 里那一行。
+    private static func httpMessage(code: Int, intercepted: Bool) -> String {
+        if intercepted {
+            return tr(
+                "Blocked by a network proxy — check your proxy settings",
+                "被网络代理拦截,请检查代理设置"
+            )
+        }
+        switch code {
+        case 429:
+            return tr("Too many requests — try again later", "请求过于频繁,请稍后再试")
+        case 401, 403:
+            return tr("Sign-in is no longer valid — sign in again", "登录已失效,请重新登录")
+        case 500...599:
+            return tr("Service is temporarily unavailable", "服务暂时不可用,请稍后再试")
+        default:
+            return tr("Request failed (HTTP \(code))", "获取失败(HTTP \(code))")
+        }
     }
 }

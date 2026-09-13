@@ -22,7 +22,7 @@ nonisolated enum CursorQuotaClient {
         do {
             (data, response) = try await URLSession.shared.data(for: request)
         } catch {
-            return .failure(.transport(String(describing: error)))
+            return .failure(.from(transport: error))
         }
 
         guard let http = response as? HTTPURLResponse else {

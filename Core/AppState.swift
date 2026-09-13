@@ -149,6 +149,10 @@ final class AppState {
     var codexServiceStatus: ServiceStatus?
     var claudeServiceStatus: ServiceStatus?
     var cursorServiceStatus: ServiceStatus?
+    /// 三家 statuspage 同时抓不到 = 本机出不去网(断网 / 代理挡着),不是三家同时挂了。
+    /// 失败时旧快照会被保留,UI 必须据此把状态点降级成"未知",
+    /// 否则断网期间 Popover 会一直用一个陈旧的绿点声称"服务正常"。
+    var serviceStatusUnreachable = false
 
     let usageService = UsageService()
     private let scheduler = Scheduler()
@@ -328,7 +332,8 @@ final class AppState {
     }
 
     /// 拉取 OpenAI / Anthropic / Cursor statuspage 状态。失败保留旧快照,不清空。
-    /// 三个请求并发,任意一个失败不影响其他。
+    /// 三个请求并发,任意一个失败不影响其他;三个全失败则置 `serviceStatusUnreachable`,
+    /// 让 UI 把保留下来的旧状态点降级成"未知"而不是继续显示"服务正常"。
     func refreshServiceStatus() async {
         async let codex = Self.fetchServiceStatus(url: ServiceStatusClient.openAIStatusURL, tag: "openai")
         async let claude = Self.fetchServiceStatus(url: ServiceStatusClient.anthropicStatusURL, tag: "anthropic")
@@ -339,6 +344,8 @@ final class AppState {
         if let codexResult { codexServiceStatus = codexResult }
         if let claudeResult { claudeServiceStatus = claudeResult }
         if let cursorResult { cursorServiceStatus = cursorResult }
+        serviceStatusUnreachable =
+            codexResult == nil && claudeResult == nil && cursorResult == nil
     }
 
     private static func fetchServiceStatus(url: URL, tag: String) async -> ServiceStatus? {
@@ -702,7 +709,7 @@ final class AppState {
         defer { importedCodexRefreshStates[account.id]?.inFlight = false }
 
         guard let tokens = ImportedCodexStore.loadTokens(accountId: account.id) else {
-            markImportedCodexFailure(id: account.id, message: "missing tokens in keychain")
+            markImportedCodexFailure(id: account.id, message: QuotaError.missingToken.userMessage)
             return
         }
         let isPAT = account.isPersonalAccessToken == true
@@ -720,7 +727,7 @@ final class AppState {
             case .success(let t):
                 activeToken = t
             case .failure(let err):
-                markImportedCodexFailure(id: account.id, message: err.description, error: err)
+                markImportedCodexFailure(id: account.id, message: err.userMessage, error: err)
                 return
             }
         }
@@ -732,7 +739,7 @@ final class AppState {
         case .success(let fetched):
             storeImportedCodex(id: account.id, snapshot: fetched.snapshot, source: .api)
         case .failure(let err):
-            markImportedCodexFailure(id: account.id, message: err.description, error: err)
+            markImportedCodexFailure(id: account.id, message: err.userMessage, error: err)
         }
     }
 
@@ -873,6 +880,7 @@ final class AppState {
         guard !state.inFlight else { return false }
         if let backoffUntil = state.backoffUntil, backoffUntil > now {
             state.lastError = backoffMessage(until: backoffUntil)
+            state.lastErrorIsNetwork = false
             importedCodexRefreshStates[id] = state
             importedCodexErrors[id] = state.lastError
             return false
@@ -901,6 +909,7 @@ final class AppState {
         var state = importedCodexRefreshStates[id] ?? QuotaRefreshState()
         state.lastSuccessAt = updatedAt
         state.lastError = nil
+        state.lastErrorIsNetwork = false
         state.backoffUntil = nil
         state.source = source
         importedCodexRefreshStates[id] = state
@@ -916,6 +925,7 @@ final class AppState {
         importedCodexErrors[id] = message
         var state = importedCodexRefreshStates[id] ?? QuotaRefreshState()
         state.lastError = message
+        state.lastErrorIsNetwork = error?.isNetworkFailure == true
         if error?.isRateLimited == true {
             state.backoffUntil = Date().addingTimeInterval(rateLimitBackoff)
         }
@@ -1372,11 +1382,11 @@ final class AppState {
         defer { codexRefreshState.inFlight = false }
 
         guard var account = codexAccount else {
-            markCodexFailure("no codex account")
+            markCodexFailure(noAccountMessage)
             return
         }
         guard let token = account.accessToken else {
-            markCodexFailure(QuotaError.missingToken.description)
+            markCodexFailure(QuotaError.missingToken.userMessage)
             return
         }
 
@@ -1398,7 +1408,7 @@ final class AppState {
                 account.idToken = t.idToken
                 codexAccount = account
             case .failure(let err):
-                markCodexFailure(err.description)
+                markCodexFailure(err.userMessage, error: err)
                 return
             }
         }
@@ -1420,7 +1430,7 @@ final class AppState {
             }
             storeCodex(snapshot: fetched.snapshot, source: .api)
         case .failure(let err):
-            markCodexFailure(err.description, error: err)
+            markCodexFailure(err.userMessage, error: err)
         }
     }
 
@@ -1429,11 +1439,11 @@ final class AppState {
         defer { claudeRefreshState.inFlight = false }
 
         guard var account = claudeAccount else {
-            markClaudeFailure("no claude account")
+            markClaudeFailure(noAccountMessage)
             return
         }
         guard account.accessToken != nil else {
-            markClaudeFailure(QuotaError.missingToken.description)
+            markClaudeFailure(QuotaError.missingToken.userMessage)
             return
         }
         let refreshed = await ClaudeTokenRefresher.ensureFreshAccessToken(account: &account)
@@ -1445,7 +1455,7 @@ final class AppState {
                 claudeAccount = account
             }
         case .failure(let err):
-            markClaudeFailure(err.description, error: err)
+            markClaudeFailure(err.userMessage, error: err)
             // 凭据过期时 cc-bar 不再自己刷新(会作废 Claude Code 的 refresh_token),
             // 用户手动刷新时改走 claude CLI 兜底取数——CLI 用自己的会话身份,
             // 刷新对它是安全的。已有快照会被 markClaudeFailure 保留,不会被清空。
@@ -1459,7 +1469,7 @@ final class AppState {
         case .success(let snapshot):
             storeClaude(snapshot: snapshot, source: .api)
         case .failure(let err):
-            markClaudeFailure(err.description, error: err)
+            markClaudeFailure(err.userMessage, error: err)
             if reason == .userInitiated, claudeQuota == nil {
                 await loadClaudeCLIFallback(apiError: err)
             }
@@ -1471,11 +1481,11 @@ final class AppState {
         defer { antigravityRefreshState.inFlight = false }
 
         guard var account = antigravityAccount else {
-            markAntigravityFailure(antigravityError ?? "no antigravity account")
+            markAntigravityFailure(noAccountMessage)
             return
         }
         guard account.accessToken != nil else {
-            markAntigravityFailure(QuotaError.missingToken.description)
+            markAntigravityFailure(QuotaError.missingToken.userMessage)
             return
         }
         let refreshed = await AntigravityCredentials.ensureFreshAccessToken(account: &account)
@@ -1487,7 +1497,7 @@ final class AppState {
                 antigravityAccount = account
             }
         case .failure(let err):
-            markAntigravityFailure(err.description, error: err)
+            markAntigravityFailure(err.userMessage, error: err)
             return
         }
         let result = await AntigravityQuotaClient.fetch(accessToken: activeToken)
@@ -1507,7 +1517,7 @@ final class AppState {
             let snapshot = fetched.snapshot
             storeAntigravity(snapshot: snapshot, source: .api)
         case .failure(let err):
-            markAntigravityFailure(err.description, error: err)
+            markAntigravityFailure(err.userMessage, error: err)
         }
     }
 
@@ -1537,6 +1547,7 @@ final class AppState {
         antigravityQuotaError = nil
         antigravityRefreshState.lastSuccessAt = updatedAt
         antigravityRefreshState.lastError = nil
+        antigravityRefreshState.lastErrorIsNetwork = false
         antigravityRefreshState.backoffUntil = nil
         antigravityRefreshState.source = source
         quotaCache.antigravity = QuotaCacheRecord(snapshot: mergedSnapshot, source: source, updatedAt: updatedAt, accountID: antigravityAccount?.email)
@@ -1547,6 +1558,7 @@ final class AppState {
     private func markAntigravityFailure(_ message: String, error: QuotaError? = nil) {
         antigravityQuotaError = message
         antigravityRefreshState.lastError = message
+        antigravityRefreshState.lastErrorIsNetwork = error?.isNetworkFailure == true
         if error?.isRateLimited == true {
             antigravityRefreshState.backoffUntil = Date().addingTimeInterval(rateLimitBackoff)
         }
@@ -1557,7 +1569,7 @@ final class AppState {
         defer { cursorRefreshState.inFlight = false }
 
         guard let session = cursorAccount else {
-            markCursorFailure(cursorError ?? "no Cursor account")
+            markCursorFailure(noAccountMessage)
             return
         }
 
@@ -1565,7 +1577,10 @@ final class AppState {
         switch initial {
         case .success(let snapshot):
             storeCursor(snapshot: snapshot, source: .api)
-        case .failure(let error) where error.httpStatusCode == 401:
+        // 代理 / 网关返回的 401 页面不是 Cursor 在说"登录失效",重读本地凭据没有意义,
+        // 直接按原样报错(userMessage 会说明是被拦截)。
+        case .failure(let error) where error.httpStatusCode == 401
+            && !error.looksLikeInterceptedResponse:
             // Cursor token 由 Cursor.app 持有。401 后只允许重读一次本地登录态；
             // 仅当 access token 确实变化时才重试，绝不调用 OAuth refresh。
             let previousToken = session.accessToken
@@ -1573,7 +1588,7 @@ final class AppState {
             guard let reloaded = cursorAccount,
                   reloaded.accessToken != previousToken
             else {
-                markCursorFailure(cursorError ?? error.description, error: error)
+                markCursorFailure(error.userMessage, error: error)
                 return
             }
 
@@ -1582,10 +1597,10 @@ final class AppState {
             case .success(let snapshot):
                 storeCursor(snapshot: snapshot, source: .api)
             case .failure(let retryError):
-                markCursorFailure(retryError.description, error: retryError)
+                markCursorFailure(retryError.userMessage, error: retryError)
             }
         case .failure(let error):
-            markCursorFailure(error.description, error: error)
+            markCursorFailure(error.userMessage, error: error)
         }
     }
 
@@ -1612,7 +1627,7 @@ final class AppState {
         defer { commandCodeRefreshState.inFlight = false }
 
         guard let session = commandCodeAccount else {
-            markCommandCodeFailure(commandCodeError ?? "未检测到 Command Code 账号")
+            markCommandCodeFailure(noAccountMessage)
             return
         }
 
@@ -1628,11 +1643,17 @@ final class AppState {
                 commandCodeAccount = current
             }
             storeCommandCode(snapshot: response.snapshot, source: .api)
-        case .failure(let error) where error.httpStatusCode == 401 || error.httpStatusCode == 403:
+        // 被代理 / 网关拦截时同样会拿到 401 / 403,但那说明请求根本没到 API,
+        // 不能据此告诉用户"凭据已失效"让他去重新登录。
+        case .failure(let error) where (error.httpStatusCode == 401 || error.httpStatusCode == 403)
+            && !error.looksLikeInterceptedResponse:
             let previousToken = session.accessToken
             await loadCommandCode()
             guard let reloaded = commandCodeAccount, reloaded.accessToken != previousToken else {
-                markCommandCodeFailure("凭据已失效", error: error)
+                markCommandCodeFailure(
+                    tr("Sign-in is no longer valid — sign in again", "登录已失效,请重新登录"),
+                    error: error
+                )
                 return
             }
             let retried = await CommandCodeQuotaClient.fetch(accessToken: reloaded.accessToken)
@@ -1648,10 +1669,10 @@ final class AppState {
                 }
                 storeCommandCode(snapshot: response.snapshot, source: .api)
             case .failure(let retryError):
-                markCommandCodeFailure(retryError.description, error: retryError)
+                markCommandCodeFailure(retryError.userMessage, error: retryError)
             }
         case .failure(let error):
-            markCommandCodeFailure(error.description, error: error)
+            markCommandCodeFailure(error.userMessage, error: error)
         }
     }
 
@@ -1705,7 +1726,8 @@ final class AppState {
     private func loadClaudeCLIFallback(apiError: QuotaError) async {
         let now = Date()
         if let claudeFallbackBackoffUntil, claudeFallbackBackoffUntil > now {
-            markClaudeFailure("\(apiError.description); cli fallback cooling down until \(claudeFallbackBackoffUntil)")
+            // CLI 兜底在冷却中是内部实现细节;用户要看的是最初那次取数为什么失败。
+            markClaudeFailure(apiError.userMessage, error: apiError)
             return
         }
 
@@ -1781,6 +1803,7 @@ final class AppState {
         codexQuotaError = nil
         codexRefreshState.lastSuccessAt = updatedAt
         codexRefreshState.lastError = nil
+        codexRefreshState.lastErrorIsNetwork = false
         codexRefreshState.backoffUntil = nil
         codexRefreshState.source = source
         quotaCache.codex = QuotaCacheRecord(snapshot: mergedSnapshot, source: source, updatedAt: updatedAt)
@@ -1803,6 +1826,7 @@ final class AppState {
         claudeQuotaError = nil
         claudeRefreshState.lastSuccessAt = updatedAt
         claudeRefreshState.lastError = nil
+        claudeRefreshState.lastErrorIsNetwork = false
         if source == .api {
             claudeRefreshState.backoffUntil = nil
         }
@@ -1830,6 +1854,7 @@ final class AppState {
         cursorQuotaError = nil
         cursorRefreshState.lastSuccessAt = updatedAt
         cursorRefreshState.lastError = nil
+        cursorRefreshState.lastErrorIsNetwork = false
         cursorRefreshState.backoffUntil = nil
         cursorRefreshState.source = source
         quotaCache.cursor = QuotaCacheRecord(
@@ -1849,6 +1874,7 @@ final class AppState {
         commandCodeQuotaError = nil
         commandCodeRefreshState.lastSuccessAt = updatedAt
         commandCodeRefreshState.lastError = nil
+        commandCodeRefreshState.lastErrorIsNetwork = false
         commandCodeRefreshState.backoffUntil = nil
         commandCodeRefreshState.source = source
         quotaCache.commandCode = QuotaCacheRecord(
@@ -1863,6 +1889,7 @@ final class AppState {
     private func markCodexFailure(_ message: String, error: QuotaError? = nil) {
         codexQuotaError = message
         codexRefreshState.lastError = message
+        codexRefreshState.lastErrorIsNetwork = error?.isNetworkFailure == true
         if error?.isRateLimited == true {
             codexRefreshState.backoffUntil = Date().addingTimeInterval(rateLimitBackoff)
         }
@@ -1871,6 +1898,7 @@ final class AppState {
     private func markClaudeFailure(_ message: String, error: QuotaError? = nil) {
         claudeQuotaError = message
         claudeRefreshState.lastError = message
+        claudeRefreshState.lastErrorIsNetwork = error?.isNetworkFailure == true
         if error?.isRateLimited == true {
             claudeRefreshState.backoffUntil = Date().addingTimeInterval(rateLimitBackoff)
         }
@@ -1879,6 +1907,7 @@ final class AppState {
     private func markCursorFailure(_ message: String, error: QuotaError? = nil) {
         cursorQuotaError = message
         cursorRefreshState.lastError = message
+        cursorRefreshState.lastErrorIsNetwork = error?.isNetworkFailure == true
         if error?.isRateLimited == true {
             cursorRefreshState.backoffUntil = Date().addingTimeInterval(rateLimitBackoff)
         }
@@ -1887,13 +1916,27 @@ final class AppState {
     private func markCommandCodeFailure(_ message: String, error: QuotaError? = nil) {
         commandCodeQuotaError = message
         commandCodeRefreshState.lastError = message
+        commandCodeRefreshState.lastErrorIsNetwork = error?.isNetworkFailure == true
         if error?.isRateLimited == true {
             commandCodeRefreshState.backoffUntil = Date().addingTimeInterval(rateLimitBackoff)
         }
     }
 
     private func backoffMessage(until: Date) -> String {
-        "rate limited; retry in \(relativeAge(until: until))"
+        let remaining = relativeAge(until: until)
+        // 不说"限流":那是服务端视角的词。用户看到的事实是请求太频繁、正在等。
+        return tr(
+            "Too many requests · retrying in \(remaining)",
+            "请求过于频繁 · \(remaining) 后重试"
+        )
+    }
+
+    /// 未检测到该服务的本地登录态。凭据加载的具体技术原因(文件缺失 / JSON 损坏 /
+    /// 钥匙串不可用)留在 `xxxError` 与日志里,设置页才展开,Popover 只说结论。
+    /// 说"未找到登录信息"而不是"未登录":用户可能确实在那个 CLI 里登录过,
+    /// 只是 cc-bar 这边读不到,前者才是准确的描述。
+    private var noAccountMessage: String {
+        tr("No sign-in found", "未找到登录信息")
     }
 
     private func logCredentialSummary() {

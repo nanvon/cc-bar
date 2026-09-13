@@ -101,7 +101,11 @@ func formatResetAltCompact(_ resetsAt: Date?, now: Date = Date()) -> String {
 /// 供 formatResetCompact 与 formatResetAltCompact 共享。
 @MainActor
 private func compactRelativeReset(_ resetsAt: Date, now: Date) -> String {
-    let seconds = max(0, Int(resetsAt.timeIntervalSince(now)))
+    let seconds = Int(resetsAt.timeIntervalSince(now))
+    // 重置点已经过去却还在展示,说明手上这份快照没能更新(断网时展示缓存最常见)。
+    // 旧实现 max(0,...) 把它显示成 "<1m",看起来像"马上就要重置",
+    // 而那个时刻其实早就过了。
+    if seconds <= 0 { return tr("due", "已到期") }
     if seconds < 60 { return "<1m" }
     let minutes = seconds / 60
     if minutes < 60 { return "\(minutes)m" }
@@ -118,7 +122,9 @@ private func compactRelativeReset(_ resetsAt: Date, now: Date) -> String {
 /// 相对时长文案,如 "4h 37m 后重置" / "resets in 4h 37m"。供 formatResetHint 使用。
 @MainActor
 private func relativeResetHint(_ resetsAt: Date, now: Date) -> String {
-    let seconds = max(0, Int(resetsAt.timeIntervalSince(now)))
+    let seconds = Int(resetsAt.timeIntervalSince(now))
+    // 同 compactRelativeReset:过期不伪装成"即将重置"。
+    if seconds <= 0 { return tr("reset overdue", "重置时间已过") }
     if seconds < 60 { return tr("resets in <1m", "<1m 后重置") }
     let minutes = seconds / 60
     if minutes < 60 { return tr("resets in \(minutes)m", "\(minutes)m 后重置") }

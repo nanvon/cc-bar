@@ -190,13 +190,19 @@ nonisolated enum CodexTokenRefresher {
         do {
             (data, resp) = try await URLSession.shared.data(for: req)
         } catch {
-            throw QuotaError.tokenRefreshFailed("transport: \(error)")
+            throw QuotaError.from(transport: error)
         }
         guard let http = resp as? HTTPURLResponse else {
             throw QuotaError.tokenRefreshFailed("non-http response")
         }
         guard (200..<300).contains(http.statusCode) else {
             let msg = String(data: data, encoding: .utf8) ?? ""
+            // 代理 / 网关的拦截页也会带着 4xx 回来,但那不是 OAuth 端点在拒绝我们,
+            // 报"令牌刷新失败"会把用户引向错误的方向。只有响应体像 HTML 页面时才
+            // 转成 `.http` 让文案说清是拦截;真实的 OAuth 错误(invalid_grant、429 等
+            // JSON 响应)保持 `.tokenRefreshFailed`,退避行为与文案都不变。
+            let asHTTP = QuotaError.http(http.statusCode, msg)
+            if asHTTP.looksLikeInterceptedResponse { throw asHTTP }
             throw QuotaError.tokenRefreshFailed("http \(http.statusCode): \(msg)")
         }
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {

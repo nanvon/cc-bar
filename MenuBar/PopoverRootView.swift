@@ -55,7 +55,7 @@ struct PopoverRootView: View {
                 Circle()
                     .fill(state.color)
                     .frame(width: 7, height: 7)
-                    .help(state.tooltip)
+                    .help(headerStateTooltip(state))
                     .padding(.trailing, 4)
             }
 
@@ -101,20 +101,41 @@ struct PopoverRootView: View {
     }
 
     /// `now` 由 header 的 TimelineView 提供,让"Xs 前已刷新"实时滚动。
+    ///
+    /// 刷新失败时必须说出来。旧实现只要有过一次成功就报"X 前已刷新",于是断网时
+    /// header 说"刚刷新过"、下面每个服务却挂着报错,自相矛盾;而 `lastSuccessAt`
+    /// 冷启动是从缓存的 `updatedAt` 恢复的,完全离线启动也会显示"X 前已刷新"。
     private func headerSubtitle(now: Date) -> String {
-        let apps = enabledPrimaryApps
-        let latest = apps.compactMap {
-            appState.refreshState(for: $0).lastSuccessAt
-        }.max()
+        let states = enabledPrimaryApps.map { appState.refreshState(for: $0) }
+        let latest = states.compactMap(\.lastSuccessAt).max()
+        let failing = states.contains { $0.lastError != nil }
+        let networkDown = Self.allFailuresAreNetwork(states)
 
         if let latest {
             let age = Self.relativeAge(from: latest, now: now)
+            if failing {
+                return networkDown
+                    ? tr("network unavailable · data from \(age) ago", "网络不可用 · \(age) 前的数据")
+                    : tr("refresh failed · data from \(age) ago", "刷新失败 · \(age) 前的数据")
+            }
             return tr("refreshed \(age) ago", "\(age) 前已刷新")
         }
-        if apps.contains(where: { appState.quotaError(for: $0) != nil }) {
-            return tr("refresh failed", "刷新失败")
+        if failing {
+            return networkDown ? tr("network unavailable", "网络不可用") : tr("refresh failed", "刷新失败")
         }
         return tr("waiting…", "等待数据")
+    }
+
+    /// 正在失败的服务是否**全部**败在网络上。
+    ///
+    /// 网络不可用是全局事实,归 header 表达;凭据过期一类是单个服务的事实,留在各自的
+    /// block 里。这样断网时 header 说"网络不可用"、Claude 块说"凭据已过期",两条各自
+    /// 成立,合起来用户就知道根因——不必把网络状态耦合进每个 Provider 的错误文案。
+    ///
+    /// 判定要求"全部":只要有一个服务败在别的原因上(比如 401),就说明网络是通的。
+    private static func allFailuresAreNetwork(_ states: [QuotaRefreshState]) -> Bool {
+        let failing = states.filter { $0.lastError != nil }
+        return !failing.isEmpty && failing.allSatisfy(\.lastErrorIsNetwork)
     }
 
     // MARK: Content
@@ -220,10 +241,11 @@ struct PopoverRootView: View {
         )
     }
 
+    /// 存进 `AppState` 的已经是 `QuotaError.userMessage`——一句人话、双语、不含技术串,
+    /// 所以这里不再需要把 Cursor / Command Code 抹成通用的"刷新失败"
+    /// (那样断网时它们只会说"刷新失败",看不出是网络问题还是账号问题)。
     private func providerDisplayError(for app: QuotaApp) -> String? {
-        guard let error = appState.quotaError(for: app) else { return nil }
-        guard app == .cursor || app == .commandCode else { return error }
-        return tr("refresh failed", "刷新失败")
+        appState.quotaError(for: app)
     }
 
     private func weekSpend(for app: QuotaApp) -> Decimal? {
@@ -258,31 +280,70 @@ struct PopoverRootView: View {
 
     private func serviceStatus(for app: QuotaApp) -> ServiceStatus? {
         guard SettingsStore.shared.showServiceStatus else { return nil }
-        return switch app {
+        let status: ServiceStatus? = switch app {
         case .codex: appState.codexServiceStatus
         case .claude: appState.claudeServiceStatus
         case .cursor: appState.cursorServiceStatus
         case .antigravity, .commandCode: nil
         }
+        guard let status else { return nil }
+        // 本机连不上 statuspage 时旧快照仍被保留(刻意的,别的信息还能用),
+        // 但它已经不代表"现在"的服务状态了,不能继续拿一个陈旧的绿点说"服务正常"。
+        guard !appState.serviceStatusUnreachable else {
+            return ServiceStatus(
+                indicator: .unknown,
+                description: nil,
+                updatedAt: status.updatedAt,
+                fetchedAt: status.fetchedAt
+            )
+        }
+        return status
     }
 
     // MARK: Header state (live / stale / offline)
 
+    /// 状态点。判定同时看**数据新鲜度**和**当前是否在失败**。
+    ///
+    /// 旧实现只要有 `lastSuccessAt` 就纯按 age 判定,完全忽略 `lastError`:默认 2 分钟
+    /// 间隔下断网后仍有 3 分钟显示绿色"在线",6 分钟后才变红。`lastError` 在每次成功时
+    /// 由 `storeXxx` 清空,所以它非空就等于"最近一次尝试没成功"。
     private var headerState: CCRefreshState? {
         let settings = SettingsStore.shared
         let states = enabledPrimaryApps.map { appState.refreshState(for: $0) }
+        guard !states.isEmpty else { return nil }
         let latest = states.compactMap(\.lastSuccessAt).max()
-        let hasError = states.contains(where: { $0.lastError != nil })
+        let failing = states.contains { $0.lastError != nil }
 
         guard let latest else {
-            return hasError ? .offline : nil
+            return failing ? .offline : nil
         }
 
         let interval = settings.quotaInterval.seconds ?? 300
         let age = Date().timeIntervalSince(latest)
+        // 正在失败就不给绿灯:数据还新是"停止更新"(橙),已经旧了就是离线(红)。
+        if failing {
+            return age <= interval * 3 ? .stale : .offline
+        }
         if age <= interval * 1.5 { return .live }
         if age <= interval * 3 { return .stale }
         return .offline
+    }
+
+    /// 状态点 tooltip。失败态用专门文案,而不是只说"数据陈旧"——用户需要知道
+    /// 看到的数字是上一次成功留下的,不是现在的。
+    private func headerStateTooltip(_ state: CCRefreshState) -> String {
+        let states = enabledPrimaryApps.map { appState.refreshState(for: $0) }
+        guard states.contains(where: { $0.lastError != nil }) else { return state.tooltip }
+        if Self.allFailuresAreNetwork(states) {
+            return tr(
+                "Network unavailable — showing the last data that came through",
+                "网络不可用,显示的是上次成功取到的数据"
+            )
+        }
+        return tr(
+            "Refresh failing — showing the last data that came through",
+            "刷新失败,显示的是上次成功取到的数据"
+        )
     }
 
     private var enabledPrimaryApps: [QuotaApp] {
@@ -406,7 +467,9 @@ private struct ServiceBlockView: View {
 
             Spacer(minLength: 0)
 
-            if let status = serviceStatus, status.indicator != .unknown {
+            // `.unknown` 也要显示(灰点):它现在还承担"本机拉不到 statuspage"这一档,
+            // 直接隐藏会让用户以为功能没了,而继续显示绿点则是在说一件不成立的事。
+            if let status = serviceStatus {
                 Circle()
                     .fill(status.indicator.dotColor)
                     .frame(width: 6, height: 6)
@@ -415,12 +478,20 @@ private struct ServiceBlockView: View {
         }
     }
 
+    /// 时间一律用 `fetchedAt`(本机上次成功拉到 statuspage 的时刻),不用 `updatedAt`
+    /// (statuspage 页面自己的更新时间)。用户要判断的是"这个状态有多新",
+    /// 而断网时后者根本不动,会让陈旧数据看起来仍然及时。
     private func serviceStatusTooltip(_ status: ServiceStatus) -> String {
+        let age = PopoverRootView.relativeAge(from: status.fetchedAt)
+        if status.indicator == .unknown {
+            return tr(
+                "Couldn't check service status · last updated \(age) ago",
+                "服务状态获取失败 · \(age) 前的数据"
+            )
+        }
         let trimmed = status.description?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let head = trimmed.isEmpty ? status.indicator.label : trimmed
-        guard let updatedAt = status.updatedAt else { return head }
-        let age = PopoverRootView.relativeAge(from: updatedAt)
-        return tr("\(head) · updated \(age) ago", "\(head) · \(age) 前更新")
+        return tr("\(head) · checked \(age) ago", "\(head) · \(age) 前获取")
     }
 
     private var bodyRow: some View {

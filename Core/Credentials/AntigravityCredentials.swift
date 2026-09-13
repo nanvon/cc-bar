@@ -379,7 +379,7 @@ nonisolated enum AntigravityCredentials {
             do {
                 (data, resp) = try await URLSession.shared.data(for: req)
             } catch {
-                lastErr = QuotaError.tokenRefreshFailed("transport: \(error)")
+                lastErr = QuotaError.from(transport: error)
                 continue
             }
             guard let http = resp as? HTTPURLResponse else {
@@ -402,7 +402,12 @@ nonisolated enum AntigravityCredentials {
             }
             let msg = String(data: data, encoding: .utf8) ?? ""
             // 401/400 且提示 client_secret 缺失时尝试下一候选，其余 4xx 直接重试下一候选
-            lastErr = QuotaError.tokenRefreshFailed("http \(http.statusCode): \(msg) [client=\(cand.id.prefix(8))...]")
+            // 代理 / 网关拦截页同样会带 4xx 回来，但换 client 候选救不了它，
+            // 文案也不该说成"令牌刷新失败"——同 CodexTokenRefresher，只按响应体形状区分。
+            let asHTTP = QuotaError.http(http.statusCode, msg)
+            lastErr = asHTTP.looksLikeInterceptedResponse
+                ? asHTTP
+                : QuotaError.tokenRefreshFailed("http \(http.statusCode): \(msg) [client=\(cand.id.prefix(8))...]")
             // 若是明确的 client mismatch，继续下一候选；否则也继续（Gemini/Antigravity 需遍历）
             continue
         }

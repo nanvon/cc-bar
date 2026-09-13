@@ -17,7 +17,7 @@ nonisolated enum ClaudeQuotaClient {
 
         let data: Data, resp: URLResponse
         do { (data, resp) = try await URLSession.shared.data(for: req) }
-        catch { return .failure(.transport("\(error)")) }
+        catch { return .failure(.from(transport: error)) }
         guard let http = resp as? HTTPURLResponse else {
             return .failure(.transport("non-http"))
         }
