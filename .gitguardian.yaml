@@ -1,0 +1,11 @@
+# GitGuardian 扫描配置
+#
+# CCBarTests/RedactTests.swift 是脱敏模块 Redact.scrub() 的单元测试，
+# 里面的 JWT / Bearer / sk-ant- 字符串是喂给正则的假样本（JWT 用的是
+# jwt.io 首页的公开示例 token），不是真实凭据。脱敏正则的测试必须用
+# 真实形态的字符串，所以这些样本保留原样，改为在此处忽略。
+version: 2
+
+secret:
+  ignored-paths:
+    - "CCBarTests/**"
