@@ -38,6 +38,12 @@ nonisolated private struct PricedPeriod: Sendable {
     let price: ModelPrice
 }
 
+/// 阶梯价模型的限时覆盖：从 `from` 这天（UTC 0 点）起整套短/长上下文价改为 `tiers`。
+nonisolated private struct TieredPricedPeriod: Sendable {
+    let from: Date
+    let tiers: ContextPriceTiers
+}
+
 nonisolated enum Pricing {
     /// 价格表与 cc-switch `seed_model_pricing` / CodexBar `CostUsagePricing` 对齐（2026 上半年价位）。
     /// 命中不到时返回 nil。键为归一化后的模型名（循环剥 provider 前缀 `openai-codex/` / `openai/` /
@@ -45,9 +51,13 @@ nonisolated enum Pricing {
     /// 和末尾 `-YYYYMMDD` / `-YYYY-MM-DD` 日期段）。
     static let table: [String: ModelPrice] = [
         // —— Claude 4.x / 5.x 系（input 已不含 cache_read）——
-        "claude-fable-5.1":  .init(input: 10,  output: 50,  cacheRead: 1.00, cacheCreation: 12.50),
-        "claude-fable-5-1":  .init(input: 10,  output: 50,  cacheRead: 1.00, cacheCreation: 12.50),
+        // Fable 5.1 自发布起缓存读取即为 0.025x 基础输入价（$0.25）；Fable 5 仍为 0.1x。
+        "claude-fable-5.1":  .init(input: 10,  output: 50,  cacheRead: 0.25, cacheCreation: 12.50),
+        "claude-fable-5-1":  .init(input: 10,  output: 50,  cacheRead: 0.25, cacheCreation: 12.50),
         "claude-fable-5":    .init(input: 10,  output: 50,  cacheRead: 1.00, cacheCreation: 12.50),
+        // Opus 5.5 缓存读取为 0.05x 基础输入价。
+        "claude-opus-5.5":   .init(input: 4,   output: 20,  cacheRead: 0.20, cacheCreation: 5),
+        "claude-opus-5-5":   .init(input: 4,   output: 20,  cacheRead: 0.20, cacheCreation: 5),
         "claude-opus-5":     .init(input: 5,   output: 25,  cacheRead: 0.50, cacheCreation: 6.25),
         "claude-opus-4-8":   .init(input: 5,   output: 25,  cacheRead: 0.50, cacheCreation: 6.25),
         "claude-opus-4-7":   .init(input: 5,   output: 25,  cacheRead: 0.50, cacheCreation: 6.25),
@@ -68,7 +78,10 @@ nonisolated enum Pricing {
         "claude-3-5-haiku":  .init(input: 0.8, output: 4,   cacheRead: 0.08, cacheCreation: 1.0),
         "claude-3-opus":     .init(input: 15,  output: 75,  cacheRead: 1.50, cacheCreation: 18.75),
 
-        // —— Codex / GPT-5 系（input 含 cache_read，调用侧已扣 billable）。
+        // —— Codex / GPT-6、GPT-5 系（input 含 cache_read，调用侧已扣 billable）。
+        "gpt-6-astra":       .init(input: 10,   output: 50,  cacheRead: 1,    cacheCreation: 12.5),
+        "gpt-6-sol":         .init(input: 2,    output: 10,  cacheRead: 0.20, cacheCreation: 2.5),
+        "gpt-6-luna":        .init(input: 0.10, output: 0.50, cacheRead: 0.01, cacheCreation: 0.125),
         "gpt-5.6":           .init(input: 5,    output: 30,  cacheRead: 0.50, cacheCreation: 6.25),
         "gpt-5.6-sol":       .init(input: 5,    output: 30,  cacheRead: 0.50, cacheCreation: 6.25),
         "gpt-5.6-terra":     .init(input: 2,    output: 12,  cacheRead: 0.20, cacheCreation: 2.5),
@@ -128,6 +141,9 @@ nonisolated enum Pricing {
     /// Fast / Priority 的离线兜底表。当前在线目录可提供部分 Fast 价格；
     /// 历史/特殊规则优先本地，其余型号在线优先、命中不到再回落这里。
     private static let codexFastPrices: [String: ModelPrice] = [
+        "gpt-6-astra":   .init(input: 20,   output: 100, cacheRead: 2,    cacheCreation: 25),
+        "gpt-6-sol":     .init(input: 4,    output: 20,  cacheRead: 0.4,  cacheCreation: 5),
+        "gpt-6-luna":    .init(input: 0.2,  output: 1,   cacheRead: 0.02, cacheCreation: 0.25),
         "gpt-5.6":       .init(input: 10,   output: 60,  cacheRead: 1,    cacheCreation: 12.5),
         "gpt-5.6-sol":   .init(input: 10,   output: 60,  cacheRead: 1,    cacheCreation: 12.5),
         "gpt-5.6-terra": .init(input: 4,    output: 24,  cacheRead: 0.4,  cacheCreation: 5),
@@ -139,6 +155,8 @@ nonisolated enum Pricing {
     ]
 
     private static let claudeFastPrices: [String: ModelPrice] = [
+        "claude-opus-5.5": .init(input: 8,  output: 40,  cacheRead: 0.4, cacheCreation: 10),
+        "claude-opus-5-5": .init(input: 8,  output: 40,  cacheRead: 0.4, cacheCreation: 10),
         "claude-opus-5":   .init(input: 10, output: 50,  cacheRead: 1, cacheCreation: 12.5),
         "claude-opus-4-8": .init(input: 10, output: 50,  cacheRead: 1, cacheCreation: 12.5),
         // 仅用于 2026-07-24 移除 Fast 前产生的历史日志计价。
@@ -158,6 +176,9 @@ nonisolated enum Pricing {
 
     /// Fast 的计费等效 Token 倍率。Codex 使用 ChatGPT credit 倍率；Claude 使用 Fast/Standard API 价比。
     private static let codexFastMultipliers: [String: Decimal] = [
+        "gpt-6-astra": 2.5,
+        "gpt-6-sol": 2.5,
+        "gpt-6-luna": 2.5,
         "gpt-5.6": 2.5,
         "gpt-5.6-sol": 2.5,
         "gpt-5.6-terra": 2.5,
@@ -169,6 +190,8 @@ nonisolated enum Pricing {
     ]
 
     private static let claudeFastMultipliers: [String: Decimal] = [
+        "claude-opus-5.5": 2,
+        "claude-opus-5-5": 2,
         "claude-opus-5": 2,
         "claude-opus-4-8": 2,
         "claude-opus-4-7": 6,
@@ -179,10 +202,26 @@ nonisolated enum Pricing {
     /// 5 分钟写入继续使用各模型 `ModelPrice.cacheCreation`（基础输入价的 1.25 倍）。
     private static let claudeCacheCreation1hMultiplier: Decimal = 2
 
-    /// OpenAI Standard API 的 GPT-5.6 / GPT-5.5 上下文阶梯价（USD / 百万 token）。
+    /// OpenAI Standard API 的 GPT-6 / GPT-5.6 / GPT-5.5 上下文阶梯价（USD / 百万 token）。
     /// 完整输入严格超过 272K 时，该次请求的输入、缓存读写和输出全部使用长上下文费率。
     /// `gpt-5.6` 是 Sol 的别名；Pro 是 reasoning.mode，不是独立 model slug。
+    /// GPT-5.6 Sol 这里是 2026-08-21 促销前的原价，促销价见 `timedContextPriceTiers`。
     private static let contextPriceTiers: [String: ContextPriceTiers] = [
+        "gpt-6-astra": .init(
+            longContextThreshold: 272_000,
+            shortContext: .init(input: 10, output: 50, cacheRead: 1, cacheCreation: 12.5),
+            longContext: .init(input: 20, output: 75, cacheRead: 2, cacheCreation: 25)
+        ),
+        "gpt-6-sol": .init(
+            longContextThreshold: 272_000,
+            shortContext: .init(input: 2, output: 10, cacheRead: 0.2, cacheCreation: 2.5),
+            longContext: .init(input: 4, output: 15, cacheRead: 0.4, cacheCreation: 5)
+        ),
+        "gpt-6-luna": .init(
+            longContextThreshold: 272_000,
+            shortContext: .init(input: 0.1, output: 0.5, cacheRead: 0.01, cacheCreation: 0.125),
+            longContext: .init(input: 0.2, output: 0.75, cacheRead: 0.02, cacheCreation: 0.25)
+        ),
         "gpt-5.6": .init(
             longContextThreshold: 272_000,
             shortContext: .init(input: 5, output: 30, cacheRead: 0.50, cacheCreation: 6.25),
@@ -215,6 +254,36 @@ nonisolated enum Pricing {
         )
     ]
 
+    /// GPT-5.6 Sol 促销价：OpenAI 2026-08-21 起降为 $4 / $20，官方称至少持续到 2026-11-21。
+    /// 促销结束且官方公布后续价格后，需要在这里追加新的分段。
+    private static let gpt56SolPromoStart = utcDay(year: 2026, month: 8, day: 21)
+
+    private static let gpt56SolPromoTiers = ContextPriceTiers(
+        longContextThreshold: 272_000,
+        shortContext: .init(input: 4, output: 20, cacheRead: 0.4, cacheCreation: 5),
+        longContext: .init(input: 8, output: 30, cacheRead: 0.8, cacheCreation: 10)
+    )
+
+    /// 阶梯价模型的限时覆盖；每个 key 必须同时在 `contextPriceTiers` 提供最早时段的阶梯价，
+    /// 每条按 `from` 升序排列，取用量记录日期满足条件里最晚的一档。
+    private static let timedContextPriceTiers: [String: [TieredPricedPeriod]] = [
+        "gpt-5.6": [.init(from: gpt56SolPromoStart, tiers: gpt56SolPromoTiers)],
+        "gpt-5.6-sol": [.init(from: gpt56SolPromoStart, tiers: gpt56SolPromoTiers)]
+    ]
+
+    /// Codex Fast 的限时覆盖；每个 key 必须同时在 `codexFastPrices` 提供最早时段的价格。
+    /// 命中这里的模型不读远端 Fast 价，因为远端只有当前单一价，会改写促销前的历史用量。
+    private static let timedCodexFastPrices: [String: [PricedPeriod]] = [
+        "gpt-5.6": [.init(from: gpt56SolPromoStart, price: .init(input: 8, output: 40, cacheRead: 0.8, cacheCreation: 10))],
+        "gpt-5.6-sol": [.init(from: gpt56SolPromoStart, price: .init(input: 8, output: 40, cacheRead: 0.8, cacheCreation: 10))]
+    ]
+
+    private static func utcDay(year: Int, month: Int, day: Int) -> Date {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        return calendar.date(from: DateComponents(year: year, month: month, day: day))!
+    }
+
     /// 已审计的固定本地价；即使远端目录返回同名模型，也不能覆盖。
     private static let fixedLocalOverrideKeys: Set<String> = [
         "gpt-5.5-pro",
@@ -240,6 +309,14 @@ nonisolated enum Pricing {
             fixedLocalOverrideKeys.allSatisfy { table[$0] != nil },
             "fixedLocalOverrideKeys 中的模型必须在 Pricing.table 中提供固定价"
         )
+        precondition(
+            timedContextPriceTiers.keys.allSatisfy { contextPriceTiers[$0] != nil },
+            "timedContextPriceTiers 中的模型必须在 contextPriceTiers 中提供基础阶梯价"
+        )
+        precondition(
+            timedCodexFastPrices.keys.allSatisfy { codexFastPrices[$0] != nil },
+            "timedCodexFastPrices 中的模型必须在 codexFastPrices 中提供基础价"
+        )
         return Set(contextPriceTiers.keys)
             .union(timedOverrides.keys)
             .union(fixedLocalOverrideKeys)
@@ -254,7 +331,10 @@ nonisolated enum Pricing {
         at date: Date,
         inputTotal: Int
     ) -> ModelPrice? {
-        if let tiers = contextPriceTiers[key] {
+        if var tiers = contextPriceTiers[key] {
+            for period in timedContextPriceTiers[key] ?? [] where period.from <= date {
+                tiers = period.tiers
+            }
             return tiers.rates(for: inputTotal)
         }
         if let overrides = timedOverrides[key] {
@@ -296,6 +376,13 @@ nonisolated enum Pricing {
             case .codex:
                 // OpenAI Priority 官方价格明确排除 >272K 长上下文；不能用 Standard 长上下文价猜测。
                 guard inputTotal <= 272_000 else { return nil }
+                if let periods = timedCodexFastPrices[key] {
+                    var chosen = codexFastPrices[key]
+                    for period in periods where period.from <= date {
+                        chosen = period.price
+                    }
+                    return chosen
+                }
                 return PricingCatalogStore.shared.rate(for: key, app: app, speed: .fast)
                     ?? codexFastPrices[key]
             case .claude:
@@ -608,6 +695,21 @@ nonisolated enum Pricing {
             let long = tiers.longContext
             return "\(key):\(tiers.longContextThreshold):\(short.input)/\(short.output)/\(short.cacheRead)/\(short.cacheCreation):\(long.input)/\(long.output)/\(long.cacheRead)/\(long.cacheCreation)"
         }.joined(separator: ";")
+        let timedTierBody = timedContextPriceTiers.keys.sorted().map { key -> String in
+            let parts = timedContextPriceTiers[key]!.sorted { $0.from < $1.from }.map { period -> String in
+                let short = period.tiers.shortContext
+                let long = period.tiers.longContext
+                return "\(period.from.timeIntervalSince1970)=\(period.tiers.longContextThreshold):\(short.input)/\(short.output)/\(short.cacheRead)/\(short.cacheCreation):\(long.input)/\(long.output)/\(long.cacheRead)/\(long.cacheCreation)"
+            }.joined(separator: ",")
+            return "\(key)@\(parts)"
+        }.joined(separator: ";")
+        let timedFastBody = timedCodexFastPrices.keys.sorted().map { key -> String in
+            let parts = timedCodexFastPrices[key]!.sorted { $0.from < $1.from }.map { period -> String in
+                let p = period.price
+                return "\(period.from.timeIntervalSince1970)=\(p.input)/\(p.output)/\(p.cacheRead)/\(p.cacheCreation)"
+            }.joined(separator: ",")
+            return "codex:\(key)@\(parts)"
+        }.joined(separator: ";")
         let overrideBody = timedOverrides.keys.sorted().map { key -> String in
             let parts = timedOverrides[key]!.sorted { $0.from < $1.from }.map { period -> String in
                 let p = period.price
@@ -629,6 +731,7 @@ nonisolated enum Pricing {
         let remoteBody = knownUsage.sorted { $0.persistedKey < $1.persistedKey }.compactMap { usage -> String? in
             if usage.speed == .standard, localOverrideKeys.contains(usage.model) { return nil }
             if usage.speed == .fast, fixedFastLocalOverrideKeys.contains(usage.model) { return nil }
+            if usage.speed == .fast, usage.app == .codex, timedCodexFastPrices[usage.model] != nil { return nil }
             guard let rate = PricingCatalogStore.shared.rate(
                 for: usage.model,
                 app: usage.app,
@@ -636,7 +739,7 @@ nonisolated enum Pricing {
             ) else { return nil }
             return "\(usage.persistedKey):\(rate.input)/\(rate.output)/\(rate.cacheRead)/\(rate.cacheCreation)"
         }.joined(separator: ";")
-        let digest = SHA256.hash(data: Data("\(baseBody)|\(tierBody)|\(overrideBody)|\(fixedOverrideBody)|\(fixedFastOverrideBody)|\(fastPriceBody)|\(fastMultiplierBody)|\(cacheRuleBody)|\(remoteBody)".utf8))
+        let digest = SHA256.hash(data: Data("\(baseBody)|\(tierBody)|\(timedTierBody)|\(timedFastBody)|\(overrideBody)|\(fixedOverrideBody)|\(fixedFastOverrideBody)|\(fastPriceBody)|\(fastMultiplierBody)|\(cacheRuleBody)|\(remoteBody)".utf8))
         return digest.map { String(format: "%02x", $0) }.joined()
     }
 

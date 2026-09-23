@@ -3335,6 +3335,95 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertEqual(pro.cacheRead, 3)
     }
 
+    func testGPT56SolPromoPricingOnlyAppliesFromEffectiveDate() throws {
+        let beforePromo = ISO8601DateFormatter().date(from: "2026-08-20T23:59:59Z")!
+        let promo = ISO8601DateFormatter().date(from: "2026-08-21T00:00:00Z")!
+
+        for model in ["gpt-5.6", "gpt-5.6-sol"] {
+            let oldShort = try XCTUnwrap(Pricing.costBreakdown(
+                app: .codex, model: model, speed: .standard,
+                input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheCreation: 1_000_000,
+                at: beforePromo, inputTotal: 100_000
+            ))
+            XCTAssertEqual(oldShort, CostBreakdown(input: 5, output: 30, cacheRead: 0.5, cacheCreation: 6.25))
+
+            let promoShort = try XCTUnwrap(Pricing.costBreakdown(
+                app: .codex, model: model, speed: .standard,
+                input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheCreation: 1_000_000,
+                at: promo, inputTotal: 100_000
+            ))
+            XCTAssertEqual(promoShort, CostBreakdown(input: 4, output: 20, cacheRead: 0.4, cacheCreation: 5))
+
+            let promoLong = try XCTUnwrap(Pricing.costBreakdown(
+                app: .codex, model: model, speed: .standard,
+                input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheCreation: 1_000_000,
+                at: promo, inputTotal: 272_001
+            ))
+            XCTAssertEqual(promoLong, CostBreakdown(input: 8, output: 30, cacheRead: 0.8, cacheCreation: 10))
+
+            let oldFast = try XCTUnwrap(Pricing.costBreakdown(
+                app: .codex, model: model, speed: .fast,
+                input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheCreation: 1_000_000,
+                at: beforePromo, inputTotal: 100_000
+            ))
+            XCTAssertEqual(oldFast, CostBreakdown(input: 10, output: 60, cacheRead: 1, cacheCreation: 12.5))
+
+            let promoFast = try XCTUnwrap(Pricing.costBreakdown(
+                app: .codex, model: model, speed: .fast,
+                input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheCreation: 1_000_000,
+                at: promo, inputTotal: 100_000
+            ))
+            XCTAssertEqual(promoFast, CostBreakdown(input: 8, output: 40, cacheRead: 0.8, cacheCreation: 10))
+
+            XCTAssertNil(Pricing.costBreakdown(
+                app: .codex, model: model, speed: .fast,
+                input: 272_001, output: 1, cacheRead: 0, cacheCreation: 0,
+                at: promo, inputTotal: 272_001
+            ))
+        }
+    }
+
+    func testGPT6AndClaudeOpus55Rates() throws {
+        let date = ISO8601DateFormatter().date(from: "2026-09-23T00:00:00Z")!
+
+        let astraShort = try XCTUnwrap(Pricing.costBreakdown(
+            app: .codex, model: "gpt-6-astra", speed: .standard,
+            input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheCreation: 1_000_000,
+            at: date, inputTotal: 272_000
+        ))
+        XCTAssertEqual(astraShort, CostBreakdown(input: 10, output: 50, cacheRead: 1, cacheCreation: 12.5))
+
+        let astraLong = try XCTUnwrap(Pricing.costBreakdown(
+            app: .codex, model: "gpt-6-astra", speed: .standard,
+            input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheCreation: 1_000_000,
+            at: date, inputTotal: 272_001
+        ))
+        XCTAssertEqual(astraLong, CostBreakdown(input: 20, output: 75, cacheRead: 2, cacheCreation: 25))
+
+        let astraFast = try XCTUnwrap(Pricing.costBreakdown(
+            app: .codex, model: "gpt-6-astra", speed: .fast,
+            input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheCreation: 0,
+            at: date, inputTotal: 100_000
+        ))
+        XCTAssertEqual(astraFast, CostBreakdown(input: 20, output: 100, cacheRead: 2, cacheCreation: 0))
+        XCTAssertEqual(Pricing.billingEquivalentMultiplier(app: .codex, model: "gpt-6-astra", speed: .fast), 2.5)
+
+        let opusStandard = try XCTUnwrap(Pricing.costBreakdown(
+            app: .claude, model: "claude-opus-5-5", speed: .standard,
+            input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheCreation: 1_000_000,
+            cacheCreation1h: 1_000_000, at: date
+        ))
+        XCTAssertEqual(opusStandard, CostBreakdown(input: 4, output: 20, cacheRead: 0.2, cacheCreation: 13))
+
+        let opusFast = try XCTUnwrap(Pricing.costBreakdown(
+            app: .claude, model: "claude-opus-5-5", speed: .fast,
+            input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheCreation: 1_000_000,
+            at: date
+        ))
+        XCTAssertEqual(opusFast, CostBreakdown(input: 8, output: 40, cacheRead: 0.4, cacheCreation: 10))
+        XCTAssertEqual(Pricing.billingEquivalentMultiplier(app: .claude, model: "claude-opus-5-5", speed: .fast), 2)
+    }
+
     func testClaudeCacheCreationTTLUsesSeparateStandardAndFastRates() throws {
         let standard5m = try XCTUnwrap(Pricing.costBreakdown(
             app: .claude,
