@@ -7,9 +7,11 @@ nonisolated enum UsageApp: String, Sendable, Codable, Hashable, CaseIterable {
     case cursor
     case pi
     case opencode
+    /// DSH（DeepSeek Harness）本地会话日志；只接入主窗口普通统计与对话，不进 Cycles 与额度 Timeline。
+    case dsh
 
     /// 当前本地扫描器实际支持的数据源。Cursor 虽属于 `UsageApp`，但不在此集合中。
-    static let localApps: [UsageApp] = [.codex, .claude, .pi, .opencode]
+    static let localApps: [UsageApp] = [.codex, .claude, .pi, .opencode, .dsh]
 }
 
 /// 扫描进度快照，供设置页"重新计算"等耗时操作期间展示。

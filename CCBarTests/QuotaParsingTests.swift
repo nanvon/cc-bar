@@ -3771,10 +3771,13 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertEqual(unchanged.linesParsed, 0)
     }
 
+    /// 落盘 schema 的版本号守卫：任何一处结构变更都必须在这里显式改数，避免忘记 bump
+    /// 导致旧缓存与新字段混用（DSH 贡献缓存同样纳入守卫）。
     func testFastCacheSchemaVersionsAreUpgradedTogether() {
-        XCTAssertEqual(ScanState.currentVersion, 14)
-        XCTAssertEqual(UsageRollupPayload.currentVersion, 9)
-        XCTAssertEqual(ConversationRollupPayload.currentVersion, 7)
+        XCTAssertEqual(ScanState.currentVersion, 15)
+        XCTAssertEqual(UsageRollupPayload.currentVersion, 10)
+        XCTAssertEqual(ConversationRollupPayload.currentVersion, 8)
+        XCTAssertEqual(DshContributionPayload.currentVersion, 1)
         XCTAssertEqual(QuotaCyclePayload.currentVersion, 4)
         XCTAssertEqual(CycleUsageRollupPayload.currentVersion, 4)
         XCTAssertEqual(PricingCatalogCachePayload.currentVersion, 2)

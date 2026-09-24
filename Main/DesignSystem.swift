@@ -29,6 +29,9 @@ extension UsageApp {
         case .cursor: .gray
         case .pi: .piAccent
         case .opencode: .opencodeAccent
+        // DSH 识别色取 DeepSeek 品牌蓝（Asset Catalog : DshAccent），只用于 tile / logo，
+        // 不参与额度状态着色。
+        case .dsh: .dshAccent
         }
     }
 
@@ -39,6 +42,7 @@ extension UsageApp {
         case .cursor: "Cursor"
         case .pi: "Pi"
         case .opencode: "OpenCode"
+        case .dsh: "DSH"
         }
     }
 }

@@ -92,6 +92,24 @@ final class UsageAggregator {
         }
     }
 
+    /// 用一份**完整重算**过的本地分区替换同一 app 的全部日桶。
+    ///
+    /// DSH 的日桶每次都从逐会话贡献整体重归并（草案 §3.3），必须走替换而不是增量累加，
+    /// 否则 generation 切换或父链变化会把同一段历史加两遍。远端分区不受影响。
+    /// 局部增量仍用 `ingestLocal(_:)`。
+    func replaceLocal(app: UsageApp, buckets: [UsageBucket]) {
+        localBuckets = localBuckets.filter { key, _ in key.app != app }
+        for bucket in buckets where bucket.app == app {
+            let key = BucketKey(
+                day: bucket.day,
+                app: bucket.app,
+                model: bucket.model,
+                speed: bucket.speed
+            )
+            localBuckets[key] = bucket
+        }
+    }
+
     /// 仅本地日志分区；供扫描状态、定价指纹、缺价补全及本地 rollup 持久化使用。
     func snapshotLocal() -> [UsageBucket] {
         Array(localBuckets.values)

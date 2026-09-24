@@ -277,6 +277,7 @@ enum StatsServiceFilter: Hashable, CaseIterable {
     case cursor
     case pi
     case opencode
+    case dsh
 
     var englishLabel: String {
         switch self {
@@ -286,6 +287,7 @@ enum StatsServiceFilter: Hashable, CaseIterable {
         case .cursor: return "Cursor"
         case .pi: return "Pi"
         case .opencode: return "OpenCode"
+        case .dsh: return "DSH"
         }
     }
 
@@ -297,6 +299,7 @@ enum StatsServiceFilter: Hashable, CaseIterable {
         case .cursor: return "Cursor"
         case .pi: return "Pi"
         case .opencode: return "OpenCode"
+        case .dsh: return "DSH"
         }
     }
 
@@ -308,6 +311,7 @@ enum StatsServiceFilter: Hashable, CaseIterable {
         case .cursor: return .gray
         case .pi: return .piAccent
         case .opencode: return .opencodeAccent
+        case .dsh: return .dshAccent
         }
     }
 
@@ -319,6 +323,7 @@ enum StatsServiceFilter: Hashable, CaseIterable {
         case .cursor: return .cursor
         case .pi: return .pi
         case .opencode: return .opencode
+        case .dsh: return .dsh
         }
     }
 }
@@ -532,6 +537,7 @@ struct StatsView: View {
         case .cursor: return .cursor
         case .pi: return .pi
         case .opencode: return .opencode
+        case .dsh: return .dsh
         }
     }
 
@@ -947,6 +953,7 @@ struct StatsView: View {
         case .cursor: return "Cursor"
         case .pi: return "pi.dev"
         case .opencode: return "opencode.ai"
+        case .dsh: return "DeepSeek Harness"
         }
     }
 
@@ -1221,8 +1228,9 @@ struct StatsView: View {
     }
 
     private var timelineSections: [QuotaTimelineSection] {
-        // Cursor / Pi / OpenCode 没有本地可绘制的额度时间线。
-        guard serviceFilter != .cursor, serviceFilter != .pi, serviceFilter != .opencode else { return [] }
+        // Cursor / Pi / OpenCode / DSH 没有本地可绘制的额度时间线。
+        guard serviceFilter != .cursor, serviceFilter != .pi, serviceFilter != .opencode,
+              serviceFilter != .dsh else { return [] }
         var sections: [QuotaTimelineSection] = []
 
         if serviceFilter != .claude {
@@ -1429,6 +1437,8 @@ struct StatsView: View {
             return buckets.filter { $0.app == .pi }
         case .opencode:
             return buckets.filter { $0.app == .opencode }
+        case .dsh:
+            return buckets.filter { $0.app == .dsh }
         }
     }
 
@@ -1503,6 +1513,7 @@ struct StatsView: View {
             if serviceFilter == .cursor && b.app != .cursor { continue }
             if serviceFilter == .pi && b.app != .pi { continue }
             if serviceFilter == .opencode && b.app != .opencode { continue }
+            if serviceFilter == .dsh && b.app != .dsh { continue }
             t.add(b)
         }
         return t
@@ -1534,16 +1545,17 @@ struct StatsView: View {
     /// 周 / 月桶在 range 边界被截断时不补全、不标注,首尾柱天然偏矮。
     private var dailySamples: [DailySample] {
         let (from, to) = chartBounds
-        var byDay: [Date: (codex: UsageTotals, claude: UsageTotals, cursor: UsageTotals, pi: UsageTotals, opencode: UsageTotals)] = [:]
+        var byDay: [Date: (codex: UsageTotals, claude: UsageTotals, cursor: UsageTotals, pi: UsageTotals, opencode: UsageTotals, dsh: UsageTotals)] = [:]
         for b in filteredBuckets(from: from, to: to) {
             let bucketDay = granularity.bucketStart(for: b.day)
-            var pair = byDay[bucketDay] ?? (.zero, .zero, .zero, .zero, .zero)
+            var pair = byDay[bucketDay] ?? (.zero, .zero, .zero, .zero, .zero, .zero)
             switch b.app {
             case .codex: pair.codex.add(b)
             case .claude: pair.claude.add(b)
             case .cursor: pair.cursor.add(b)
             case .pi: pair.pi.add(b)
             case .opencode: pair.opencode.add(b)
+            case .dsh: pair.dsh.add(b)
             }
             byDay[bucketDay] = pair
         }
@@ -1556,7 +1568,8 @@ struct StatsView: View {
                     claude: $0.value.claude,
                     cursor: $0.value.cursor,
                     pi: $0.value.pi,
-                    opencode: $0.value.opencode
+                    opencode: $0.value.opencode,
+                    dsh: $0.value.dsh
                 )
             }
             .sorted { $0.day < $1.day }
@@ -2639,12 +2652,14 @@ private struct DailySample: Identifiable {
     let cursor: UsageTotals
     let pi: UsageTotals
     let opencode: UsageTotals
+    let dsh: UsageTotals
 
     var codexCost: Decimal { codex.costUSD }
     var claudeCost: Decimal { claude.costUSD }
     var cursorCost: Decimal { cursor.costUSD }
     var piCost: Decimal { pi.costUSD }
     var opencodeCost: Decimal { opencode.costUSD }
+    var dshCost: Decimal { dsh.costUSD }
     var totalCost: Decimal { totalUsage.costUSD }
     var totalTokens: Int { totalUsage.totalTokens }
 
@@ -2655,6 +2670,7 @@ private struct DailySample: Identifiable {
         case .cursor: return cursor
         case .pi: return pi
         case .opencode: return opencode
+        case .dsh: return dsh
         }
     }
 
@@ -2665,13 +2681,14 @@ private struct DailySample: Identifiable {
         case .cursor: return cursorCost
         case .pi: return piCost
         case .opencode: return opencodeCost
+        case .dsh: return dshCost
         }
     }
 
     /// 所有统计服务合并后的口径，供每日悬浮明细展示 token 拆分 + 命中率。
     var totalUsage: UsageTotals {
         var t = UsageTotals.zero
-        for totals in [codex, claude, cursor, pi, opencode] {
+        for totals in [codex, claude, cursor, pi, opencode, dsh] {
             t.add(totals)
         }
         return t

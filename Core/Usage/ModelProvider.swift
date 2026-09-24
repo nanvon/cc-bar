@@ -48,6 +48,7 @@ nonisolated enum ModelProvider: String, Sendable, CaseIterable {
         case .claude: return .anthropic
         case .cursor: return .other
         case .pi, .opencode: return .other
+        case .dsh: return .other
         }
     }
 

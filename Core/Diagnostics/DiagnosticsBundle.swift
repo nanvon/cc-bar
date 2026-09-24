@@ -259,6 +259,8 @@ enum DiagnosticsBundle {
         out.row("cursor remote error", Redact.message(service.cursorRemoteUsageError))
         out.row("cursor covered ranges", String(service.cursorUsageCoveredDayRanges.count))
         out.row("cycle needs recalc", String(service.cycleUsageNeedsManualRecalculation))
+        // DSH 只报贡献缓存里的会话数：不列会话路径、标题与正文。
+        out.row("dsh tracked sessions", String(service.dshTrackedSessionCount))
         out.row("quota history events", String(appState.quotaHistory.events.count))
         out.row("quota cycle records", String(appState.quotaCycles.records.count))
     }
@@ -308,6 +310,46 @@ enum DiagnosticsBundle {
         for (label, url) in sources {
             out.row(label, describeSource(url))
         }
+        // DSH 的日志是 zstd 容器（`session[.vN].jsonl.zstd`），`.jsonl` 计数对它恒为 0，
+        // 因此单独按规范名统计「候选日志数量」。仍然只报数量与时间，不列会话路径与标题。
+        out.row(
+            "~/.dsh/sessions",
+            describeDshSource(home.appendingPathComponent(".dsh/sessions", isDirectory: true))
+        )
+    }
+
+    /// DSH 候选日志：按扫描器认可的规范名计数（v0/vN × zstd/明文），与真实扫描口径一致。
+    /// 刻意不做 private：诊断的「只报数量、不泄露路径与文件名」由测试直接盯住。
+    nonisolated static func describeDshSource(_ url: URL) -> String {
+        let fileManager = FileManager.default
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+            return "missing"
+        }
+        let countLimit = 50_000
+        var fileCount = 0
+        var latest: Date?
+        var truncated = false
+        if let walker = fileManager.enumerator(
+            at: url,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) {
+            for case let child as URL in walker {
+                guard DshSessionScanner.canonicalLogName(child.lastPathComponent) != nil else { continue }
+                fileCount += 1
+                if fileCount > countLimit {
+                    truncated = true
+                    break
+                }
+                if let modified = try? child.resourceValues(forKeys: [.contentModificationDateKey])
+                    .contentModificationDate, modified > (latest ?? .distantPast) {
+                    latest = modified
+                }
+            }
+        }
+        let count = truncated ? ">\(countLimit)" : String(fileCount)
+        return "present candidate-logs=\(count) newest=\(stamp(latest))"
     }
 
     nonisolated private static func cachesSection(_ out: inout SummaryWriter) {

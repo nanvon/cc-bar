@@ -247,6 +247,24 @@ struct SettingsRootView: View {
                 supportsFloatingHUD: false,
                 isUsageVisible: usageStatsBinding(for: .opencode, settings: settings)
             )
+
+            InsetDivider()
+
+            // 本地用量服务：DSH（只进主窗口普通统计与对话，不进菜单栏 / 悬浮窗 / Cycles）
+            let dshInfo = usageServiceInfo(for: .dsh)
+            ServiceSettingsCard(
+                logoName: "dsh",
+                fallback: "D",
+                tint: UsageApp.dsh.tintColor,
+                title: "DSH",
+                vendor: "DeepSeek Harness",
+                detailText: dshInfo.detailText,
+                availability: dshInfo.availability,
+                isEnabled: usageStatsBinding(for: .dsh, settings: settings),
+                supportsMenuBar: false,
+                supportsFloatingHUD: false,
+                isUsageVisible: usageStatsBinding(for: .dsh, settings: settings)
+            )
         }
 
         // 其他 Codex 账号（手动导入）
@@ -815,6 +833,19 @@ struct SettingsRootView: View {
                     : tr("No database detected (~/.local/share/opencode)", "未检测到本地数据库 (~/.local/share/opencode)"),
                 availability: detected ? .connected : .notDetected
             )
+        case .dsh:
+            // 只探测默认根：不做 Desktop 自定义数据目录、显式 DSH_HOME、Beta home 的自动发现（§1）。
+            // 没有默认日志不能据此断定用户未安装 DSH。
+            let sessionsDir = home.appendingPathComponent(".dsh/sessions", isDirectory: true)
+            let homeDir = home.appendingPathComponent(".dsh", isDirectory: true)
+            let detected = fileManager.fileExists(atPath: sessionsDir.path)
+                || fileManager.fileExists(atPath: homeDir.path)
+            return (
+                detailText: detected
+                    ? tr("Local logs detected (~/.dsh/sessions)", "已检测到本地日志 (~/.dsh/sessions)")
+                    : tr("No logs detected (~/.dsh/sessions)", "未检测到本地日志 (~/.dsh/sessions)"),
+                availability: detected ? .connected : .notDetected
+            )
         default:
             return (detailText: "", availability: .connected)
         }
@@ -865,6 +896,7 @@ struct SettingsRootView: View {
         case .cursor: appName = "Cursor"
         case .pi: appName = "Pi"
         case .opencode: appName = "OpenCode"
+        case .dsh: appName = "DSH"
         }
         if progress.filesTotal > 0 {
             return tr(

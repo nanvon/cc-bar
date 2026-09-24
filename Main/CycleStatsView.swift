@@ -215,6 +215,9 @@ struct CycleStatsView: View {
             return nil
         case .pi, .opencode:
             return nil
+        case .dsh:
+            // DSH 没有额度周期，Cycles 不出现该服务。
+            return nil
         }
     }
 

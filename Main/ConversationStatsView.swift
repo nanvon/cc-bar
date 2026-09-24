@@ -260,6 +260,7 @@ struct ConversationStatsView: View {
         case .cursor: return nil
         case .pi: return .pi
         case .opencode: return .opencode
+        case .dsh: return .dsh
         }
     }
 

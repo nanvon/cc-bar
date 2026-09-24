@@ -108,6 +108,42 @@ final class ConversationAggregator {
         return changed
     }
 
+    /// 用完整重算过的结果替换同一 app 的对话档案与对话桶，其他 app 的分区原样保留。
+    ///
+    /// DSH 的对话视图每次都从逐会话贡献重新归根（草案 §3.3、§4.1），走这里而不是
+    /// `ingest(entries:seeds:)`——父文件后到、父链改变、generation 切换都会改变归根结果，
+    /// 增量合并无法把已经记错 key 的历史迁走。
+    @discardableResult
+    func replaceLocal(
+        app: UsageApp,
+        infos newInfos: [ConversationInfo],
+        buckets newBuckets: [ConversationUsageBucket]
+    ) -> Bool {
+        var keptInfos = infos.filter { $0.value.app != app }
+        var keptBuckets = buckets.filter { $0.value.app != app }
+        var changed = keptInfos.count != infos.count || keptBuckets.count != buckets.count
+
+        for info in newInfos where info.app == app {
+            if keptInfos[info.key] != info { changed = true }
+            keptInfos[info.key] = info
+        }
+        for bucket in newBuckets where bucket.app == app {
+            let key = BucketKey(
+                conversationKey: bucket.conversationKey,
+                day: bucket.day,
+                model: bucket.model,
+                speed: bucket.speed
+            )
+            if keptBuckets[key] != bucket { changed = true }
+            keptBuckets[key] = bucket
+        }
+
+        infos = keptInfos
+        buckets = keptBuckets
+        if changed { markChanged() }
+        return changed
+    }
+
     func snapshot() -> (infos: [ConversationInfo], buckets: [ConversationUsageBucket]) {
         (Array(infos.values), Array(buckets.values))
     }

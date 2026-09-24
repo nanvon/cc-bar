@@ -19,6 +19,28 @@ nonisolated struct ScanFileState: Sendable, Equatable, Codable {
     var conversationGitBranch: String?
     var conversationIsSidechain: Bool?
     var fallbackTitle: String?
+    /// DSH 用：`session` 记录里的 `parentSession`，用于把子代理归到所属根会话（§4.1）。
+    var conversationParentSession: String?
+    /// DSH 用：文件身份（device + inode）。同路径被原地替换时 inode 会变，
+    /// 此时不能从旧 offset 续读，必须从 0 重扫并替换该会话贡献（§3.3）。
+    var fileIdentity: ScanFileIdentity?
+    /// DSH 用：上次扫描时的大小，用于「offset > size 即被截断」的判定。
+    var fileSize: UInt64?
+}
+
+/// 文件身份。刻意不用 mtime：追加写会让 mtime 变化，但那是正常增量而不是替换。
+nonisolated struct ScanFileIdentity: Sendable, Equatable, Codable {
+    var device: UInt64
+    var inode: UInt64
+
+    /// 读取路径的 device / inode；文件不存在或读取失败返回 nil。
+    nonisolated static func read(atPath path: String) -> ScanFileIdentity? {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
+              let inode = (attributes[.systemFileNumber] as? NSNumber)?.uint64Value,
+              let device = (attributes[.systemNumber] as? NSNumber)?.uint64Value
+        else { return nil }
+        return ScanFileIdentity(device: device, inode: inode)
+    }
 }
 
 nonisolated struct ScanState: Sendable, Equatable, Codable {
@@ -33,7 +55,9 @@ nonisolated struct ScanState: Sendable, Equatable, Codable {
     /// v13: 项目归属隐私分级——受 TCC 保护目录不再做文件系统检查，旧项目归组必须全量重算。
     /// v14: Codex fork 会话重放父会话历史导致的重复计费（`codexSeenTokenIds`），
     ///      且 fork 文件的用量此前错归到父会话 key；旧桶已被污染，必须全量重建。
-    static let currentVersion: Int = 14
+    /// v15: 新增 DSH 本地用量服务（`dsh` watermark 与逐会话贡献缓存）。
+    ///      日 / 对话 rollup 同步 bump（10 / 8），首版落地使旧扫描状态与旧 rollup 一起失效（§7 S4）。
+    static let currentVersion: Int = 15
     var version: Int = ScanState.currentVersion
     var generationID: String = ""
     /// 写盘时记录的价格指纹，仅作诊断；加载不因指纹不一致失效（价格变化不自动重算）。
@@ -52,6 +76,8 @@ nonisolated struct ScanState: Sendable, Equatable, Codable {
     var opencodeLastMessageTime: Int64 = 0
     /// 跨会话的 opencode message.id 去重集合（compaction 重写 / 时间戳回跳兜底）。
     var opencodeSeenMessageIds: [String] = []
+    /// DSH 扫描 watermark：按规范日志文件路径记录；generation 切换淘汰的文件不再续扫。
+    var dsh: [String: ScanFileState] = [:]
 }
 
 /// 保留插入顺序的去重集合，供三个扫描器做跨文件 ID 去重并按「最近 N 条」截断。
@@ -172,7 +198,8 @@ nonisolated struct UsageRollupPayload: Sendable, Codable {
     /// version 管「结构变更或费用口径改变」；价格变化不触发自动失效，由手动重算对齐。
     /// v8: 配合 ScanState v9 清除曾被提前入账的 Claude 流式半成品。
     /// v9: Pi/OpenCode 统一费用解析规则改变，旧聚合结果必须全量重算。
-    static let currentVersion: Int = 9
+    /// v10: 新增 DSH 本地用量服务（配合 ScanState v15）；旧快照没有 DSH 分区，必须全量重建。
+    static let currentVersion: Int = 10
     var version: Int = UsageRollupPayload.currentVersion
     var generationID: String = ""
     /// 写盘时记录的价格指纹，仅作诊断；加载不因指纹不一致丢弃（价格变化不自动重算）。

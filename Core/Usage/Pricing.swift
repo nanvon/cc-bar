@@ -126,8 +126,13 @@ nonisolated enum Pricing {
 
         // —— DeepSeek 系列（与 cc-switch seed_model_pricing 对齐）——
         // 缓存语义：通过 Anthropic 兼容端点使用时 input 不含 cache_read，直接乘价。
-        // V4 系列官方 CNY 按 1 USD ≈ 7.14 折算。
+        // V4 系列官方 CNY 按 1 USD ≈ 7.14 折算；下面 deepseek-v4-pro / flash 四 key 的
+        // 2026-08-16 起的官方价见 `timedOverrides`，这里的行是最早时段的基础价（分段价的兜底基准）。
         "deepseek-v4-pro":              .init(input: 0.435, output: 0.87,  cacheRead: 0.003625, cacheCreation: 0),
+        // `deepseek-flash` 与 `deepseek-v4.1-flash` 是官方现名与本机 DSH / CLI 日志里的标识；
+        // 与下面两行同价，按仓库惯例写成重复行，不引入别名映射。
+        "deepseek-flash":               .init(input: 0.14,  output: 0.28,  cacheRead: 0.0028,   cacheCreation: 0),
+        "deepseek-v4.1-flash":          .init(input: 0.14,  output: 0.28,  cacheRead: 0.0028,   cacheCreation: 0),
         "deepseek-v4-flash":            .init(input: 0.14,  output: 0.28,  cacheRead: 0.0028,   cacheCreation: 0),
         "deepseek-v4-flash-vision-exp": .init(input: 0.14,  output: 0.28,  cacheRead: 0.0028,   cacheCreation: 0),
         "deepseek-v3.2":                .init(input: 0.28,  output: 0.42,  cacheRead: 0.028,    cacheCreation: 0),
@@ -293,10 +298,52 @@ nonisolated enum Pricing {
 
     /// 少数模型中途涨价/降价的时间点覆盖；这里的每个 key 必须同时在 `table` 提供最早
     /// 时段的基础价，不在这里出现的模型永远用 `table` 里的固定价。
-    /// 键为归一化后的模型名，每条按 `from` 升序排列；只要用量记录的日期 ≥ `from` 就换成对应新价，
+    /// 键为归一化后的模型名，每条按 `from` 升序排列；只要用量记录的时间 ≥ `from` 就换成对应新价，
     /// 取满足条件里最晚的一档（早于所有 `from` 时退回 `table` 的基准价）。
-    /// 当前无分段价模型（Sonnet 5 原定 2026-09-01 涨价已取消），机制保留给未来限时调价场景。
-    private static let timedOverrides: [String: [PricedPeriod]] = [:]
+    ///
+    /// DeepSeek（2026-09 起）：官方按「高峰 / 空闲」两档峰谷计价，空闲时段是高峰价的五折。
+    /// 第一版不实现峰谷时段与中国法定假日日历，**两段都取高峰价**，因此金额是估算上界：
+    /// 偏高但不低报。分段按用量记录时间判定，历史天数仍落在旧价，手动重算也不会改写历史。
+    private static let timedOverrides: [String: [PricedPeriod]] = [
+        "deepseek-flash": deepseekFlashPeriods,
+        "deepseek-v4-flash": deepseekFlashPeriods,
+        "deepseek-v4-flash-vision-exp": deepseekFlashPeriods,
+        "deepseek-v4.1-flash": deepseekFlashPeriods,
+        "deepseek-v4-pro": deepseekProPeriods,
+    ]
+
+    /// DeepSeek Flash（含官方兼容名与本机日志标识 `deepseek-v4.1-flash`）：
+    /// 2026-08-16 16:00 UTC 起改为峰谷价，2026-09-10 04:00 UTC 起降价。
+    /// `input` 是未命中缓存的输入价，`cacheRead` 是命中缓存的输入价，`cacheCreation` 官方未收（恒 0）。
+    private static let deepseekFlashPeriods: [PricedPeriod] = [
+        PricedPeriod(
+            from: utcInstant(2026, 8, 16, 16),
+            price: ModelPrice(input: 0.44, output: 1.32, cacheRead: 0.014, cacheCreation: 0)
+        ),
+        PricedPeriod(
+            from: utcInstant(2026, 9, 10, 4),
+            price: ModelPrice(input: 0.30, output: 1.20, cacheRead: 0.006, cacheCreation: 0)
+        ),
+    ]
+
+    /// DeepSeek V4-Pro：官方 2026-08-16 起即为该价，此后未再调整；表内旧值（折算自更早的 CNY 价）已过期。
+    private static let deepseekProPeriods: [PricedPeriod] = [
+        PricedPeriod(
+            from: utcInstant(2026, 8, 16, 16),
+            price: ModelPrice(input: 1.32, output: 3.96, cacheRead: 0.044, cacheCreation: 0)
+        ),
+    ]
+
+    /// 官方调价公告给的是 UTC 时刻，必须按 UTC 构造，不能用本地时区。
+    private static func utcInstant(_ year: Int, _ month: Int, _ day: Int, _ hour: Int) -> Date {
+        var components = DateComponents()
+        components.year = year
+        components.month = month
+        components.day = day
+        components.hour = hour
+        components.timeZone = TimeZone(secondsFromGMT: 0)
+        return Calendar(identifier: .gregorian).date(from: components) ?? Date.distantPast
+    }
 
     /// A 类模型：受本地特殊规则（阶梯价 / 分段生效价 / 固定价）管辖的 key。远端价格目录对这些 key 零参与——
     /// 一旦让远端「今天的单一价」覆盖进来，272K 阶梯和分段计价会被破坏、历史计价错乱。
@@ -370,6 +417,7 @@ nonisolated enum Pricing {
                 case .cursor: return nil
                 case .pi: return nil
                 case .opencode: return nil
+                case .dsh: return nil
                 }
             }
             switch app {
@@ -396,6 +444,9 @@ nonisolated enum Pricing {
                 return nil
             case .opencode:
                 // opencode 没有 Fast 档位概念。
+                return nil
+            case .dsh:
+                // DSH 没有 Fast 档位概念。
                 return nil
             }
         }
@@ -648,6 +699,9 @@ nonisolated enum Pricing {
                 return nil
             case .opencode:
                 // opencode 无 Fast 档位概念。
+                return nil
+            case .dsh:
+                // DSH 无 Fast 档位概念。
                 return nil
             }
         }

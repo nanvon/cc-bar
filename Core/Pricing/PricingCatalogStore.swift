@@ -78,6 +78,9 @@ nonisolated final class PricingCatalogStore: @unchecked Sendable {
                     return nil
                 case .opencode:
                     return nil
+                case .dsh:
+                    // DSH 没有 Fast 档位概念。
+                    return nil
                 }
             case .unknown:
                 return nil

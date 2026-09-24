@@ -7,6 +7,20 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		49C1BE03000000000001AAAA /* libzstd in Frameworks */ = {isa = PBXBuildFile; productRef = 49C1BE02000000000001AAAA /* libzstd */; };
+		49C1BE05000000000001AAAA /* libzstd in Frameworks */ = {isa = PBXBuildFile; productRef = 49C1BE04000000000001AAAA /* libzstd */; };
+		49C1BE09000000000001AAAA /* DshZstdFrames.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BE06000000000001AAAA /* DshZstdFrames.swift */; };
+		49C1BE0A000000000001AAAA /* DshZstdDecoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BE07000000000001AAAA /* DshZstdDecoder.swift */; };
+		49C1BE0B000000000001AAAA /* DshZstdFrameScannerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BE08000000000001AAAA /* DshZstdFrameScannerTests.swift */; };
+		49C1BE0F000000000001AAAA /* DshSessionScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BE0C000000000001AAAA /* DshSessionScanner.swift */; };
+		49C1BE10000000000001AAAA /* DshSessionScannerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BE0D000000000001AAAA /* DshSessionScannerTests.swift */; };
+		49C1BE11000000000001AAAA /* DshTestFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BE0E000000000001AAAA /* DshTestFixtures.swift */; };
+		49C1BE16000000000001AAAA /* DshContributionCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BE12000000000001AAAA /* DshContributionCache.swift */; };
+		49C1BE17000000000001AAAA /* DshContributionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BE13000000000001AAAA /* DshContributionStore.swift */; };
+		49C1BE18000000000001AAAA /* DshContributionRollup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BE14000000000001AAAA /* DshContributionRollup.swift */; };
+		49C1BE19000000000001AAAA /* DshContributionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BE15000000000001AAAA /* DshContributionTests.swift */; };
+		49C1BE1B000000000001AAAA /* DshPricingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BE1A000000000001AAAA /* DshPricingTests.swift */; };
+		49C1BE1D000000000001AAAA /* DshDiagnosticsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BE1C000000000001AAAA /* DshDiagnosticsTests.swift */; };
 		4931AC592FC02A4200EE598C /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 4931AC522FC02A4200EE598C /* Assets.xcassets */; };
 		4931AC622FC02A4200EE598C /* MenuBarLabel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4931AC4F2FC02A4200EE598C /* MenuBarLabel.swift */; };
 		4931AC632FC02A4200EE598C /* CCBarApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4931AC412FC02A4200EE598C /* CCBarApp.swift */; };
@@ -187,6 +201,18 @@
 		49C1B153000000000001AAAA /* ClaudeJSONLScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeJSONLScanner.swift; sourceTree = "<group>"; };
 		49C1B154000000000001AAAA /* CodexJSONLScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexJSONLScanner.swift; sourceTree = "<group>"; };
 		49C1B32000000000000FAAAA /* PiJSONLScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiJSONLScanner.swift; sourceTree = "<group>"; };
+		49C1BE06000000000001AAAA /* DshZstdFrames.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DshZstdFrames.swift; sourceTree = "<group>"; };
+		49C1BE07000000000001AAAA /* DshZstdDecoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DshZstdDecoder.swift; sourceTree = "<group>"; };
+		49C1BE08000000000001AAAA /* DshZstdFrameScannerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DshZstdFrameScannerTests.swift; sourceTree = "<group>"; };
+		49C1BE0C000000000001AAAA /* DshSessionScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DshSessionScanner.swift; sourceTree = "<group>"; };
+		49C1BE0D000000000001AAAA /* DshSessionScannerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DshSessionScannerTests.swift; sourceTree = "<group>"; };
+		49C1BE0E000000000001AAAA /* DshTestFixtures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DshTestFixtures.swift; sourceTree = "<group>"; };
+		49C1BE12000000000001AAAA /* DshContributionCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DshContributionCache.swift; sourceTree = "<group>"; };
+		49C1BE13000000000001AAAA /* DshContributionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DshContributionStore.swift; sourceTree = "<group>"; };
+		49C1BE14000000000001AAAA /* DshContributionRollup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DshContributionRollup.swift; sourceTree = "<group>"; };
+		49C1BE15000000000001AAAA /* DshContributionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DshContributionTests.swift; sourceTree = "<group>"; };
+		49C1BE1A000000000001AAAA /* DshPricingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DshPricingTests.swift; sourceTree = "<group>"; };
+		49C1BE1C000000000001AAAA /* DshDiagnosticsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DshDiagnosticsTests.swift; sourceTree = "<group>"; };
 		49C1B90000000000000FAAAA /* OpencodeScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpencodeScanner.swift; sourceTree = "<group>"; };
 		49C1B155000000000001AAAA /* UsageAggregator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageAggregator.swift; sourceTree = "<group>"; };
 		49C1B16A000000000001AAAA /* ModelProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelProvider.swift; sourceTree = "<group>"; };
@@ -232,6 +258,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				49C1BE03000000000001AAAA /* libzstd in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -239,6 +266,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				49C1BE05000000000001AAAA /* libzstd in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -351,6 +379,7 @@
 				49C1B108000000000001AAAA /* QuotaHistoryStore.swift */,
 				49C1BA10000000000001AAAA /* QuotaCycleStore.swift */,
 				49C1B107000000000001AAAA /* ScanCache.swift */,
+				49C1BE12000000000001AAAA /* DshContributionCache.swift */,
 				49C1B168000000000001AAAA /* ConversationRollupCache.swift */,
 				49C1B196000000000001AAAA /* ImportedUsageBackfill.swift */,
 				49C1BC13000000000001AAAA /* CursorUsageCache.swift */,
@@ -423,6 +452,11 @@
 				49C1B154000000000001AAAA /* CodexJSONLScanner.swift */,
 				49C1B32000000000000FAAAA /* PiJSONLScanner.swift */,
 				49C1B90000000000000FAAAA /* OpencodeScanner.swift */,
+				49C1BE06000000000001AAAA /* DshZstdFrames.swift */,
+				49C1BE07000000000001AAAA /* DshZstdDecoder.swift */,
+				49C1BE0C000000000001AAAA /* DshSessionScanner.swift */,
+				49C1BE13000000000001AAAA /* DshContributionStore.swift */,
+				49C1BE14000000000001AAAA /* DshContributionRollup.swift */,
 				49C1B155000000000001AAAA /* UsageAggregator.swift */,
 				49C1BC14000000000001AAAA /* CursorUsageFetcher.swift */,
 				49C1B16A000000000001AAAA /* ModelProvider.swift */,
@@ -481,6 +515,12 @@
 				49C1BD04000000000001AAAA /* RedactTests.swift */,
 				49C1B31000000000000FAAAA /* PiJSONLScannerTests.swift */,
 				49C1B91000000000000FAAAA /* OpencodeScannerTests.swift */,
+				49C1BE08000000000001AAAA /* DshZstdFrameScannerTests.swift */,
+				49C1BE0D000000000001AAAA /* DshSessionScannerTests.swift */,
+				49C1BE0E000000000001AAAA /* DshTestFixtures.swift */,
+				49C1BE15000000000001AAAA /* DshContributionTests.swift */,
+				49C1BE1A000000000001AAAA /* DshPricingTests.swift */,
+				49C1BE1C000000000001AAAA /* DshDiagnosticsTests.swift */,
 				49C1BF0A000000000001AAAA /* ConversationProjectResolverTests.swift */,
 				49C1BF09000000000001AAAA /* UpdateCheckerTests.swift */,
 				49C1B3F2000000000001AAAA /* Fixtures */,
@@ -514,6 +554,7 @@
 			);
 			name = ccbar;
 			packageProductDependencies = (
+				49C1BE02000000000001AAAA /* libzstd */,
 			);
 			productName = CCBar;
 			productReference = 4931AC302FC029A000EE598C /* CCBar.app */;
@@ -534,6 +575,7 @@
 			);
 			name = CCBarTests;
 			packageProductDependencies = (
+				49C1BE04000000000001AAAA /* libzstd */,
 			);
 			productName = CCBarTests;
 			productReference = 49C1B301000000000001AAAA /* CCBarTests.xctest */;
@@ -567,6 +609,9 @@
 			);
 			mainGroup = 4931AC272FC029A000EE598C;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				49C1BE01000000000001AAAA /* XCRemoteSwiftPackageReference "zstd" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 4931AC312FC029A000EE598C /* Products */;
 			projectDirPath = "";
@@ -665,6 +710,12 @@
 				49C1B154000000000001AABB /* CodexJSONLScanner.swift in Sources */,
 				49C1B32000000000000FAABB /* PiJSONLScanner.swift in Sources */,
 				49C1B90000000000000FAABB /* OpencodeScanner.swift in Sources */,
+				49C1BE09000000000001AAAA /* DshZstdFrames.swift in Sources */,
+				49C1BE0A000000000001AAAA /* DshZstdDecoder.swift in Sources */,
+				49C1BE0F000000000001AAAA /* DshSessionScanner.swift in Sources */,
+				49C1BE17000000000001AAAA /* DshContributionStore.swift in Sources */,
+				49C1BE18000000000001AAAA /* DshContributionRollup.swift in Sources */,
+				49C1BE16000000000001AAAA /* DshContributionCache.swift in Sources */,
 				49C1B155000000000001AABB /* UsageAggregator.swift in Sources */,
 				49C1B16A000000000001AABB /* ModelProvider.swift in Sources */,
 				49C1B156000000000001AABB /* UsageService.swift in Sources */,
@@ -712,6 +763,12 @@
 				49C1BF09000000000001AABB /* UpdateCheckerTests.swift in Sources */,
 				49C1B31000000000000FAABB /* PiJSONLScannerTests.swift in Sources */,
 				49C1B91000000000000FAABB /* OpencodeScannerTests.swift in Sources */,
+				49C1BE0B000000000001AAAA /* DshZstdFrameScannerTests.swift in Sources */,
+				49C1BE10000000000001AAAA /* DshSessionScannerTests.swift in Sources */,
+				49C1BE11000000000001AAAA /* DshTestFixtures.swift in Sources */,
+				49C1BE19000000000001AAAA /* DshContributionTests.swift in Sources */,
+				49C1BE1B000000000001AAAA /* DshPricingTests.swift in Sources */,
+				49C1BE1D000000000001AAAA /* DshDiagnosticsTests.swift in Sources */,
 				49C1BF0A000000000001AABB /* ConversationProjectResolverTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -998,6 +1055,30 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		49C1BE01000000000001AAAA /* XCRemoteSwiftPackageReference "zstd" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/facebook/zstd.git";
+			requirement = {
+				kind = exactVersion;
+				version = 1.5.7;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		49C1BE02000000000001AAAA /* libzstd */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 49C1BE01000000000001AAAA /* XCRemoteSwiftPackageReference "zstd" */;
+			productName = libzstd;
+		};
+		49C1BE04000000000001AAAA /* libzstd */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 49C1BE01000000000001AAAA /* XCRemoteSwiftPackageReference "zstd" */;
+			productName = libzstd;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 4931AC282FC029A000EE598C /* Project object */;
 }

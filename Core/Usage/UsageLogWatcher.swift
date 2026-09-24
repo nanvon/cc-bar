@@ -68,6 +68,8 @@ final class UsageLogWatcher {
             ".codex",
             ".pi",
             ".local/share/opencode",
+            // DSH：默认根 `~/.dsh/sessions`，这里监听顶层目录（sessions 可能尚未创建）。
+            ".dsh",
         ].map { home.appendingPathComponent($0, isDirectory: true).path }
     }
 
