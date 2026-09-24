@@ -325,5 +325,89 @@ final class DshSessionScannerTests: XCTestCase {
         XCTAssertEqual(round2.restartedSessionIDs, ["s"])
         XCTAssertEqual(round2.entries.map(\.inputTokens), [7])
     }
-}
 
+    func testSeededForkSkipsInheritedUsage() throws {
+        var header = DshTestFixtures.session(id: "child", parentSession: "parent")
+        header["isSeeded"] = true
+        var inherited = DshTestFixtures.assistant(time: DshTestFixtures.baseTime, input: 100, output: 0)
+        inherited["seq"] = 0
+        var own = DshTestFixtures.assistant(time: DshTestFixtures.baseTime + 1_000, input: 5, output: 0)
+        own["seq"] = 2
+        let marker: [String: Any] = ["type": "session/end-seed", "seq": 1, "time": DshTestFixtures.baseTime, "data": ["inherited": true]]
+        try logs.write(project: "p", session: "child", file: "session.v3.jsonl.zstd", bytes: try DshTestFixtures.log(lines: [header, inherited, marker, own]))
+
+        let result = scan()
+        XCTAssertTrue(result.isComplete)
+        XCTAssertEqual(result.entries.map(\.inputTokens), [5])
+    }
+
+    func testNestedForkUsesLastInheritedMarker() throws {
+        var header = DshTestFixtures.session(id: "grandchild", parentSession: "child")
+        header["isSeeded"] = true
+        let firstMarker: [String: Any] = ["type": "session/end-seed", "seq": 0, "time": DshTestFixtures.baseTime, "data": ["inherited": true]]
+        var copied = DshTestFixtures.assistant(time: DshTestFixtures.baseTime, input: 100, output: 0)
+        copied["seq"] = 1
+        let finalMarker: [String: Any] = ["type": "session/end-seed", "seq": 2, "time": DshTestFixtures.baseTime, "data": ["inherited": true]]
+        var own = DshTestFixtures.assistant(time: DshTestFixtures.baseTime + 1_000, input: 5, output: 0)
+        own["seq"] = 3
+        try logs.write(project: "p", session: "grandchild", file: "session.v3.jsonl.zstd", bytes: try DshTestFixtures.log(lines: [header, firstMarker, copied, finalMarker, own]))
+
+        XCTAssertEqual(scan().entries.map(\.inputTokens), [5])
+    }
+
+    func testReleasedV0SeedLengthSkipsInheritedUsage() throws {
+        var header = DshTestFixtures.session(id: "child", parentSession: "parent")
+        header["version"] = 0
+        header.removeValue(forKey: "isSeeded")
+        header["seedLength"] = 1
+        var inherited = DshTestFixtures.assistant(time: DshTestFixtures.baseTime, input: 100, output: 0)
+        inherited["seq"] = 0
+        var own = DshTestFixtures.assistant(time: DshTestFixtures.baseTime + 1_000, input: 5, output: 0)
+        own["seq"] = 1
+        try logs.write(project: "p", session: "child", file: "session.jsonl.zstd", bytes: try DshTestFixtures.log(lines: [header, inherited, own]))
+
+        XCTAssertEqual(scan().entries.map(\.inputTokens), [5])
+    }
+
+    func testAttemptAndRetryAreCountedAsSeparateRequests() throws {
+        let route: [String: Any] = ["type": "request/context", "time": DshTestFixtures.baseTime, "data": ["provider": "deepseek", "model": "deepseek-v4.1-flash"]]
+        let attempt: [String: Any] = [
+            "type": "assistant/attempt", "time": DshTestFixtures.baseTime, "data": [
+                "turn": 1, "step": 1,
+                "stream": [["chunk": ["type": "usage", "usage": ["inputTokens": 3, "outputTokens": 0]]]]
+            ]
+        ]
+        let retry: [String: Any] = ["type": "llm/retry-started", "time": DshTestFixtures.baseTime, "data": ["turn": 1, "step": 1]]
+        let success = DshTestFixtures.assistant(time: DshTestFixtures.baseTime + 1_000, input: 4, output: 0, turn: 1)
+        try logs.write(project: "p", session: "s", file: "session.v3.jsonl.zstd", bytes: try DshTestFixtures.log(lines: [DshTestFixtures.session(id: "s"), route, attempt, retry, success]))
+
+        let result = scan()
+        XCTAssertEqual(result.entries.map(\.inputTokens), [3, 4])
+        XCTAssertEqual(result.entries.first?.model, "deepseek/deepseek-v4.1-flash")
+    }
+
+    func testLaterSettlementReplacesSameSlotAcrossScans() throws {
+        let attempt: [String: Any] = [
+            "type": "assistant/attempt", "time": DshTestFixtures.baseTime, "data": [
+                "turn": 1, "step": 1,
+                "stream": [["chunk": ["type": "usage", "usage": ["inputTokens": 3, "outputTokens": 0]]]]
+            ]
+        ]
+        let url = try logs.write(project: "p", session: "s", file: "session.v3.jsonl.zstd", bytes: try DshTestFixtures.log(lines: [DshTestFixtures.session(id: "s"), attempt]))
+        let first = scan()
+        XCTAssertEqual(first.entries.map(\.inputTokens), [3])
+        let oldContributions = DshContributionStore.apply(scan: first, to: [:]).contributions
+
+        let handle = try FileHandle(forWritingTo: url)
+        _ = try handle.seekToEnd()
+        try handle.write(contentsOf: DshTestFixtures.log(lines: [
+            DshTestFixtures.assistant(time: DshTestFixtures.baseTime + 1_000, input: 4, output: 0, turn: 1)
+        ]))
+        try handle.close()
+        let second = scan(first.newState)
+        XCTAssertEqual(second.restartedSessionIDs, ["s"])
+        XCTAssertEqual(second.entries.map(\.inputTokens), [4])
+        let updated = DshContributionStore.apply(scan: second, to: oldContributions).contributions
+        XCTAssertEqual(updated["s"]?.usage.reduce(0) { $0 + $1.inputTokens }, 4)
+    }
+}

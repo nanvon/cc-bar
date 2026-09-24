@@ -144,15 +144,17 @@ enum DshTestFixtures {
         cacheWrite: Int = 0,
         totalTokens: Int? = nil,
         usage: [String: Any]? = nil,
-        streamOnly: Bool = false
+        streamOnly: Bool = false,
+        turn: Int? = nil,
+        step: Int = 1
     ) -> [String: Any] {
         var source: [String: Any] = ["kind": "model"]
         if let provider { source["provider"] = provider }
         if let model { source["model"] = model }
 
         var body: [String: Any] = [
-            "turn": 1,
-            "step": 1,
+            "turn": turn ?? max(1, Int((time - baseTime) / 1_000) + 1),
+            "step": step,
             "message": [
                 "role": "assistant",
                 "content": [["type": "text", "text": "hi"]],

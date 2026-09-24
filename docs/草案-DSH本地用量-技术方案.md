@@ -13,6 +13,8 @@
 >
 > 同日已对照现有实现确定四项实施决策与实施步骤，见 §6、§7。
 
+> **2026-09-24 修正**：§2.3 和 §7 S2 所述“只消费三类记录”是首版实现，现已不适用。用量结算同时读取 `assistant/message` 与 `assistant/attempt`，按 `(turn, step)` 和 `llm/retry-started` 处理替换与重试；fork 继承段通过 v0/v1 `seedLength` 或 v2/v3 `session/end-seed` 排除重复用量。目录枚举失败保留旧 watermark，跨目录重复会话 ID 按异常隔离。贡献缓存升级 v2，旧版中已删除日志的贡献保留但标记未校正；详见 [技术实现 §7.4a](技术实现.md)。
+
 ## 1. 结论与第一版范围
 
 DSH CLI 与当前稳定版 DSH Desktop 在默认配置下共用 Harness home `~/.dsh`，会话日志位于 `~/.dsh/sessions`。cc-bar 第一版只从这个默认根**只读**采集，统一显示为一个「DSH」本地用量服务，不按 CLI、Desktop 或 profile 拆分。Desktop 自定义数据目录、显式 `DSH_HOME`、Beta home 与自定义持久化 root 不做自动发现；没有默认日志不能据此断定用户未安装 DSH。
@@ -53,7 +55,7 @@ DSH CLI 与当前稳定版 DSH Desktop 在默认配置下共用 Harness home `~/
 
 只识别规范名：v0 的 `session.jsonl.zstd` / `session.jsonl`，正整数 vN 的 `session.vN.jsonl.zstd` / `session.vN.jsonl`。忽略大写、`v0`、前导零、锁文件与临时文件。一个会话目录只选**版本号最高**的规范日志；相同版本的两种编码并存属于异常，cc-bar 可固定优先 zstd 并报告诊断。官方在配置编码与现存编码冲突时会报错，cc-bar 的宽容读取不表示 DSH 可以继续写该目录。[官方迁移说明](https://github.com/deepseek-ai/deepseek-harness/blob/master/.agents/notes/implemented/architecture/2026-08-31-released-session-format-migrations.md)确认旧 generation 保留，新文件包含同一段逻辑历史。
 
-当前格式只消费三类记录：`session`（元数据）、`session/title`（最后一个有效标题）、`assistant/message`（用量）。其他事件不计费，不从正文推算 token。用量优先取 `data.usage`；缺失时取 `data.stream` 最后一个 usage chunk。两处是同一份用量，**不可相加**。两处都缺失时既不计 token，也不计请求。`time` 是 Unix 毫秒，转为 `Date` 后用现有 `UsageDay.startOfDay` 计算本地日。
+当前读取 `session`（元数据及 v0/v1 的 `seedLength`）、`session/end-seed`（v2/v3 的继承边界）、`session/title`、`request/header` / `request/context`（请求路由）、`llm/retry-started`（重试边界），以及带用量的 `assistant/message` / `assistant/attempt`。fork 的继承事件不再次计费；同一 `(turn, step)` 的后续样本替换前样本，重试开始后另计。消息优先取 `data.usage`，否则取 `data.stream` 最后一个 usage chunk，两处不可相加。两处都缺失时既不计 token，也不计请求。`time` 是 Unix 毫秒，转为 `Date` 后用现有 `UsageDay.startOfDay` 计算本地日。
 
 | DSH usage 字段 | `UsageEntry` | 规则 |
 |---|---|---|
@@ -63,9 +65,9 @@ DSH CLI 与当前稳定版 DSH Desktop 在默认配置下共用 Harness home `~/
 | `cacheWriteTokens` | `cacheCreationTokens` | 可选，缺省 0 |
 | `reasoningTokens` | 无额外字段 | 属于 output 子集，不重复计数 |
 | `totalTokens` | 校验字段 | 有值时校验四项之和，不参与二次求和 |
-| 一条有效 `assistant/message` | `requestCount = 1` | 无 usage 不计请求 |
+| 一次有效结算（消息或失败尝试） | `requestCount = 1` | 同槽样本替换不增加请求数；重试另计 |
 
-模型标签按 `source.provider/source.model` 组合，外层 provider 只加一次，例如 `commandcode/deepseek/deepseek-v4.1-flash`。`Pricing.normalize` 再剥前缀查价。日志中的 provider 可能是转发商，不证明用户按 DeepSeek 官方 API 价付款。
+模型标签按 `source.provider/source.model` 组合，外层 provider 只加一次，例如 `commandcode/deepseek/deepseek-v4.1-flash`；失败尝试没有 message source，按最近的请求路由归属。`Pricing.normalize` 再剥前缀查价。日志中的 provider 可能是转发商，不证明用户按 DeepSeek 官方 API 价付款。
 
 ## 3. 解码与增量扫描
 

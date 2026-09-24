@@ -25,17 +25,13 @@ nonisolated enum DshContributionStore {
         var updated = contributions
         var changed = false
 
-        // 扫描器给的 conversationKey 是 `dsh:<会话自身 id>`：子代理归根由 rollup 负责，这里只按自身 id 分组。
-        var entriesBySession: [String: [UsageEntry]] = [:]
-        for entry in scan.entries where entry.app == .dsh {
-            let id = sessionID(from: entry.conversationKey)
-            guard !id.isEmpty else { continue }
-            entriesBySession[id, default: []].append(entry)
-        }
-
         for (path, state) in scan.newState {
             guard let id = state.conversationID else { continue }
+            // 冲突 ID 的旧 watermark 可以保留，但不能由其中任一路径改写贡献。
+            guard scan.duplicateSessionIDs.contains(id) == false else { continue }
             let previous = updated[id]
+            // 未成功读出当前来源时，不得用旧状态把贡献迁到新路径。
+            guard scan.entriesByPath[path] != nil || previous?.sourcePath == path else { continue }
             var contribution = previous ?? DshContribution(
                 sessionID: id,
                 sourcePath: path,
@@ -48,7 +44,9 @@ nonisolated enum DshContributionStore {
                 usage: []
             )
 
+            // 曾因删除或枚举失败丢失的 watermark，重现后也是整份文件重读。
             let generationChanged = contribution.sourcePath != path
+                || (!scan.previousPaths.contains(path) && previous != nil)
             let restarted = scan.restartedSessionIDs.contains(id)
             if generationChanged || restarted {
                 contribution.usage = []
@@ -62,27 +60,12 @@ nonisolated enum DshContributionStore {
             contribution.cwd = state.conversationCwd ?? contribution.cwd
             contribution.parentSession = state.conversationParentSession ?? contribution.parentSession
             contribution.title = state.fallbackTitle ?? contribution.title
-            contribution.merge(entriesBySession[id] ?? [])
+            if scan.entriesByPath[path] != nil {
+                contribution.needsVerification = false
+            }
+            contribution.merge(scan.entriesByPath[path] ?? [])
             updated[id] = contribution
             if contribution != previous { changed = true }
-        }
-
-        // 状态里没有、却有用量的会话（正常流程不该出现）：保留用量，避免静默丢量。
-        for (id, entries) in entriesBySession where updated[id] == nil {
-            var contribution = DshContribution(
-                sessionID: id,
-                sourcePath: "",
-                fileIdentity: nil,
-                fileSize: 0,
-                watermark: 0,
-                cwd: nil,
-                parentSession: nil,
-                title: nil,
-                usage: []
-            )
-            contribution.merge(entries)
-            updated[id] = contribution
-            changed = true
         }
 
         return Update(contributions: updated, changed: changed)
@@ -93,11 +76,5 @@ nonisolated enum DshContributionStore {
     /// 已删除的会话文件无法恢复，这是第一版已知限制（§3.3）。
     static func rebuild(from scan: DshSessionScanner.Result) -> [String: DshContribution] {
         apply(scan: scan, to: [:]).contributions
-    }
-
-    private static func sessionID(from conversationKey: String) -> String {
-        let prefix = "dsh:"
-        guard conversationKey.hasPrefix(prefix) else { return "" }
-        return String(conversationKey.dropFirst(prefix.count))
     }
 }

@@ -147,6 +147,9 @@ final class UsageService {
             case .valid(let contributions):
                 dshContributions = contributions
                 dshNeedsFullRescan = false
+            case .pending(let contributions):
+                dshContributions = contributions
+                dshNeedsFullRescan = true
             case .rebuild:
                 dshContributions = [:]
                 dshNeedsFullRescan = true
@@ -988,7 +991,8 @@ final class UsageService {
         let opencode = await opencodeTask
         let dsh = await dshTask
         // DSH 的坏帧、坏文件也要能浮出来（§6 决策 4）；pi / opencode 的既有行为不动。
-        let failedFileCount = claude.failedFileCount + codex.failedFileCount + dsh.failedFileCount
+        let failedFileCount = claude.failedFileCount + codex.failedFileCount
+            + dsh.failedFileCount + dsh.failedDirectoryCount + dsh.duplicateSessionCount
 
         aggregator.ingestLocal(claude.entries)
         aggregator.ingestLocal(codex.entries)
@@ -1052,33 +1056,39 @@ final class UsageService {
         // DSH 不像其他扫描器那样靠 seen 集合兜底去重：本轮若不落盘，watermark 会一并压住，
         // 下一轮会把同样的帧再扫一遍。因此先纯内存试算贡献，只有本轮真的落盘才把它计入聚合，
         // 让「未落盘就重扫」天然幂等。
-        let dshUpdate = DshContributionStore.apply(scan: dsh, to: dshContributions)
+        let dshRebuildReady = dshNeedsFullRescan && dsh.isComplete
+        let canCommitDsh = !dshNeedsFullRescan || dsh.isComplete
+        let dshUpdate = canCommitDsh
+            ? DshContributionStore.apply(scan: dsh, to: dshContributions)
+            : DshContributionStore.Update(contributions: dshContributions, changed: false)
 
         // 没有真实用量或档案变化时沿用现有代次，只提交轻量 watermark。
         let hasNewEntries = !claude.entries.isEmpty || !codex.entries.isEmpty
-            || !pi.entries.isEmpty || !opencode.entries.isEmpty || dshUpdate.changed
+            || !pi.entries.isEmpty || !opencode.entries.isEmpty || dshUpdate.changed || dshRebuildReady
         if hasNewEntries || conversationChanged { hasUnwrittenRollupChanges = true }
         // 尚未建立代次时必须立刻落盘，否则内存与磁盘无从对齐。
         let mustWriteRollups = loadedRollupGeneration == nil
         let throttleElapsed = lastRollupWriteAt.map {
             started.timeIntervalSince($0) >= Self.rollupWriteInterval
         } ?? true
-        let shouldWriteRollups = mustWriteRollups
+        let shouldWriteRollups = mustWriteRollups || dshRebuildReady
             || (hasUnwrittenRollupChanges && (!allowDeferredWrite || throttleElapsed))
         let generationID = shouldWriteRollups ? UUID().uuidString : loadedRollupGeneration!
 
         if shouldWriteRollups {
             // 贡献有变化就整体重归并并替换 DSH 分区：日桶、对话桶与档案只换 DSH 那一份，
             // 其他服务分区原样保留（§3.3）。父子归属变化也在这里生效。
-            dshContributions = dshUpdate.contributions
-            dshNeedsFullRescan = false
-            let dshRollup = DshContributionRollup.reduce(dshContributions)
-            aggregator.replaceLocal(app: .dsh, buckets: dshRollup.dayBuckets)
-            conversationAggregator.replaceLocal(
-                app: .dsh,
-                infos: dshRollup.conversationInfos,
-                buckets: dshRollup.conversationBuckets
-            )
+            if canCommitDsh {
+                dshContributions = dshUpdate.contributions
+                dshNeedsFullRescan = false
+                let dshRollup = DshContributionRollup.reduce(dshContributions)
+                aggregator.replaceLocal(app: .dsh, buckets: dshRollup.dayBuckets)
+                conversationAggregator.replaceLocal(
+                    app: .dsh,
+                    infos: dshRollup.conversationInfos,
+                    buckets: dshRollup.conversationBuckets
+                )
+            }
         }
 
         let buckets = aggregator.snapshotLocal()
@@ -1095,7 +1105,7 @@ final class UsageService {
             opencodeLastMessageTime: opencode.newLastMessageTime,
             opencodeSeenMessageIds: opencode.newSeenMessageIds,
             // 未落盘的一轮不推进 DSH watermark：下一轮重扫同样的帧，试算结果被丢弃，天然幂等。
-            dsh: shouldWriteRollups ? dsh.newState : prev.dsh
+            dsh: shouldWriteRollups && canCommitDsh ? dsh.newState : prev.dsh
         )
         // watermark 绝不能单独越过尚未落盘的聚合数据：那样重启后会拿到
         // 「新 watermark + 旧 rollup」的同代组合，中间那段用量永久丢失。
@@ -1150,6 +1160,7 @@ final class UsageService {
 
         // DSH 贡献缓存与三份 rollup、scan-state 同代；顺序同样是「派生快照先写、watermark 最后写」。
         let dshContributionsToWrite = shouldWriteRollups ? dshContributions : [:]
+        let dshRebuildPending = dshNeedsFullRescan
 
         let persistenceError: String? = await Task.detached(priority: .utility) {
             do {
@@ -1160,7 +1171,8 @@ final class UsageService {
                     try DshContributionCache.save(
                         dshContributionsToWrite,
                         generationID: generationID,
-                        pricingFingerprint: fingerprint
+                        pricingFingerprint: fingerprint,
+                        requiresRebuild: dshRebuildPending
                     )
                 }
                 if let cycleRollup {
@@ -1199,9 +1211,14 @@ final class UsageService {
         }
         cachedScanState = newScanState
         lastScanAt = Date()
-        lastError = failedFileCount > 0
-            ? "usage scan incomplete: \(failedFileCount) log source(s) unreadable; retrying next scan"
-            : nil
+        let unverifiedDshCount = dshContributions.values.filter { $0.needsVerification == true }.count
+        if failedFileCount > 0 {
+            lastError = "usage scan incomplete: \(failedFileCount) log source(s) unreadable or conflicting; retrying next scan"
+        } else if unverifiedDshCount > 0 {
+            lastError = "DSH historical usage for \(unverifiedDshCount) deleted session(s) could not be verified"
+        } else {
+            lastError = nil
+        }
         publishTotals()
 
         let elapsed = String(format: "%.2fs", Date().timeIntervalSince(started))
@@ -1210,7 +1227,7 @@ final class UsageService {
             codex files=\(codex.filesScanned) lines=\(codex.linesParsed) new=\(codex.entries.count); \
             pi files=\(pi.filesScanned) lines=\(pi.linesParsed) new=\(pi.entries.count); \
             opencode messages=\(opencode.messagesRead) new=\(opencode.entries.count); \
-            dsh files=\(dsh.filesScanned) new=\(dsh.entries.count) unreadable=\(dsh.failedFileCount); \
+            dsh files=\(dsh.filesScanned) new=\(dsh.entries.count) unreadable=\(dsh.failedFileCount) directories=\(dsh.failedDirectoryCount) duplicateIDs=\(dsh.duplicateSessionCount); \
             unreadable=\(failedFileCount); elapsed=\(elapsed)
             """)
         return true

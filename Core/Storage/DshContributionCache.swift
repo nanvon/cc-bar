@@ -38,6 +38,8 @@ nonisolated struct DshContribution: Sendable, Codable, Equatable {
     var cwd: String?
     var parentSession: String?
     var title: String?
+    /// 旧版缓存中源日志已不存在，无法按新解析规则复核的历史贡献。
+    var needsVerification: Bool? = nil
     var usage: [DshContributionBucket]
 
     /// 把一轮新增条目按 (日, 模型, 速度) 合入。
@@ -100,20 +102,22 @@ private extension DshContributionBucket {
 }
 
 nonisolated struct DshContributionPayload: Sendable, Codable {
-    /// v1: 首版。DSH 解析规则或价格口径变化时 bump，并重新归并受影响贡献。
-    static let currentVersion = 1
+    /// v2: fork 继承段、失败尝试与重试口径修正；v1 按会话逐个迁移。
+    static let currentVersion = 2
     var version = Self.currentVersion
     /// 与 scan-state、日 rollup、对话 rollup 共用的代次；不一致就整体重建（§3.3）。
     var generationID = ""
     var pricingFingerprint = ""
     var contributions: [String: DshContribution] = [:]
+    /// 重建未完成时仍可随其他服务的 rollup 同代落盘；下次启动必须继续从零扫描 DSH。
+    var requiresRebuild: Bool?
     var updatedAt = Date.distantPast
 }
 
-/// DSH 逐会话贡献缓存的读取结论。缓存缺失、版本不符或代次不一致都必须显式标为需要重建，
-/// 不能把不匹配的贡献和旧桶混用（§3.3）。
+/// DSH 逐会话贡献缓存的读取结论。v1 可保留旧贡献并逐会话校正；损坏或错代须重建。
 nonisolated enum DshContributionLoadResult: Sendable {
     case valid([String: DshContribution])
+    case pending([String: DshContribution])
     /// 需要从现存 DSH 日志重建；已删除会话的历史无法恢复，属第一版已知限制。
     case rebuild
 }
@@ -131,19 +135,30 @@ enum DshContributionCache {
         let url = cacheFileURL(in: directory)
         guard let data = try? Data(contentsOf: url),
               let payload = try? JSONDecoder().decode(DshContributionPayload.self, from: data),
-              payload.version == DshContributionPayload.currentVersion,
+              (payload.version == 1 || payload.version == DshContributionPayload.currentVersion),
               !payload.generationID.isEmpty,
               payload.generationID == generationID
         else {
             return .rebuild
         }
-        return .valid(payload.contributions)
+        if payload.version == 1 {
+            var old = payload.contributions
+            for (id, var contribution) in old {
+                contribution.needsVerification = true
+                old[id] = contribution
+            }
+            return .pending(old)
+        }
+        return payload.requiresRebuild == true
+            ? .pending(payload.contributions)
+            : .valid(payload.contributions)
     }
 
     nonisolated static func save(
         _ contributions: [String: DshContribution],
         generationID: String,
         pricingFingerprint: String,
+        requiresRebuild: Bool = false,
         in directory: URL? = nil
     ) throws {
         let url = cacheFileURL(in: directory)
@@ -152,6 +167,7 @@ enum DshContributionCache {
         payload.generationID = generationID
         payload.pricingFingerprint = pricingFingerprint
         payload.contributions = contributions
+        payload.requiresRebuild = requiresRebuild
         payload.updatedAt = Date()
         try JSONEncoder().encode(payload).write(to: url, options: [.atomic])
     }

@@ -137,6 +137,46 @@ final class DshContributionTests: XCTestCase {
         XCTAssertEqual(totalTokens(DshContributionRollup.reduce(contributions)), 30)
     }
 
+    func testDeletedFileReappearingAtSamePathReplacesContribution() throws {
+        let url = try logs.write(project: "p", session: "s", file: "session.v1.jsonl.zstd", bytes: try log(session: "s", inputs: [10]))
+        let first = scan()
+        var contributions = DshContributionStore.apply(scan: first, to: [:]).contributions
+        try FileManager.default.removeItem(at: url)
+        let missing = scan(first.newState)
+        contributions = DshContributionStore.apply(scan: missing, to: contributions).contributions
+        XCTAssertEqual(totalTokens(DshContributionRollup.reduce(contributions)), 10)
+
+        try logs.write(project: "p", session: "s", file: "session.v1.jsonl.zstd", bytes: try log(session: "s", inputs: [7]))
+        let restored = scan(missing.newState)
+        contributions = DshContributionStore.apply(scan: restored, to: contributions).contributions
+        XCTAssertEqual(totalTokens(DshContributionRollup.reduce(contributions)), 7)
+    }
+
+    func testDuplicateSessionIDAcrossProjectsDoesNotChangeContribution() throws {
+        try logs.write(project: "p", session: "s", file: "session.v1.jsonl.zstd", bytes: try log(session: "s", inputs: [10]))
+        let first = scan()
+        let original = DshContributionStore.apply(scan: first, to: [:]).contributions
+        try logs.write(project: "q", session: "other", file: "session.v1.jsonl.zstd", bytes: try log(session: "s", inputs: [20]))
+
+        let conflict = scan(first.newState)
+        XCTAssertEqual(conflict.duplicateSessionCount, 1)
+        XCTAssertFalse(conflict.isComplete)
+        XCTAssertTrue(conflict.entries.isEmpty)
+        XCTAssertEqual(DshContributionStore.apply(scan: conflict, to: original).contributions, original)
+    }
+
+    func testUnreadableRootPreservesPreviousWatermarks() throws {
+        let fileRoot = logs.root.appendingPathComponent("not-a-directory")
+        let path = fileRoot.appendingPathComponent("session.v1.jsonl.zstd").path
+        let previous = [path: ScanFileState(mtime: 1, offset: 42)]
+        try Data("x".utf8).write(to: fileRoot)
+
+        let result = DshSessionScanner.scan(previous: previous, root: fileRoot)
+        XCTAssertEqual(result.failedDirectoryCount, 1)
+        XCTAssertEqual(result.newState, previous)
+        XCTAssertFalse(result.isComplete)
+    }
+
     // MARK: - 子代理归根
 
     func testParentAppearingLaterRefoldsExistingContributions() throws {
@@ -242,6 +282,25 @@ final class DshContributionTests: XCTestCase {
         guard case .rebuild = DshContributionCache.load(generationID: "gen-1", in: directory) else {
             return XCTFail("缓存损坏必须判定为需要重建")
         }
+    }
+
+    func testV1ContributionCacheLoadsAsPendingMigration() throws {
+        let directory = logs.root.appendingPathComponent("legacy-cache", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        var payload = DshContributionPayload()
+        payload.version = 1
+        payload.generationID = "legacy-generation"
+        payload.contributions = ["old": DshContribution(
+            sessionID: "old", sourcePath: "/deleted/session.jsonl.zstd",
+            fileIdentity: nil, fileSize: 4, watermark: 4,
+            cwd: nil, parentSession: nil, title: nil, usage: []
+        )]
+        try JSONEncoder().encode(payload).write(to: DshContributionCache.cacheFileURL(in: directory))
+
+        guard case .pending(let loaded) = DshContributionCache.load(generationID: "legacy-generation", in: directory) else {
+            return XCTFail("v1 贡献应保留并等待重建")
+        }
+        XCTAssertEqual(loaded["old"]?.needsVerification, true)
     }
 
     func testRebuildFromLogsRestoresAllSessions() throws {

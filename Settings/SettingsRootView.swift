@@ -838,13 +838,22 @@ struct SettingsRootView: View {
             // 没有默认日志不能据此断定用户未安装 DSH。
             let sessionsDir = home.appendingPathComponent(".dsh/sessions", isDirectory: true)
             let homeDir = home.appendingPathComponent(".dsh", isDirectory: true)
-            let detected = fileManager.fileExists(atPath: sessionsDir.path)
-                || fileManager.fileExists(atPath: homeDir.path)
+            var isDirectory: ObjCBool = false
+            if fileManager.fileExists(atPath: sessionsDir.path, isDirectory: &isDirectory), isDirectory.boolValue {
+                return (
+                    detailText: tr("Session directory detected (~/.dsh/sessions)", "已检测到会话目录 (~/.dsh/sessions)"),
+                    availability: .connected
+                )
+            }
+            if fileManager.fileExists(atPath: homeDir.path) {
+                return (
+                    detailText: tr("DSH data directory detected; no default session directory", "已检测到 DSH 数据目录，未发现默认会话目录"),
+                    availability: .notDetected
+                )
+            }
             return (
-                detailText: detected
-                    ? tr("Local logs detected (~/.dsh/sessions)", "已检测到本地日志 (~/.dsh/sessions)")
-                    : tr("No logs detected (~/.dsh/sessions)", "未检测到本地日志 (~/.dsh/sessions)"),
-                availability: detected ? .connected : .notDetected
+                detailText: tr("No session directory detected (~/.dsh/sessions)", "未检测到会话目录 (~/.dsh/sessions)"),
+                availability: .notDetected
             )
         default:
             return (detailText: "", availability: .connected)

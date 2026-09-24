@@ -19,6 +19,7 @@
 		49C1BE17000000000001AAAA /* DshContributionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BE13000000000001AAAA /* DshContributionStore.swift */; };
 		49C1BE18000000000001AAAA /* DshContributionRollup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BE14000000000001AAAA /* DshContributionRollup.swift */; };
 		49C1BE19000000000001AAAA /* DshContributionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BE15000000000001AAAA /* DshContributionTests.swift */; };
+		49C1BE1F000000000001AAAA /* DshAggregationRegressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BE1E000000000001AAAA /* DshAggregationRegressionTests.swift */; };
 		49C1BE1B000000000001AAAA /* DshPricingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BE1A000000000001AAAA /* DshPricingTests.swift */; };
 		49C1BE1D000000000001AAAA /* DshDiagnosticsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BE1C000000000001AAAA /* DshDiagnosticsTests.swift */; };
 		4931AC592FC02A4200EE598C /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 4931AC522FC02A4200EE598C /* Assets.xcassets */; };
@@ -213,6 +214,7 @@
 		49C1BE13000000000001AAAA /* DshContributionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DshContributionStore.swift; sourceTree = "<group>"; };
 		49C1BE14000000000001AAAA /* DshContributionRollup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DshContributionRollup.swift; sourceTree = "<group>"; };
 		49C1BE15000000000001AAAA /* DshContributionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DshContributionTests.swift; sourceTree = "<group>"; };
+		49C1BE1E000000000001AAAA /* DshAggregationRegressionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DshAggregationRegressionTests.swift; sourceTree = "<group>"; };
 		49C1BE1A000000000001AAAA /* DshPricingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DshPricingTests.swift; sourceTree = "<group>"; };
 		49C1BE1C000000000001AAAA /* DshDiagnosticsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DshDiagnosticsTests.swift; sourceTree = "<group>"; };
 		49C1B90000000000000FAAAA /* OpencodeScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpencodeScanner.swift; sourceTree = "<group>"; };
@@ -522,6 +524,7 @@
 				49C1BE0D000000000001AAAA /* DshSessionScannerTests.swift */,
 				49C1BE0E000000000001AAAA /* DshTestFixtures.swift */,
 				49C1BE15000000000001AAAA /* DshContributionTests.swift */,
+				49C1BE1E000000000001AAAA /* DshAggregationRegressionTests.swift */,
 				49C1BE1A000000000001AAAA /* DshPricingTests.swift */,
 				49C1BE1C000000000001AAAA /* DshDiagnosticsTests.swift */,
 				49C1BF0A000000000001AAAA /* ConversationProjectResolverTests.swift */,
@@ -771,6 +774,7 @@
 				49C1BE10000000000001AAAA /* DshSessionScannerTests.swift in Sources */,
 				49C1BE11000000000001AAAA /* DshTestFixtures.swift in Sources */,
 				49C1BE19000000000001AAAA /* DshContributionTests.swift in Sources */,
+				49C1BE1F000000000001AAAA /* DshAggregationRegressionTests.swift in Sources */,
 				49C1BE1B000000000001AAAA /* DshPricingTests.swift in Sources */,
 				49C1BE1D000000000001AAAA /* DshDiagnosticsTests.swift in Sources */,
 				49C1BF0A000000000001AABB /* ConversationProjectResolverTests.swift in Sources */,

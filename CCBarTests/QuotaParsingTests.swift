@@ -3777,7 +3777,7 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertEqual(ScanState.currentVersion, 15)
         XCTAssertEqual(UsageRollupPayload.currentVersion, 10)
         XCTAssertEqual(ConversationRollupPayload.currentVersion, 8)
-        XCTAssertEqual(DshContributionPayload.currentVersion, 1)
+        XCTAssertEqual(DshContributionPayload.currentVersion, 2)
         XCTAssertEqual(QuotaCyclePayload.currentVersion, 4)
         XCTAssertEqual(CycleUsageRollupPayload.currentVersion, 4)
         XCTAssertEqual(PricingCatalogCachePayload.currentVersion, 2)

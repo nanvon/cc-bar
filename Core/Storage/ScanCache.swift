@@ -26,6 +26,16 @@ nonisolated struct ScanFileState: Sendable, Equatable, Codable {
     var fileIdentity: ScanFileIdentity?
     /// DSH 用：上次扫描时的大小，用于「offset > size 即被截断」的判定。
     var fileSize: UInt64?
+    /// DSH fork 的继承边界；v0/v1 用事件序号，v2/v3 用 end-seed 标记。
+    var dshSeedCut: Int?
+    var dshIsSeeded: Bool?
+    var dshSeedComplete: Bool?
+    /// DSH 请求路由与最后一个结算槽，增量扫描时保持跨帧语义。
+    var dshRouteProvider: String?
+    var dshRouteModel: String?
+    var dshLastTurn: Int?
+    var dshLastStep: Int?
+    var dshLastSlotOpen: Bool?
 }
 
 /// 文件身份。刻意不用 mtime：追加写会让 mtime 变化，但那是正常增量而不是替换。
