@@ -13,7 +13,7 @@ extension QuotaApp {
         case .codex: .codexAccent
         case .claude: .claudeAccent
         case .antigravity: .antigravityAccent
-        case .cursor: .gray
+        case .cursor: .cursorAccent
         case .commandCode: Color(red: 24 / 255, green: 24 / 255, blue: 27 / 255)
         }
     }
@@ -26,11 +26,11 @@ extension UsageApp {
         switch self {
         case .codex: .codexAccent
         case .claude: .claudeAccent
-        case .cursor: .gray
+        case .cursor: .cursorAccent
         case .pi: .piAccent
         case .opencode: .opencodeAccent
-        // DSH 识别色取 DeepSeek 品牌蓝（Asset Catalog : DshAccent），只用于 tile / logo，
-        // 不参与额度状态着色。
+        // DSH 识别色取官方主题强调蓝（dsh-client-ui-theme 的 deepseek-500 / 深色 deepseek-400，
+        // Asset Catalog : DshAccent），用于图表 / 色块；tile 走官方品牌主色黑底，不用此色。
         case .dsh: .dshAccent
         }
     }
@@ -45,6 +45,9 @@ extension UsageApp {
         case .dsh: "DSH"
         }
     }
+
+    /// 对应 Resources/Logos/ 下的 svg 资源名。
+    var logoName: String { rawValue }
 }
 
 // MARK: - Status color
@@ -197,14 +200,15 @@ struct ServiceMark: View {
 // MARK: - ServiceTile (带 logo 的 squircle)
 //
 // 见 docs/设计风格.md §11.2。
-// Popover 服务行左侧、Stats sidebar 服务条目、Onboarding 账号列表都用。
+// Popover 服务行左侧、Onboarding 账号列表、设置服务卡片，以及主窗口统计 / 对话 / 周期里
+// 标识服务的位置（小号，经 `init(app:size:)`）都用。图表图例与悬停提示仍用 ServiceMark 色块对应图表颜色。
 
 struct ServiceTile: View {
     /// 资源名,对应 Resources/Logos/ 下的 svg。
     let logoName: String
     /// 备用字母(SVG 加载失败时显示)。
     let fallback: String
-    /// 背景填充色(服务识别色)。Codex 走 OpenAI 官方观感(白底黑 logo),会忽略此值。
+    /// 背景填充色(服务识别色)。Codex 走 OpenAI 官方观感(白底黑 logo)、DSH / Cursor 走固定深色底,会忽略此值。
     let tint: Color
     /// tile 尺寸,默认 Popover 用 22pt。
     var size: CGFloat = 22
@@ -217,7 +221,21 @@ struct ServiceTile: View {
     /// 其余地方(文字色、环形、图表)的 `Color.codexAccent` 仍是石墨灰,不受影响。
     private var isOpenAIBrand: Bool { logoName == "codex" }
 
-    private var background: Color { isOpenAIBrand ? .white : tint }
+    /// 固定深色底 + 白色 logo,不随外观切换:
+    /// - DSH:官方品牌主色(dsh-client-ui-theme `brand-primary` 浅色值 #0F1115),图表里的 `Color.dshAccent` 仍是官方强调蓝;
+    /// - Cursor:`CursorAccent` 深色值是近白,直接当底色会吞掉白色 logo,所以 tile 固定用它的浅色值 #2C2C2E。
+    private var fixedDarkBackground: Color? {
+        switch logoName {
+        case "dsh": Color(red: 15 / 255, green: 17 / 255, blue: 21 / 255)
+        case "cursor": Color(red: 44 / 255, green: 44 / 255, blue: 46 / 255)
+        default: nil
+        }
+    }
+
+    private var background: Color {
+        if isOpenAIBrand { return .white }
+        return fixedDarkBackground ?? tint
+    }
     private var foreground: Color { isOpenAIBrand ? .black : .white }
 
     var body: some View {
@@ -246,6 +264,20 @@ struct ServiceTile: View {
                 .font(.system(size: logoSize * 0.7, weight: .semibold))
                 .foregroundStyle(foreground)
         }
+    }
+}
+
+extension ServiceTile {
+    /// 主窗口里标识用量服务的小号 tile（取代原来的 ServiceMark 色块），logo 尺寸与圆角按 tile 尺寸等比缩放。
+    init(app: UsageApp, size: CGFloat) {
+        self.init(
+            logoName: app.logoName,
+            fallback: String(app.displayName.prefix(1)),
+            tint: app.tintColor,
+            size: size,
+            logoSize: (size * 0.64).rounded(),
+            cornerRadius: size * 0.27
+        )
     }
 }
 

@@ -75,6 +75,7 @@
 		49C1CC01000000000001AABB /* commandcode.svg in Resources */ = {isa = PBXBuildFile; fileRef = 49C1CC01000000000001AAAA /* commandcode.svg */; };
 		49C1EE01000000000001AABB /* pi.svg in Resources */ = {isa = PBXBuildFile; fileRef = 49C1EE01000000000001AAAA /* pi.svg */; };
 		49C1EE02000000000001AABB /* opencode.svg in Resources */ = {isa = PBXBuildFile; fileRef = 49C1EE02000000000001AAAA /* opencode.svg */; };
+		49C1EE03000000000001AABB /* dsh.svg in Resources */ = {isa = PBXBuildFile; fileRef = 49C1EE03000000000001AAAA /* dsh.svg */; };
 		49C1CC02000000000001AABB /* CommandCodeAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1CC02000000000001AAAA /* CommandCodeAuth.swift */; };
 		49C1CC03000000000001AABB /* CommandCodeQuotaClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1CC03000000000001AAAA /* CommandCodeQuotaClient.swift */; };
 		49C1CC04000000000001AABB /* CommandCodeCredentialSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1CC04000000000001AAAA /* CommandCodeCredentialSheet.swift */; };
@@ -192,6 +193,7 @@
 		49C1CC01000000000001AAAA /* commandcode.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = commandcode.svg; sourceTree = "<group>"; };
 		49C1EE01000000000001AAAA /* pi.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = pi.svg; sourceTree = "<group>"; };
 		49C1EE02000000000001AAAA /* opencode.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = opencode.svg; sourceTree = "<group>"; };
+		49C1EE03000000000001AAAA /* dsh.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = dsh.svg; sourceTree = "<group>"; };
 		49C1CC02000000000001AAAA /* CommandCodeAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandCodeAuth.swift; sourceTree = "<group>"; };
 		49C1CC03000000000001AAAA /* CommandCodeQuotaClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandCodeQuotaClient.swift; sourceTree = "<group>"; };
 		49C1CC04000000000001AAAA /* CommandCodeCredentialSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandCodeCredentialSheet.swift; sourceTree = "<group>"; };
@@ -417,6 +419,7 @@
 				49C1CC01000000000001AAAA /* commandcode.svg */,
 				49C1EE01000000000001AAAA /* pi.svg */,
 				49C1EE02000000000001AAAA /* opencode.svg */,
+				49C1EE03000000000001AAAA /* dsh.svg */,
 			);
 			path = Logos;
 			sourceTree = "<group>";
@@ -642,6 +645,7 @@
 				49C1CC01000000000001AABB /* commandcode.svg in Resources */,
 				49C1EE01000000000001AABB /* pi.svg in Resources */,
 				49C1EE02000000000001AABB /* opencode.svg in Resources */,
+				49C1EE03000000000001AABB /* dsh.svg in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

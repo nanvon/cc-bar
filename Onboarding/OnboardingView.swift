@@ -195,7 +195,7 @@ private struct DetectAccountsStep: View {
                     plan: appState.cursorQuota?.planType,
                     email: appState.cursorAccount?.email,
                     source: "~/Library/Application Support/Cursor/User/globalStorage/state.vscdb",
-                    tint: .gray,
+                    tint: .cursorAccent,
                     logoName: "cursor",
                     fallback: "C",
                     isDetected: appState.cursorAccount != nil

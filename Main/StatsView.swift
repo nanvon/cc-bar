@@ -303,18 +303,6 @@ enum StatsServiceFilter: Hashable, CaseIterable {
         }
     }
 
-    var tint: Color? {
-        switch self {
-        case .all: return nil
-        case .codex: return .codexAccent
-        case .claude: return .claudeAccent
-        case .cursor: return .gray
-        case .pi: return .piAccent
-        case .opencode: return .opencodeAccent
-        case .dsh: return .dshAccent
-        }
-    }
-
     var usageApp: UsageApp? {
         switch self {
         case .all: return nil
@@ -561,7 +549,7 @@ struct StatsView: View {
                     sidebarItem(
                         english: item.englishLabel,
                         chinese: item.chineseLabel,
-                        tint: item.tint,
+                        app: item.usageApp,
                         active: serviceFilter == item
                     ) {
                         serviceFilter = item
@@ -632,7 +620,7 @@ struct StatsView: View {
     private func sidebarItem(
         english: String,
         chinese: String,
-        tint: Color? = nil,
+        app: UsageApp? = nil,
         icon: String? = nil,
         active: Bool,
         action: @escaping () -> Void
@@ -642,13 +630,12 @@ struct StatsView: View {
                 if let icon {
                     Image(systemName: icon)
                         .font(.system(size: 12))
-                        .frame(width: 13, height: 13)
+                        .frame(width: 14, height: 14)
                         .foregroundStyle(active ? Color.white : Color.secondary)
-                } else if let tint {
-                    ServiceMark(color: tint, size: 8)
-                        .frame(width: 13, height: 13, alignment: .center)
+                } else if let app {
+                    ServiceTile(app: app, size: 14)
                 } else {
-                    Color.clear.frame(width: 13, height: 13)
+                    Color.clear.frame(width: 14, height: 14)
                 }
 
                 Text(tr(english, chinese))
@@ -761,7 +748,7 @@ struct StatsView: View {
             value: StatsFormatter.compactToken(currentTotalsAll.totalTokens),
             delta: deltaPercent(current: Double(currentTotalsAll.totalTokens),
                                 previous: Double(previousTotalsAll.totalTokens)),
-            tint: nil,
+            app: nil,
             dimmed: false
         )
     }
@@ -776,7 +763,7 @@ struct StatsView: View {
                 costIncomplete: currentTotalsAll.costIncomplete
             ),
             delta: costDelta(current: currentTotalsAll, previous: previousTotalsAll),
-            tint: nil,
+            app: nil,
             dimmed: false
         )
     }
@@ -794,7 +781,7 @@ struct StatsView: View {
                     costIncomplete: currentTotals(app).costIncomplete
                 ),
             delta: isDimmed ? nil : costDelta(current: currentTotals(app), previous: previousTotals(app)),
-            tint: app.tintColor,
+            app: app,
             dimmed: isDimmed
         )
     }
@@ -937,7 +924,7 @@ struct StatsView: View {
         ByServiceRow(
             title: app.displayName,
             subtitle: serviceSubtitle(app),
-            tint: app.tintColor,
+            app: app,
             value: Decimal(currentTotals(app).totalTokens),
             totalValue: Decimal(currentTotalsAll.totalTokens),
             totals: currentTotals(app),
@@ -1046,7 +1033,7 @@ struct StatsView: View {
                         .foregroundStyle(.tertiary)
                     ForEach(UsageApp.allCases.filter { group.sources.contains($0) }, id: \.self) { app in
                         HStack(spacing: 4) {
-                            ServiceMark(color: app.tintColor, size: 6, cornerRadius: 1.5)
+                            ServiceTile(app: app, size: 12)
                             Text(app.displayName)
                                 .font(.system(size: 10))
                                 .foregroundStyle(.secondary)
@@ -1074,7 +1061,7 @@ struct StatsView: View {
     private func providerModelRow(_ row: ProviderModelRow) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 6) {
-                ServiceMark(color: row.app.tintColor, size: 6, cornerRadius: 1.5)
+                ServiceTile(app: row.app, size: 12)
                 Text(row.model)
                     .font(.system(size: 11.5, design: .monospaced))
                     .lineLimit(1)
@@ -1185,7 +1172,7 @@ struct StatsView: View {
                         Divider()
                     }
                     if showsModelGroup(app) {
-                        modelGroup(title: app.displayName, tint: app.tintColor, rows: modelRows(for: app))
+                        modelGroup(app: app, rows: modelRows(for: app))
                     }
                 }
             }
@@ -1240,7 +1227,7 @@ struct StatsView: View {
                 sections.append(timelineSection(
                     accountKey: key,
                     title: "Codex",
-                    tint: .codexAccent,
+                    app: .codex,
                     snapshot: appState.codexQuota,
                     isLoading: appState.refreshState(for: .codex).inFlight
                 ))
@@ -1254,7 +1241,7 @@ struct StatsView: View {
                 sections.append(timelineSection(
                     accountKey: key,
                     title: importedCodexTimelineTitle(account, index: idx),
-                    tint: .codexAccent,
+                    app: .codex,
                     snapshot: appState.importedCodexQuota(for: account),
                     isLoading: appState.importedCodexRefreshState(for: account).inFlight
                 ))
@@ -1267,7 +1254,7 @@ struct StatsView: View {
                 sections.append(timelineSection(
                     accountKey: key,
                     title: "Claude Code",
-                    tint: .claudeAccent,
+                    app: .claude,
                     snapshot: appState.claudeQuota,
                     isLoading: appState.refreshState(for: .claude).inFlight
                 ))
@@ -1280,7 +1267,7 @@ struct StatsView: View {
     private func timelineSection(
         accountKey: String,
         title: String,
-        tint: Color,
+        app: UsageApp,
         snapshot: QuotaSnapshot?,
         isLoading: Bool
     ) -> QuotaTimelineSection {
@@ -1290,7 +1277,7 @@ struct StatsView: View {
         return QuotaTimelineSection(
             accountKey: accountKey,
             title: title,
-            tint: tint,
+            app: app,
             windows: windows,
             isLoading: isLoading
         )
@@ -1361,11 +1348,11 @@ struct StatsView: View {
         return "Codex · \(account.id)"
     }
 
-    private func modelGroup(title: String, tint: Color, rows: [ModelRow]) -> some View {
+    private func modelGroup(app: UsageApp, rows: [ModelRow]) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
-                ServiceMark(color: tint, size: 6, cornerRadius: 1.5)
-                Text(title.uppercased())
+                ServiceTile(app: app, size: 12)
+                Text(app.displayName.uppercased())
                     .font(.system(size: 10, weight: .semibold))
                     .kerning(0.4)
                     .foregroundStyle(.tertiary)
@@ -1890,16 +1877,18 @@ private struct KPICard: View {
     let chinese: String
     let value: String
     let delta: Double?
-    let tint: Color?
+    let app: UsageApp?
     let dimmed: Bool
+
+    private var tint: Color? { app?.tintColor }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             // delta 放在 Label 行右侧：利用标题行原有留白，让 22pt 主值独占整行，
             // 服务变多、卡片被压窄时主值不再被 delta 挤掉。
             HStack(spacing: 4) {
-                if let tint {
-                    ServiceMark(color: tint, size: 6, cornerRadius: 1.5)
+                if let app {
+                    ServiceTile(app: app, size: 12)
                 }
                 Text(tr(english, chinese))
                     .font(.system(size: 11))
@@ -2153,17 +2142,21 @@ private struct FastUsageInlineRow: View {
 private struct ByServiceRow: View {
     let title: String
     let subtitle: String
-    let tint: Color
+    let app: UsageApp
     let value: Decimal
     let totalValue: Decimal
     let totals: UsageTotals
     let speed: UsageSpeedBreakdown
 
+    private var tint: Color { app.tintColor }
+
     var body: some View {
         // 花费金额不再展示:与 KPI 行的 Codex / Claude Code 卡完全重复,此处保留 Token 占比 + 量。
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline) {
-                ServiceMark(color: tint, size: 8)
+                ServiceTile(app: app, size: 14)
+                    // 行按首行基线对齐：把 tile 的基线设在中线下方约半个大写字高，让 tile 与 12pt 标题视觉居中。
+                    .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
                 Text(title)
                     .font(.system(size: 12, weight: .semibold))
                 Text(subtitle)
@@ -2233,7 +2226,8 @@ private struct QuotaTimelineAccountPanel: View {
     private var header: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             HStack(spacing: 7) {
-                ServiceMark(color: section.tint, size: 8)
+                ServiceTile(app: section.app, size: 14)
+                    .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4.5 }
                 Text(section.title)
                     .font(.system(size: 13, weight: .semibold))
                 if let kind = activeWindow?.kind {
@@ -2725,7 +2719,8 @@ private struct QuotaTimelineSection: Identifiable {
     var id: String { accountKey }
     let accountKey: String
     let title: String
-    let tint: Color
+    let app: UsageApp
+    var tint: Color { app.tintColor }
     let windows: [QuotaTimelineWindow]
     var isLoading: Bool = false
 }

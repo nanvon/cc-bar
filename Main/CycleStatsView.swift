@@ -75,7 +75,7 @@ struct CycleStatsView: View {
 
         return VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 4) {
-                ServiceMark(color: app.tintColor, size: 6, cornerRadius: 1.5)
+                ServiceTile(app: app, size: 12)
                 Text("\(app.displayName) · \(cycleKindShort(kind))")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
@@ -130,7 +130,7 @@ struct CycleStatsView: View {
     private func cycleKpiEmptyState(app: UsageApp, kind: QuotaLimitKind) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 4) {
-                ServiceMark(color: app.tintColor, size: 6, cornerRadius: 1.5)
+                ServiceTile(app: app, size: 12)
                 Text("\(app.displayName) · \(cycleKindShort(kind))")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
