@@ -45,7 +45,7 @@ extension UsageApp {
 
 // MARK: - Status color
 
-/// 按剩余百分比解析 4 档状态色:>50% → normal / 20~50% → warning / <20% → low / <=0 → empty。
+/// 按剩余百分比解析 3 档状态色:>=20% → normal / <20% → low / <=0 → empty。
 ///
 /// 见 docs/设计风格.md §4.3。Popover / Floating / Stats KPI 全部走这里。
 /// `tint`(服务识别色)当前不参与额度着色,保留参数以备将来切回「服务色打底」方案。
@@ -53,7 +53,6 @@ func statusColor(remainingPercent: Double?, tint: Color) -> Color {
     guard let value = remainingPercent else { return .secondary }
     if value <= 0 { return quotaEmptyColor }
     if value < 20 { return quotaLowColor }
-    if value <= 50 { return quotaWarningColor }
     return quotaNormalColor
 }
 
@@ -63,18 +62,13 @@ private let quotaNormalColor = quotaAdaptiveColor(
     dark: (red: 152, green: 152, blue: 157)   // #98989D
 )
 
-private let quotaWarningColor = quotaAdaptiveColor(
-    light: (red: 246, green: 195, blue: 67),  // #F6C343
-    dark: (red: 255, green: 226, blue: 122)   // #FFE27A
-)
-
 private let quotaLowColor = quotaAdaptiveColor(
-    light: (red: 255, green: 122, blue: 47),  // #FF7A2F
+    light: (red: 199, green: 83, blue: 0),    // #C75300
     dark: (red: 255, green: 161, blue: 95)    // #FFA15F
 )
 
 private let quotaEmptyColor = quotaAdaptiveColor(
-    light: (red: 255, green: 77, blue: 109),  // #FF4D6D
+    light: (red: 209, green: 36, blue: 58),   // #D1243A
     dark: (red: 255, green: 122, blue: 144)   // #FF7A90
 )
 

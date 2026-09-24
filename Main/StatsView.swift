@@ -2493,11 +2493,11 @@ private struct QuotaTimelineChart: View {
         .padding(.trailing, 8)
     }
 
-    /// 图表内数据点 4 档色:warning / low / empty 沿用全局 `statusColor`;
-    /// normal(>50%)档在图表内比全局中性灰加深一档,保证浅色模式下点的可读性。
+    /// 图表内数据点 3 档色:low / empty 沿用全局 `statusColor`;
+    /// normal(>=20%)档在图表内比全局中性灰加深一档,保证浅色模式下点的可读性。
     /// 全局 `statusColor` 与 Popover / HUD 等处的中性灰不受影响。
     private func chartPointColor(remainingPercent: Double) -> Color {
-        guard remainingPercent > 50 else {
+        guard remainingPercent >= 20 else {
             return statusColor(remainingPercent: remainingPercent, tint: .secondary)
         }
         return Color(nsColor: NSColor(name: nil) { appearance in

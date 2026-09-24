@@ -55,7 +55,7 @@ cc-bar 是一个原生 macOS 菜单栏 App，用 Swift / SwiftUI 实现。
 - UI 优先使用 SwiftUI / AppKit 系统默认控件和 macOS 原生风格。
 - 视觉规则以 `docs/设计风格.md` 为准：
   - Codex 使用石墨灰识别色，Claude Code 使用桃橙识别色；识别色仅用于 tile / logo 等品牌识别，不再用于额度状态着色。
-  - 额度状态色按剩余比例分 4 档（统一走 `statusColor`）：剩余 `>50%` 中性石墨灰、`20%~50%` 黄、`<20%` 橙、`=0` 红。
+  - 额度状态色按剩余比例分 3 档（统一走 `statusColor`）：剩余 `>=20%` 中性石墨灰、`<20%` 橙、`=0` 红。
   - 数字使用 `.monospacedDigit()`。
   - 图标优先使用 SF Symbols。
 - 不自造大面积背景、玻璃阴影、Web 风格控件或无关装饰。
