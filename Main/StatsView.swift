@@ -230,7 +230,7 @@ enum StatsGranularity: Hashable, CaseIterable {
     }
 
     /// 单周期上下文窗口显示多少个周期（含所选那个）。三种粒度共用同一个值，
-    /// 柱数落在 `dailyBarWidth` 的 4~14 根档位里，粒度切换时柱宽不跳变。
+    /// 柱数落在 `StatsOverviewModel.barWidth` 的 4~14 根档位里，粒度切换时柱宽不跳变。
     static let contextWindowPeriods = 14
 
     /// 上下文窗口按该单位往前推：日 → 天，周 → 周，月 → 月。
@@ -358,14 +358,14 @@ struct StatsView: View {
     @State private var range: StatsRange = .today
     @State private var serviceFilter: StatsServiceFilter = .all
     @State private var viewMode: StatsViewMode = .overview
-    @State private var selectedPeriodKey: String?
     @State private var customFrom: Date = Calendar.current.startOfDay(
         for: Date().addingTimeInterval(-7 * 86400)
     )
     @State private var customTo: Date = Calendar.current.startOfDay(for: Date())
     @State private var granularity: StatsGranularity = .day
     @State private var providerSort: ProviderSort = .cost
-    @State private var expandedProvider: ModelProvider?
+    /// 概览派生结果的同步缓存，见 `StatsOverviewCache`。
+    @State private var overviewCache = StatsOverviewCache()
     /// 时间线窗口视角全局统一，避免 Codex 与 Claude 默认落在不同口径。
     @State private var timelineWindow: QuotaLimitKind = .fiveHour
 
@@ -377,9 +377,7 @@ struct StatsView: View {
             Divider()
 
             VStack(spacing: 0) {
-                if let error = appState.usageService.lastError {
-                    usageErrorBanner(error)
-                }
+                StatsUsageErrorBanner()
 
                 if viewMode == .conversations {
                     ConversationStatsView(
@@ -407,44 +405,11 @@ struct StatsView: View {
         .onChange(of: viewMode) { _, _ in
             reconcileServiceFilter()
         }
-        .onChange(of: granularity) { _, _ in
-            reconcileRange()
-            expandedProvider = nil
-        }
-        .onChange(of: range) { _, _ in expandedProvider = nil }
-        .onChange(of: serviceFilter) { _, _ in expandedProvider = nil }
+        .onChange(of: granularity) { _, _ in reconcileRange() }
         .task(id: cursorHistoryRequest) {
             guard let request = cursorHistoryRequest else { return }
             await appState.loadCursorUsageHistory(for: request.range)
         }
-    }
-
-    /// 本地日志读取或聚合持久化失败时必须在统计页可见，并给出直接恢复入口。
-    /// 具体技术错误保留在 hover help，主文案只说明数据状态与安全行为。
-    private func usageErrorBanner(_ error: String) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 11))
-            Text(tr(
-                "Usage statistics may be incomplete. Available data is preserved; retry or recalculate in Settings.",
-                "用量统计可能不完整。可用的已有数据会保留，请稍后重试或前往设置重新计算。"
-            ))
-            .font(.system(size: 11.5))
-            .lineLimit(2)
-            Spacer(minLength: 8)
-            Button(tr("Open Settings", "打开设置")) {
-                appState.mainTab = .settings
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-        }
-        .foregroundStyle(.orange)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.orange.opacity(0.08))
-        .overlay(alignment: .bottom) { Divider() }
-        .help(error)
     }
 
     /// 宽度断点:主画布达到该宽度时,时间线的折线图与表格改为左右并排;
@@ -467,19 +432,22 @@ struct StatsView: View {
     }
 
     private var overviewContent: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        let model = overviewModel
+        let scope = StatsOverviewScope(range: range, granularity: granularity, serviceFilter: serviceFilter)
+        return VStack(alignment: .leading, spacing: 12) {
             topBar
             if range == .custom { customRangeRow }
 
-            kpiRow.padding(.top, 6)
+            OverviewKPIRow(model: model, serviceFilter: serviceFilter)
+                .padding(.top, 6)
 
-            tokenBreakdownPanel
-            byServicePanel
+            OverviewTokenBreakdownPanel(model: model)
+            OverviewByServicePanel(model: model)
 
-            dailyUsagePanel
+            OverviewUsageChartPanel(model: model, granularity: granularity, scope: scope)
 
-            byModelPanel
-            byProviderPanel
+            OverviewByModelPanel(model: model, serviceFilter: serviceFilter)
+            OverviewByProviderPanel(model: model, sort: $providerSort, scope: scope)
         }
         .padding(20)
     }
@@ -665,16 +633,8 @@ struct StatsView: View {
             // Spacer 和两个 Picker 之间——那样每次出现都凭空插入约 170pt,把右对齐的
             // 控件整体推着左右平移。改成让它独占左侧剩余空间并在其中右对齐:视觉上仍
             // 紧贴控件左边,但剩余空间由它自己吃掉,控件位置只由自身宽度决定,不再被推动。
-            HStack(spacing: 6) {
-                if appState.usageService.isScanning {
-                    ProgressView()
-                        .controlSize(.small)
-                    Text(tr("Recalculating usage…", "正在重新计算用量…"))
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .trailing)
+            StatsScanningIndicator()
+                .frame(maxWidth: .infinity, alignment: .trailing)
 
             SegmentedBar(items: StatsGranularity.allCases,
                          label: { tr($0.englishLabel, $0.chineseLabel) },
@@ -727,462 +687,6 @@ struct StatsView: View {
         }
         .font(.system(size: 12))
         .foregroundStyle(.secondary)
-    }
-
-    // MARK: KPI row
-
-    private var kpiRow: some View {
-        HStack(spacing: 12) {
-            totalTokensCard
-            totalSpendCard
-            ForEach(visibleUsageApps, id: \.self) { app in
-                serviceCard(for: app)
-            }
-        }
-    }
-
-    private var totalTokensCard: some View {
-        KPICard(
-            english: "Total tokens",
-            chinese: "总 Tokens",
-            value: StatsFormatter.compactToken(currentTotalsAll.totalTokens),
-            delta: deltaPercent(current: Double(currentTotalsAll.totalTokens),
-                                previous: Double(previousTotalsAll.totalTokens)),
-            app: nil,
-            dimmed: false
-        )
-    }
-
-    private var totalSpendCard: some View {
-        KPICard(
-            english: "Total spend",
-            chinese: "总花费",
-            value: StatsFormatter.tierCost(
-                currentTotalsAll.costUSD,
-                hasUnpricedUsage: currentTotalsAll.hasUnpricedUsage,
-                costIncomplete: currentTotalsAll.costIncomplete
-            ),
-            delta: costDelta(current: currentTotalsAll, previous: previousTotalsAll),
-            app: nil,
-            dimmed: false
-        )
-    }
-
-    private func serviceCard(for app: UsageApp) -> some View {
-        let isDimmed = serviceFilter.usageApp != nil && serviceFilter.usageApp != app
-        return KPICard(
-            english: app.displayName,
-            chinese: app.displayName,
-            value: isDimmed
-                ? "—"
-                : StatsFormatter.tierCost(
-                    currentTotals(app).costUSD,
-                    hasUnpricedUsage: currentTotals(app).hasUnpricedUsage,
-                    costIncomplete: currentTotals(app).costIncomplete
-                ),
-            delta: isDimmed ? nil : costDelta(current: currentTotals(app), previous: previousTotals(app)),
-            app: app,
-            dimmed: isDimmed
-        )
-    }
-
-    // MARK: Token breakdown panel
-
-    private var tokenBreakdownPanel: some View {
-        Panel(title: "Token breakdown", chinese: "Token 拆分") {
-            VStack(alignment: .leading, spacing: 12) {
-                // 隐藏 hero:总 Tokens 与 KPI 卡 1 重复;分项使用横排图例。
-                TokenBreakdownView(totals: currentTotalsAll, showsHero: false)
-                if currentSpeedBreakdown.fast.requestCount > 0 {
-                    Divider()
-                    FastUsageSummaryView(breakdown: currentSpeedBreakdown)
-                }
-            }
-        }
-    }
-
-    // MARK: Daily usage panel
-
-    private var dailyUsagePanel: some View {
-        Panel(
-            title: granularity.panelTitleEnglish,
-            chinese: granularity.panelTitleChinese,
-            right: AnyView(
-                HStack(spacing: 8) {
-                    if chartUsesContextWindow {
-                        Text(tr(granularity.contextWindowHintEnglish, granularity.contextWindowHintChinese))
-                            .font(.system(size: 10.5))
-                            .foregroundStyle(.tertiary)
-                    }
-                    ForEach(visibleUsageApps, id: \.self) { app in
-                        LegendChip(color: app.tintColor, label: app.displayName)
-                    }
-                }
-            )
-        ) {
-            VStack(spacing: 6) {
-                if dailySamples.isEmpty {
-                    if appState.usageService.isScanning {
-                        loadingPlaceholder(160, message: tr("Recalculating…", "正在计算中…"))
-                    } else {
-                        placeholderHeight(160, message: tr("No data", "无数据"))
-                    }
-                } else {
-                    Chart {
-                        ForEach(dailySamples) { sample in
-                            ForEach(visibleUsageApps, id: \.self) { app in
-                                BarMark(
-                                    x: .value("Period", sample.key),
-                                    y: .value("Tokens", Double(sample.totals(for: app).totalTokens)),
-                                    width: .fixed(dailyBarWidth),
-                                    stacking: .standard
-                                )
-                                .foregroundStyle(app.tintColor)
-                                .opacity(barOpacity(for: sample))
-                                .cornerRadius(2)
-                            }
-                        }
-
-                        if let selected = selectedSample {
-                            RuleMark(x: .value("Period", selected.key))
-                                .foregroundStyle(Color.secondary.opacity(0.25))
-                                .lineStyle(StrokeStyle(lineWidth: 1))
-                                .annotation(
-                                    position: .top,
-                                    spacing: 6,
-                                    overflowResolution: .init(x: .fit(to: .plot), y: .disabled)
-                                ) {
-                                    DailyTooltip(
-                                        sample: selected,
-                                        visibleApps: visibleUsageApps,
-                                        granularity: granularity
-                                    )
-                                }
-                        }
-                    }
-                    .chartXSelection(value: $selectedPeriodKey)
-                    .chartXScale(domain: dailySamples.map(\.key))
-                    .chartXAxis {
-                        AxisMarks(values: chartAxisKeys) { value in
-                            AxisValueLabel {
-                                if let key = value.as(String.self),
-                                   let date = StatsPeriodKey.date(from: key) {
-                                    Text(date, format: granularity.axisDateFormat)
-                                        .font(.system(size: 10, design: .monospaced))
-                                        .foregroundStyle(.tertiary)
-                                }
-                            }
-                        }
-                    }
-                    .chartYAxis(.hidden)
-                    .frame(height: 160)
-                    .animation(.easeOut(duration: 0.12), value: selectedPeriodKey)
-                    .onChange(of: range) { _, _ in selectedPeriodKey = nil }
-                    .onChange(of: serviceFilter) { _, _ in selectedPeriodKey = nil }
-                    .onChange(of: granularity) { _, _ in selectedPeriodKey = nil }
-                }
-            }
-        }
-    }
-
-    // MARK: By service panel
-
-    /// 服务数 ≤ 3 时单行排列;超过 3 个(全开时 4 个)改两列网格,
-    /// 每列占半行宽、两两对齐铺满。
-    @ViewBuilder
-    private var byServicePanel: some View {
-        Panel(title: "By service", chinese: "按服务") {
-            if visibleUsageApps.isEmpty {
-                placeholderHeight(
-                    60,
-                    message: tr("No services selected · enable in Settings → Services & Accounts", "未选择任何服务 · 到「设置 → 服务与账号」开启")
-                )
-            } else if visibleUsageApps.count > 3 {
-                LazyVGrid(
-                    columns: [
-                        GridItem(.flexible(), spacing: 16),
-                        GridItem(.flexible(), spacing: 16)
-                    ],
-                    alignment: .leading,
-                    spacing: 16
-                ) {
-                    ForEach(visibleUsageApps, id: \.self) { app in
-                        serviceRow(for: app)
-                    }
-                }
-            } else {
-                HStack(alignment: .top, spacing: 16) {
-                    ForEach(visibleUsageApps, id: \.self) { app in
-                        serviceRow(for: app)
-                    }
-                }
-            }
-        }
-    }
-
-    private func serviceRow(for app: UsageApp) -> some View {
-        ByServiceRow(
-            title: app.displayName,
-            subtitle: serviceSubtitle(app),
-            app: app,
-            value: Decimal(currentTotals(app).totalTokens),
-            totalValue: Decimal(currentTotalsAll.totalTokens),
-            totals: currentTotals(app),
-            speed: currentSpeedBreakdown(app)
-        )
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func serviceSubtitle(_ app: UsageApp) -> String {
-        switch app {
-        case .codex: return "OpenAI"
-        case .claude: return "Anthropic"
-        case .cursor: return "Cursor"
-        case .pi: return "pi.dev"
-        case .opencode: return "opencode.ai"
-        case .dsh: return "DeepSeek Harness"
-        }
-    }
-
-    // MARK: By provider panel(按模型提供商,跨服务归并)
-
-    /// 按提供商查看 token 与费用：所有有数据的提供商平铺一行一眼可见；
-    /// 右上角四档排序（费用 / Tokens / 请求数 / 名称，`other` 恒排最后）；
-    /// 点击行就地展开该提供商全部数据（Token 拆分 + 来源服务 + 按模型明细）。
-    private var byProviderPanel: some View {
-        Panel(title: "By provider", chinese: "按提供商", right: AnyView(
-            Picker("", selection: $providerSort) {
-                ForEach(ProviderSort.allCases) { item in Text(item.label).tag(item) }
-            }
-            .labelsHidden()
-            .pickerStyle(.menu)
-            .fixedSize()
-            .help(tr("Sort by cost / tokens / requests / name", "按费用 / Tokens / 请求数 / 名称排序"))
-        )) {
-            let groups = providerGroups()
-            if groups.isEmpty {
-                placeholderHeight(60, message: tr("No data", "无数据"))
-            } else {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(groups) { group in
-                        providerRow(group)
-                        if group.id != groups.last?.id {
-                            Divider().padding(.vertical, 6)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private func providerRow(_ group: ProviderGroup) -> some View {
-        let isExpanded = expandedProvider == group.provider
-        return VStack(alignment: .leading, spacing: 0) {
-            Button {
-                withAnimation(.easeOut(duration: 0.18)) {
-                    expandedProvider = isExpanded ? nil : group.provider
-                }
-            } label: {
-                HStack(spacing: 8) {
-                    Circle()
-                        .fill(Color.secondary.opacity(0.45))
-                        .frame(width: 8, height: 8)
-                    Text(group.provider.displayName)
-                        .font(.system(size: 12.5, weight: .semibold))
-                    Spacer()
-                    Text("\(StatsFormatter.compactToken(group.totals.totalTokens)) Tokens")
-                        .font(.system(size: 10.5, weight: .semibold))
-                        .monospacedDigit()
-                        .foregroundStyle(.primary)
-                    Text(StatsFormatter.tierCost(
-                        group.totals.costUSD,
-                        hasUnpricedUsage: group.totals.hasUnpricedUsage,
-                        costIncomplete: group.totals.costIncomplete
-                    ))
-                        .font(.system(size: 12.5, weight: .semibold))
-                        .monospacedDigit()
-                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(.tertiary)
-                        .frame(width: 10)
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .pointingHandCursor()
-
-            if isExpanded {
-                providerDetail(group)
-                    .padding(.leading, 16)
-                    .padding(.top, 10)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-            }
-        }
-        .padding(.vertical, 7)
-    }
-
-    /// 展开后的提供商全部数据：整体 Token 拆分 + 来源服务 + 按模型明细。
-    private func providerDetail(_ group: ProviderGroup) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            TokenBreakdownView(totals: group.totals, showsHero: false)
-
-            if group.sources.count > 1 || !group.models.isEmpty {
-                HStack(spacing: 6) {
-                    Text(tr("Sources", "来源"))
-                        .font(.system(size: 10))
-                        .foregroundStyle(.tertiary)
-                    ForEach(UsageApp.allCases.filter { group.sources.contains($0) }, id: \.self) { app in
-                        HStack(spacing: 4) {
-                            ServiceTile(app: app, size: 12)
-                            Text(app.displayName)
-                                .font(.system(size: 10))
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    if group.sources.count > 1 {
-                        Text("· \(group.totals.requestCount) \(tr("requests", "次请求"))")
-                            .font(.system(size: 10))
-                            .foregroundStyle(.tertiary)
-                    }
-                }
-            }
-
-            if !group.models.isEmpty {
-                Divider()
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(group.models) { row in
-                        providerModelRow(row)
-                    }
-                }
-            }
-        }
-    }
-
-    private func providerModelRow(_ row: ProviderModelRow) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 6) {
-                ServiceTile(app: row.app, size: 12)
-                Text(row.model)
-                    .font(.system(size: 11.5, design: .monospaced))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Spacer(minLength: 8)
-                Text("\(StatsFormatter.compactToken(row.totals.totalTokens)) Tokens")
-                    .font(.system(size: 10.5, weight: .semibold))
-                    .monospacedDigit()
-                Text(StatsFormatter.tierCost(
-                    row.totals.costUSD,
-                    hasUnpricedUsage: row.totals.hasUnpricedUsage,
-                    costIncomplete: row.totals.costIncomplete
-                ))
-                    .font(.system(size: 12, weight: .semibold))
-                    .monospacedDigit()
-            }
-            TokenBreakdownInlineRow(totals: row.totals)
-                .padding(.leading, 12)
-            if row.speed.fast.requestCount > 0 {
-                FastUsageInlineRow(breakdown: row.speed)
-                    .padding(.leading, 12)
-            }
-        }
-    }
-
-    /// 跨服务按 `ModelProvider` 归并（totals + 速度拆分 + 来源服务 + 模型子明细），按排序键排列。
-    private func providerGroups() -> [ProviderGroup] {
-        var byProvider: [ModelProvider: ProviderGroup] = [:]
-        for b in filteredBuckets {
-            let provider = ModelProvider.resolve(app: b.app, model: b.model)
-            var group = byProvider[provider] ?? ProviderGroup(provider: provider)
-            group.totals.add(b)
-            group.speed.add(b)
-            group.sources.insert(b.app)
-            if let idx = group.models.firstIndex(where: { $0.app == b.app && $0.model == b.model }) {
-                var row = group.models[idx]
-                row.totals.add(b)
-                row.speed.add(b)
-                group.models[idx] = row
-            } else {
-                var totals = UsageTotals.zero
-                totals.add(b)
-                var speed = UsageSpeedBreakdown()
-                speed.add(b)
-                group.models.append(ProviderModelRow(model: b.model, app: b.app, totals: totals, speed: speed))
-            }
-            byProvider[provider] = group
-        }
-        return byProvider.values
-            .map { group in
-                var g = group
-                g.models = sortedModels(g.models)
-                return g
-            }
-            .sorted { lhs, rhs in
-                let lOther = lhs.provider == .other
-                let rOther = rhs.provider == .other
-                if lOther != rOther { return !lOther }
-                switch providerSort {
-                case .cost:
-                    if lhs.totals.costUSD == rhs.totals.costUSD { return compareProvidersByName(lhs, rhs) }
-                    return lhs.totals.costUSD > rhs.totals.costUSD
-                case .tokens:
-                    if lhs.totals.totalTokens == rhs.totals.totalTokens { return compareProvidersByName(lhs, rhs) }
-                    return lhs.totals.totalTokens > rhs.totals.totalTokens
-                case .requests:
-                    if lhs.totals.requestCount == rhs.totals.requestCount { return compareProvidersByName(lhs, rhs) }
-                    return lhs.totals.requestCount > rhs.totals.requestCount
-                case .name:
-                    return compareProvidersByName(lhs, rhs)
-                }
-            }
-    }
-
-    /// 排序 tie-breaker：数值键相等时按提供商名升序，保证跨渲染顺序稳定（`byProvider.values` 字典遍历无序）。
-    private func compareProvidersByName(_ lhs: ProviderGroup, _ rhs: ProviderGroup) -> Bool {
-        lhs.provider.displayName.localizedCaseInsensitiveCompare(
-            rhs.provider.displayName
-        ) == .orderedAscending
-    }
-
-    /// 提供商展开区模型明细行：跟随面板排序键，数值大的在前，同值按模型名升序稳定。
-    private func sortedModels(_ models: [ProviderModelRow]) -> [ProviderModelRow] {
-        models.sorted { lhs, rhs in
-            switch providerSort {
-            case .cost:
-                if lhs.totals.costUSD == rhs.totals.costUSD { return lhs.model < rhs.model }
-                return lhs.totals.costUSD > rhs.totals.costUSD
-            case .tokens:
-                if lhs.totals.totalTokens == rhs.totals.totalTokens { return lhs.model < rhs.model }
-                return lhs.totals.totalTokens > rhs.totals.totalTokens
-            case .requests:
-                if lhs.totals.requestCount == rhs.totals.requestCount { return lhs.model < rhs.model }
-                return lhs.totals.requestCount > rhs.totals.requestCount
-            case .name:
-                return lhs.model < rhs.model
-            }
-        }
-    }
-
-    // MARK: By model panel(保留旧的按模型聚合)
-
-    private var byModelPanel: some View {
-        Panel(title: "By model", chinese: "按模型") {
-            VStack(alignment: .leading, spacing: 10) {
-                ForEach(Array(visibleUsageApps.enumerated()), id: \.element) { index, app in
-                    if index > 0 {
-                        Divider()
-                    }
-                    if showsModelGroup(app) {
-                        modelGroup(app: app, rows: modelRows(for: app))
-                    }
-                }
-            }
-        }
-    }
-
-    /// 单服务过滤时只显示该服务的模型组;「全部」时显示所有可见服务。
-    private func showsModelGroup(_ app: UsageApp) -> Bool {
-        guard let filter = serviceFilter.usageApp else { return true }
-        return filter == app
     }
 
     // MARK: Timeline
@@ -1348,6 +852,478 @@ struct StatsView: View {
         return "Codex · \(account.id)"
     }
 
+    // MARK: Data helpers
+
+    private var rangeBounds: (from: Date, to: Date) {
+        range.bounds(customFrom: customFrom, customTo: customTo)
+    }
+
+    private var previousRangeBounds: (from: Date, to: Date)? {
+        range.previousBounds(customFrom: customFrom, customTo: customTo)
+    }
+
+    /// 所选范围只落在**一个当前粒度周期**内(日:今天 / 昨天 / 单日自定义;周:本周 / 上周;
+    /// 月:本月 / 上月;以及不跨周期的自定义)时,用量图表扩展为近 14 个周期的上下文,
+    /// 范围内柱子高亮、范围外降透明;KPI 与其他面板口径不变。
+    private var chartUsesContextWindow: Bool {
+        guard range != .all else { return false }
+        let (from, to) = rangeBounds
+        guard to > from else { return false }
+        // 按桶归属判断而非按时长,夏令时的 23/25 小时和月份天数差都不会影响结果。
+        return selectedPeriodStart == granularity.bucketStart(for: lastDayInRange)
+    }
+
+    /// 所选范围首日所属的周期起点——上下文窗口里唯一全彩的那根柱子。
+    private var selectedPeriodStart: Date {
+        let cal = StatsRange.weekStartMondayCalendar
+        return granularity.bucketStart(for: cal.startOfDay(for: rangeBounds.from))
+    }
+
+    /// 所选范围末日(右开区间往回退一秒再取当天 0 点)。
+    private var lastDayInRange: Date {
+        let cal = StatsRange.weekStartMondayCalendar
+        return cal.startOfDay(for: rangeBounds.to.addingTimeInterval(-1))
+    }
+
+    /// 图表展示窗口:上下文模式取「所选周期起点往前 13 个周期」,连所选那个共 14 个。
+    /// 从周期起点往前推而不是从范围结束时刻往前推,首柱才是完整的周 / 月,不会天然偏矮。
+    private var chartBounds: (from: Date, to: Date) {
+        let bounds = rangeBounds
+        guard chartUsesContextWindow else { return bounds }
+        let cal = StatsRange.weekStartMondayCalendar
+        let from = cal.date(byAdding: granularity.contextWindowComponent,
+                            value: -(StatsGranularity.contextWindowPeriods - 1),
+                            to: selectedPeriodStart) ?? bounds.from
+        return (min(from, bounds.from), bounds.to)
+    }
+
+    /// 概览全部面板共用的派生结果。输入（聚合 revision、范围、粒度、服务过滤、可见服务）
+    /// 不变时直接复用缓存，悬停、展开、排序、扫描提示等刷新都不会重新聚合日桶。
+    private var overviewModel: StatsOverviewModel {
+        let aggregator = appState.usageService.aggregator
+        let current = rangeBounds
+        let chart = chartBounds
+        let input = StatsOverviewInput(
+            revision: aggregator.revision,
+            current: StatsDateInterval(from: current.from, to: current.to),
+            previous: previousRangeBounds.map { StatsDateInterval(from: $0.from, to: $0.to) },
+            chart: StatsDateInterval(from: chart.from, to: chart.to),
+            granularity: granularity,
+            serviceApp: serviceFilter.usageApp,
+            visibleApps: visibleUsageApps,
+            highlightedPeriodStart: chartUsesContextWindow ? selectedPeriodStart : nil
+        )
+        return overviewCache.model(for: input) { aggregator.snapshot() }
+    }
+
+    private var cursorUsageIsInCurrentScope: Bool {
+        SettingsStore.shared.isUsageServiceEffectivelyVisible(.cursor)
+            && (serviceFilter == .all || serviceFilter == .cursor)
+    }
+
+    /// 当前范围外的历史由 Stats 选择时按月静默补拉；All 没有可靠的远端起点，
+    /// 所以只使用现有缓存，绝不偷偷发起无界回溯。
+    private var cursorHistoryRequest: CursorHistoryRequest? {
+        guard viewMode == .overview,
+              cursorUsageIsInCurrentScope,
+              range != .all,
+              let accountID = appState.cursorAccount?.userID
+        else { return nil }
+
+        let current = rangeBounds
+        let requested = previousRangeBounds.map { $0.from..<current.to } ?? current.from..<current.to
+        guard !appState.usageService.isCursorRemoteUsageCovered(requested) else { return nil }
+        return CursorHistoryRequest(accountID: accountID, from: requested.lowerBound, to: requested.upperBound)
+    }
+}
+
+// MARK: - Overview panels
+//
+// 概览各面板拆成独立视图，只接收 `StatsOverviewModel` 这类已派生好的值：
+// 面板内部不再过滤聚合日桶；悬停、展开等局部状态放在各自面板里，
+// 变化时只重绘该面板，不会让整页重新求值。
+
+/// 面板局部状态（图表悬停、提供商展开）的重置时机：范围 / 粒度 / 服务过滤任一变化。
+private struct StatsOverviewScope: Hashable {
+    let range: StatsRange
+    let granularity: StatsGranularity
+    let serviceFilter: StatsServiceFilter
+}
+
+/// 本地日志读取或聚合持久化失败时必须在统计页可见，并给出直接恢复入口。
+/// 具体技术错误保留在 hover help，主文案只说明数据状态与安全行为。
+/// 单独成视图：只有它读 `lastError`，扫描结束写回该字段时不会连带整页重新求值。
+private struct StatsUsageErrorBanner: View {
+    @Environment(AppState.self) private var appState
+
+    var body: some View {
+        if let error = appState.usageService.lastError {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 11))
+                Text(tr(
+                    "Usage statistics may be incomplete. Available data is preserved; retry or recalculate in Settings.",
+                    "用量统计可能不完整。可用的已有数据会保留，请稍后重试或前往设置重新计算。"
+                ))
+                .font(.system(size: 11.5))
+                .lineLimit(2)
+                Spacer(minLength: 8)
+                Button(tr("Open Settings", "打开设置")) {
+                    appState.mainTab = .settings
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+            .foregroundStyle(.orange)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.orange.opacity(0.08))
+            .overlay(alignment: .bottom) { Divider() }
+            .help(error)
+        }
+    }
+}
+
+/// 顶栏的后台扫描提示。单独成视图：每轮扫描 `isScanning` 翻转两次，只重绘这一小块。
+private struct StatsScanningIndicator: View {
+    @Environment(AppState.self) private var appState
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if appState.usageService.isScanning {
+                ProgressView()
+                    .controlSize(.small)
+                Text(tr("Recalculating usage…", "正在重新计算用量…"))
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+// MARK: KPI row
+
+private struct OverviewKPIRow: View {
+    let model: StatsOverviewModel
+    let serviceFilter: StatsServiceFilter
+
+    var body: some View {
+        HStack(spacing: 12) {
+            KPICard(
+                english: "Total tokens",
+                chinese: "总 Tokens",
+                value: StatsFormatter.compactToken(model.totalsAll.totalTokens),
+                delta: deltaPercent(current: Double(model.totalsAll.totalTokens),
+                                    previous: Double(model.previousTotalsAll.totalTokens)),
+                app: nil,
+                dimmed: false
+            )
+            KPICard(
+                english: "Total spend",
+                chinese: "总花费",
+                value: StatsFormatter.tierCost(
+                    model.totalsAll.costUSD,
+                    hasUnpricedUsage: model.totalsAll.hasUnpricedUsage,
+                    costIncomplete: model.totalsAll.costIncomplete
+                ),
+                delta: costDelta(current: model.totalsAll, previous: model.previousTotalsAll),
+                app: nil,
+                dimmed: false
+            )
+            ForEach(model.visibleApps, id: \.self) { app in
+                serviceCard(for: app)
+            }
+        }
+    }
+
+    private func serviceCard(for app: UsageApp) -> some View {
+        let isDimmed = serviceFilter.usageApp != nil && serviceFilter.usageApp != app
+        let totals = model.totals(app)
+        return KPICard(
+            english: app.displayName,
+            chinese: app.displayName,
+            value: isDimmed
+                ? "—"
+                : StatsFormatter.tierCost(
+                    totals.costUSD,
+                    hasUnpricedUsage: totals.hasUnpricedUsage,
+                    costIncomplete: totals.costIncomplete
+                ),
+            delta: isDimmed ? nil : costDelta(current: totals, previous: model.previousTotals(app)),
+            app: app,
+            dimmed: isDimmed
+        )
+    }
+
+    private func deltaPercent(current: Double, previous: Double) -> Double? {
+        guard model.hasPreviousRange else { return nil }
+        guard previous > 0 else { return nil }
+        // 当前值为 0 时固定是 ↓100%,对没有用量的服务没有信息量,直接不渲染。
+        guard current > 0 else { return nil }
+        return ((current - previous) / previous) * 100
+    }
+
+    private func costDelta(current: UsageTotals, previous: UsageTotals) -> Double? {
+        return deltaPercent(current: current.costUSD.doubleValue, previous: previous.costUSD.doubleValue)
+    }
+}
+
+// MARK: Token breakdown panel
+
+private struct OverviewTokenBreakdownPanel: View {
+    let model: StatsOverviewModel
+
+    var body: some View {
+        Panel(title: "Token breakdown", chinese: "Token 拆分") {
+            VStack(alignment: .leading, spacing: 12) {
+                // 隐藏 hero:总 Tokens 与 KPI 卡 1 重复;分项使用横排图例。
+                TokenBreakdownView(totals: model.totalsAll, showsHero: false)
+                if model.speedAll.fast.requestCount > 0 {
+                    Divider()
+                    FastUsageSummaryView(breakdown: model.speedAll)
+                }
+            }
+        }
+    }
+}
+
+// MARK: Usage chart panel
+
+/// 日 / 周 / 月用量柱状图。悬停选中状态只存在这里：鼠标移动只重绘本面板，
+/// 序列、柱宽都由 `StatsOverviewModel` 预先算好，body 里不做聚合；X 轴标签数量
+/// 依赖绘图区宽度，在这里用 `StatsOverviewModel.axisKeys(from:maxCount:)` 抽取。
+private struct OverviewUsageChartPanel: View {
+    @Environment(AppState.self) private var appState
+    let model: StatsOverviewModel
+    let granularity: StatsGranularity
+    let scope: StatsOverviewScope
+
+    @State private var selectedPeriodKey: String?
+
+    var body: some View {
+        let selected = selectedPeriodKey.flatMap { model.sample(forKey: $0) }
+        Panel(
+            title: granularity.panelTitleEnglish,
+            chinese: granularity.panelTitleChinese,
+            right: AnyView(
+                HStack(spacing: 8) {
+                    if model.highlightedPeriodStart != nil {
+                        Text(tr(granularity.contextWindowHintEnglish, granularity.contextWindowHintChinese))
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(.tertiary)
+                    }
+                    ForEach(model.visibleApps, id: \.self) { app in
+                        LegendChip(color: app.tintColor, label: app.displayName)
+                    }
+                }
+            )
+        ) {
+            VStack(spacing: 6) {
+                if model.samples.isEmpty {
+                    if appState.usageService.isScanning {
+                        loadingPlaceholder(160, message: tr("Recalculating…", "正在计算中…"))
+                    } else {
+                        placeholderHeight(160, message: tr("No data", "无数据"))
+                    }
+                } else {
+                    chart(selected: selected)
+                }
+            }
+        }
+        .onChange(of: scope) { _, _ in selectedPeriodKey = nil }
+    }
+
+    private func chart(selected: DailySample?) -> some View {
+        let apps = model.visibleApps
+        let barWidth = model.barWidth
+        let highlighted = model.highlightedPeriodStart
+        return Chart {
+            ForEach(model.samples) { sample in
+                let opacity = Self.barOpacity(for: sample, selected: selected, highlighted: highlighted)
+                ForEach(apps, id: \.self) { app in
+                    let tokens = sample.totals(for: app).totalTokens
+                    // 0 值柱在堆叠里不可见，跳过可以少画一大半 mark（全年日粒度约千根量级）。
+                    if tokens > 0 {
+                        BarMark(
+                            x: .value("Period", sample.key),
+                            y: .value("Tokens", Double(tokens)),
+                            width: .fixed(barWidth),
+                            stacking: .standard
+                        )
+                        .foregroundStyle(app.tintColor)
+                        .opacity(opacity)
+                        .cornerRadius(2)
+                    }
+                }
+            }
+
+            if let selected {
+                RuleMark(x: .value("Period", selected.key))
+                    .foregroundStyle(Color.secondary.opacity(0.25))
+                    .lineStyle(StrokeStyle(lineWidth: 1))
+                    .annotation(
+                        position: .top,
+                        spacing: 6,
+                        overflowResolution: .init(x: .fit(to: .plot), y: .disabled)
+                    ) {
+                        DailyTooltip(
+                            sample: selected,
+                            visibleApps: apps,
+                            granularity: granularity
+                        )
+                    }
+            }
+        }
+        .chartXSelection(value: $selectedPeriodKey)
+        .chartXScale(domain: model.samples.map(\.key))
+        // X 轴标签自绘：类别很多（长范围日粒度）时内建 AxisMarks 的标签会叠成一片，
+        // 所以隐藏内建轴，按绘图区宽度自己抽取刻度并定位到对应柱心。
+        .chartXAxis(.hidden)
+        .chartYAxis(.hidden)
+        .chartOverlay(alignment: .topLeading) { proxy in
+            GeometryReader { geo in
+                if let plotFrame = proxy.plotFrame {
+                    xAxisLabels(proxy: proxy, plot: geo[plotFrame])
+                }
+            }
+            .allowsHitTesting(false)
+        }
+        .padding(.bottom, Self.axisLabelAreaHeight)
+        .frame(height: 160)
+    }
+
+    /// 标签区高度（含 6pt 上间距），从图表 160pt 总高里让出，绘图区相应变矮。
+    private static let axisLabelAreaHeight: CGFloat = 18
+    /// 相邻标签的最小间距；绘图区越宽标签越多，窄时至少保留首尾附近 2 个。
+    private static let minAxisLabelSpacing: CGFloat = 80
+    /// 单个标签的占位宽度，首尾标签据此收进绘图区内，不被面板边缘截断。
+    private static let axisLabelSlotWidth: CGFloat = 64
+
+    private func xAxisLabels(proxy: ChartProxy, plot: CGRect) -> some View {
+        let maxCount = max(2, Int(plot.width / Self.minAxisLabelSpacing))
+        let keys = StatsOverviewModel.axisKeys(from: model.samples.map(\.key), maxCount: maxCount)
+        let halfSlot = Self.axisLabelSlotWidth / 2
+        return ForEach(keys, id: \.self) { key in
+            if let x = proxy.position(forX: key),
+               let date = StatsPeriodKey.date(from: key) {
+                Text(date, format: granularity.axisDateFormat)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .frame(width: Self.axisLabelSlotWidth)
+                    .position(
+                        x: min(max(plot.minX + x, plot.minX + halfSlot), plot.maxX - halfSlot),
+                        y: plot.maxY + 6 + (Self.axisLabelAreaHeight - 6) / 2
+                    )
+            }
+        }
+    }
+
+    /// 悬浮选中某个周期时,非选中柱降透明以聚焦;无悬浮时,上下文窗口内
+    /// 只有所选周期那根柱子全彩,前面的上下文柱降透明。
+    /// 上下文窗口本身已保证范围只覆盖一个周期,所以直接和该周期起点比,
+    /// 自定义范围从周中 / 月中开始时也不会把自己那根柱判成范围外。
+    private static func barOpacity(for sample: DailySample, selected: DailySample?, highlighted: Date?) -> Double {
+        if let selected {
+            return selected.id == sample.id ? 1 : 0.35
+        }
+        guard let highlighted else { return 1 }
+        return sample.day == highlighted ? 1 : 0.35
+    }
+}
+
+// MARK: By service panel
+
+/// 服务数 ≤ 3 时单行排列;超过 3 个(全开时 4 个)改两列网格,
+/// 每列占半行宽、两两对齐铺满。
+private struct OverviewByServicePanel: View {
+    let model: StatsOverviewModel
+
+    var body: some View {
+        Panel(title: "By service", chinese: "按服务") {
+            if model.visibleApps.isEmpty {
+                placeholderHeight(
+                    60,
+                    message: tr("No services selected · enable in Settings → Services & Accounts", "未选择任何服务 · 到「设置 → 服务与账号」开启")
+                )
+            } else if model.visibleApps.count > 3 {
+                LazyVGrid(
+                    columns: [
+                        GridItem(.flexible(), spacing: 16),
+                        GridItem(.flexible(), spacing: 16)
+                    ],
+                    alignment: .leading,
+                    spacing: 16
+                ) {
+                    ForEach(model.visibleApps, id: \.self) { app in
+                        serviceRow(for: app)
+                    }
+                }
+            } else {
+                HStack(alignment: .top, spacing: 16) {
+                    ForEach(model.visibleApps, id: \.self) { app in
+                        serviceRow(for: app)
+                    }
+                }
+            }
+        }
+    }
+
+    private func serviceRow(for app: UsageApp) -> some View {
+        let totals = model.totals(app)
+        return ByServiceRow(
+            title: app.displayName,
+            subtitle: serviceSubtitle(app),
+            app: app,
+            value: Decimal(totals.totalTokens),
+            totalValue: Decimal(model.totalsAll.totalTokens),
+            totals: totals,
+            speed: model.speed(app)
+        )
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func serviceSubtitle(_ app: UsageApp) -> String {
+        switch app {
+        case .codex: return "OpenAI"
+        case .claude: return "Anthropic"
+        case .cursor: return "Cursor"
+        case .pi: return "pi.dev"
+        case .opencode: return "opencode.ai"
+        case .dsh: return "DeepSeek Harness"
+        }
+    }
+}
+
+// MARK: By model panel(保留旧的按模型聚合)
+
+private struct OverviewByModelPanel: View {
+    let model: StatsOverviewModel
+    let serviceFilter: StatsServiceFilter
+
+    var body: some View {
+        Panel(title: "By model", chinese: "按模型") {
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(Array(model.visibleApps.enumerated()), id: \.element) { index, app in
+                    if index > 0 {
+                        Divider()
+                    }
+                    if showsModelGroup(app) {
+                        modelGroup(app: app, rows: model.modelRows(app))
+                    }
+                }
+            }
+        }
+    }
+
+    /// 单服务过滤时只显示该服务的模型组;「全部」时显示所有可见服务。
+    private func showsModelGroup(_ app: UsageApp) -> Bool {
+        guard let filter = serviceFilter.usageApp else { return true }
+        return filter == app
+    }
+
     private func modelGroup(app: UsageApp, rows: [ModelRow]) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
@@ -1391,273 +1367,183 @@ struct StatsView: View {
             }
         }
     }
+}
 
-    // MARK: Data helpers
+// MARK: By provider panel(按模型提供商,跨服务归并)
 
-    private var rangeBounds: (from: Date, to: Date) {
-        range.bounds(customFrom: customFrom, customTo: customTo)
-    }
+/// 按提供商查看 token 与费用：所有有数据的提供商平铺一行一眼可见；
+/// 右上角四档排序（费用 / Tokens / 请求数 / 名称，`other` 恒排最后）；
+/// 点击行就地展开该提供商全部数据（Token 拆分 + 来源服务 + 按模型明细）。
+/// 排序键由 StatsView 持有（切到时间线等视图再回来仍保留），展开状态随范围 / 粒度 / 服务切换收起。
+private struct OverviewByProviderPanel: View {
+    let model: StatsOverviewModel
+    @Binding var sort: ProviderSort
+    let scope: StatsOverviewScope
 
-    private var previousRangeBounds: (from: Date, to: Date)? {
-        range.previousBounds(customFrom: customFrom, customTo: customTo)
-    }
+    @State private var expandedProvider: ModelProvider?
 
-    private var filteredBuckets: [UsageBucket] {
-        let (from, to) = rangeBounds
-        return filteredBuckets(from: from, to: to)
-    }
-
-    private func filteredBuckets(from: Date, to: Date) -> [UsageBucket] {
-        let buckets = appState.usageService.aggregator.snapshot()
-            .filter { $0.day >= from && $0.day < to }
-            .filter { SettingsStore.shared.isUsageServiceEffectivelyVisible($0.app) }
-        switch serviceFilter {
-        case .all:
-            return buckets
-        case .codex:
-            return buckets.filter { $0.app == .codex }
-        case .claude:
-            return buckets.filter { $0.app == .claude }
-        case .cursor:
-            return buckets.filter { $0.app == .cursor }
-        case .pi:
-            return buckets.filter { $0.app == .pi }
-        case .opencode:
-            return buckets.filter { $0.app == .opencode }
-        case .dsh:
-            return buckets.filter { $0.app == .dsh }
-        }
-    }
-
-    /// 所选范围只落在**一个当前粒度周期**内(日:今天 / 昨天 / 单日自定义;周:本周 / 上周;
-    /// 月:本月 / 上月;以及不跨周期的自定义)时,用量图表扩展为近 14 个周期的上下文,
-    /// 范围内柱子高亮、范围外降透明;KPI 与其他面板口径不变。
-    private var chartUsesContextWindow: Bool {
-        guard range != .all else { return false }
-        let (from, to) = rangeBounds
-        guard to > from else { return false }
-        // 按桶归属判断而非按时长,夏令时的 23/25 小时和月份天数差都不会影响结果。
-        return selectedPeriodStart == granularity.bucketStart(for: lastDayInRange)
-    }
-
-    /// 所选范围首日所属的周期起点——上下文窗口里唯一全彩的那根柱子。
-    private var selectedPeriodStart: Date {
-        let cal = StatsRange.weekStartMondayCalendar
-        return granularity.bucketStart(for: cal.startOfDay(for: rangeBounds.from))
-    }
-
-    /// 所选范围末日(右开区间往回退一秒再取当天 0 点)。
-    private var lastDayInRange: Date {
-        let cal = StatsRange.weekStartMondayCalendar
-        return cal.startOfDay(for: rangeBounds.to.addingTimeInterval(-1))
-    }
-
-    /// 图表展示窗口:上下文模式取「所选周期起点往前 13 个周期」,连所选那个共 14 个。
-    /// 从周期起点往前推而不是从范围结束时刻往前推,首柱才是完整的周 / 月,不会天然偏矮。
-    private var chartBounds: (from: Date, to: Date) {
-        let bounds = rangeBounds
-        guard chartUsesContextWindow else { return bounds }
-        let cal = StatsRange.weekStartMondayCalendar
-        let from = cal.date(byAdding: granularity.contextWindowComponent,
-                            value: -(StatsGranularity.contextWindowPeriods - 1),
-                            to: selectedPeriodStart) ?? bounds.from
-        return (min(from, bounds.from), bounds.to)
-    }
-
-    private var currentTotalsAll: UsageTotals {
-        var t = UsageTotals.zero
-        for b in filteredBuckets { t.add(b) }
-        return t
-    }
-
-    private func currentTotals(_ app: UsageApp) -> UsageTotals {
-        var t = UsageTotals.zero
-        for b in filteredBuckets where b.app == app { t.add(b) }
-        return t
-    }
-
-    private var currentSpeedBreakdown: UsageSpeedBreakdown {
-        var result = UsageSpeedBreakdown()
-        for bucket in filteredBuckets { result.add(bucket) }
-        return result
-    }
-
-    private func currentSpeedBreakdown(_ app: UsageApp) -> UsageSpeedBreakdown {
-        var result = UsageSpeedBreakdown()
-        for bucket in filteredBuckets where bucket.app == app { result.add(bucket) }
-        return result
-    }
-
-    private var previousTotalsAll: UsageTotals {
-        guard let bounds = previousRangeBounds else { return .zero }
-        let buckets = appState.usageService.aggregator.snapshot()
-            .filter { $0.day >= bounds.from && $0.day < bounds.to }
-            .filter { SettingsStore.shared.isUsageServiceEffectivelyVisible($0.app) }
-        var t = UsageTotals.zero
-        for b in buckets {
-            if serviceFilter == .codex && b.app != .codex { continue }
-            if serviceFilter == .claude && b.app != .claude { continue }
-            if serviceFilter == .cursor && b.app != .cursor { continue }
-            if serviceFilter == .pi && b.app != .pi { continue }
-            if serviceFilter == .opencode && b.app != .opencode { continue }
-            if serviceFilter == .dsh && b.app != .dsh { continue }
-            t.add(b)
-        }
-        return t
-    }
-
-    private func previousTotals(_ app: UsageApp) -> UsageTotals {
-        guard SettingsStore.shared.isUsageServiceEffectivelyVisible(app) else { return .zero }
-        guard let bounds = previousRangeBounds else { return .zero }
-        let buckets = appState.usageService.aggregator.snapshot()
-            .filter { $0.app == app && $0.day >= bounds.from && $0.day < bounds.to }
-        var t = UsageTotals.zero
-        for b in buckets { t.add(b) }
-        return t
-    }
-
-    private func deltaPercent(current: Double, previous: Double) -> Double? {
-        guard previousRangeBounds != nil else { return nil }
-        guard previous > 0 else { return nil }
-        // 当前值为 0 时固定是 ↓100%,对没有用量的服务没有信息量,直接不渲染。
-        guard current > 0 else { return nil }
-        return ((current - previous) / previous) * 100
-    }
-
-    private func costDelta(current: UsageTotals, previous: UsageTotals) -> Double? {
-        return deltaPercent(current: current.costUSD.doubleValue, previous: previous.costUSD.doubleValue)
-    }
-
-    /// 底层永远是日桶,这里按 `granularity` 把日桶再归并到周期起点。
-    /// 周 / 月桶在 range 边界被截断时不补全、不标注,首尾柱天然偏矮。
-    private var dailySamples: [DailySample] {
-        let (from, to) = chartBounds
-        var byDay: [Date: (codex: UsageTotals, claude: UsageTotals, cursor: UsageTotals, pi: UsageTotals, opencode: UsageTotals, dsh: UsageTotals)] = [:]
-        for b in filteredBuckets(from: from, to: to) {
-            let bucketDay = granularity.bucketStart(for: b.day)
-            var pair = byDay[bucketDay] ?? (.zero, .zero, .zero, .zero, .zero, .zero)
-            switch b.app {
-            case .codex: pair.codex.add(b)
-            case .claude: pair.claude.add(b)
-            case .cursor: pair.cursor.add(b)
-            case .pi: pair.pi.add(b)
-            case .opencode: pair.opencode.add(b)
-            case .dsh: pair.dsh.add(b)
+    var body: some View {
+        Panel(title: "By provider", chinese: "按提供商", right: AnyView(
+            Picker("", selection: $sort) {
+                ForEach(ProviderSort.allCases) { item in Text(item.label).tag(item) }
             }
-            byDay[bucketDay] = pair
-        }
-        return byDay
-            .map {
-                DailySample(
-                    day: $0.key,
-                    key: StatsPeriodKey.key(for: $0.key),
-                    codex: $0.value.codex,
-                    claude: $0.value.claude,
-                    cursor: $0.value.cursor,
-                    pi: $0.value.pi,
-                    opencode: $0.value.opencode,
-                    dsh: $0.value.dsh
-                )
-            }
-            .sorted { $0.day < $1.day }
-    }
-
-    /// X 轴刻度取自桶自己的类别键,不按日历 stride 推算;周期多时每隔 step 个取一个,
-    /// 保证刻度永远落在某根柱子的 band 上。
-    private var chartAxisKeys: [String] {
-        let keys = dailySamples.map(\.key)
-        guard keys.count > 5 else { return keys }
-        let step = max(1, keys.count / 5)
-        return stride(from: 0, to: keys.count, by: step).map { keys[$0] }
-    }
-
-    private var selectedSample: DailySample? {
-        guard let selectedPeriodKey else { return nil }
-        return dailySamples.first { $0.key == selectedPeriodKey }
-    }
-
-    /// 悬浮选中某个周期时,非选中柱降透明以聚焦;无悬浮时,上下文窗口内
-    /// 只有所选周期那根柱子全彩,前面的上下文柱降透明。
-    /// 上下文窗口本身已保证范围只覆盖一个周期,所以直接和该周期起点比,
-    /// 自定义范围从周中 / 月中开始时也不会把自己那根柱判成范围外。
-    private func barOpacity(for sample: DailySample) -> Double {
-        if let selected = selectedSample {
-            return selected.id == sample.id ? 1 : 0.35
-        }
-        guard chartUsesContextWindow else { return 1 }
-        return sample.day == selectedPeriodStart ? 1 : 0.35
-    }
-
-    /// 柱宽用固定值而非交给 Swift Charts 自动计算——天数很少(极端情况只有 1 天)时,
-    /// 自动宽度会把柱子撑到接近整个绘图区;天数越多则相应调窄,避免拥挤。
-    private var dailyBarWidth: CGFloat {
-        switch dailySamples.count {
-        case 0...3: return 28
-        case 4...14: return 18
-        case 15...45: return 10
-        default: return 5
-        }
-    }
-
-    private func modelRows(for app: UsageApp) -> [ModelRow] {
-        var byModel: [String: (totals: UsageTotals, speed: UsageSpeedBreakdown)] = [:]
-        for b in filteredBuckets where b.app == app {
-            var item = byModel[b.model] ?? (.zero, UsageSpeedBreakdown())
-            item.totals.add(b)
-            item.speed.add(b)
-            byModel[b.model] = item
-        }
-        return byModel
-            .map { ModelRow(model: $0.key, totals: $0.value.totals, speed: $0.value.speed) }
-            .sorted {
-                if $0.totals.costUSD == $1.totals.costUSD {
-                    return $0.model < $1.model
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .fixedSize()
+            .help(tr("Sort by cost / tokens / requests / name", "按费用 / Tokens / 请求数 / 名称排序"))
+        )) {
+            let groups = ProviderGroup.sorted(model.providerGroups, by: sort)
+            if groups.isEmpty {
+                placeholderHeight(60, message: tr("No data", "无数据"))
+            } else {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(groups) { group in
+                        providerRow(group)
+                        if group.id != groups.last?.id {
+                            Divider().padding(.vertical, 6)
+                        }
+                    }
                 }
-                return $0.totals.costUSD > $1.totals.costUSD
             }
+        }
+        .onChange(of: scope) { _, _ in expandedProvider = nil }
     }
 
-    private func placeholderHeight(_ height: CGFloat, message: String) -> some View {
+    private func providerRow(_ group: ProviderGroup) -> some View {
+        let isExpanded = expandedProvider == group.provider
+        return VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(.easeOut(duration: 0.18)) {
+                    expandedProvider = isExpanded ? nil : group.provider
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(Color.secondary.opacity(0.45))
+                        .frame(width: 8, height: 8)
+                    Text(group.provider.displayName)
+                        .font(.system(size: 12.5, weight: .semibold))
+                    Spacer()
+                    Text("\(StatsFormatter.compactToken(group.totals.totalTokens)) Tokens")
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(.primary)
+                    Text(StatsFormatter.tierCost(
+                        group.totals.costUSD,
+                        hasUnpricedUsage: group.totals.hasUnpricedUsage,
+                        costIncomplete: group.totals.costIncomplete
+                    ))
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .monospacedDigit()
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                        .frame(width: 10)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .pointingHandCursor()
+
+            if isExpanded {
+                providerDetail(group)
+                    .padding(.leading, 16)
+                    .padding(.top, 10)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .padding(.vertical, 7)
+    }
+
+    /// 展开后的提供商全部数据：整体 Token 拆分 + 来源服务 + 按模型明细。
+    private func providerDetail(_ group: ProviderGroup) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            TokenBreakdownView(totals: group.totals, showsHero: false)
+
+            if group.sources.count > 1 || !group.models.isEmpty {
+                HStack(spacing: 6) {
+                    Text(tr("Sources", "来源"))
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                    ForEach(UsageApp.allCases.filter { group.sources.contains($0) }, id: \.self) { app in
+                        HStack(spacing: 4) {
+                            ServiceTile(app: app, size: 12)
+                            Text(app.displayName)
+                                .font(.system(size: 10))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    if group.sources.count > 1 {
+                        Text("· \(group.totals.requestCount) \(tr("requests", "次请求"))")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+            }
+
+            if !group.models.isEmpty {
+                Divider()
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(group.models) { row in
+                        providerModelRow(row)
+                    }
+                }
+            }
+        }
+    }
+
+    private func providerModelRow(_ row: ProviderModelRow) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 6) {
+                ServiceTile(app: row.app, size: 12)
+                Text(row.model)
+                    .font(.system(size: 11.5, design: .monospaced))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 8)
+                Text("\(StatsFormatter.compactToken(row.totals.totalTokens)) Tokens")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .monospacedDigit()
+                Text(StatsFormatter.tierCost(
+                    row.totals.costUSD,
+                    hasUnpricedUsage: row.totals.hasUnpricedUsage,
+                    costIncomplete: row.totals.costIncomplete
+                ))
+                    .font(.system(size: 12, weight: .semibold))
+                    .monospacedDigit()
+            }
+            TokenBreakdownInlineRow(totals: row.totals)
+                .padding(.leading, 12)
+            if row.speed.fast.requestCount > 0 {
+                FastUsageInlineRow(breakdown: row.speed)
+                    .padding(.leading, 12)
+            }
+        }
+    }
+}
+
+// MARK: Placeholders
+
+private func placeholderHeight(_ height: CGFloat, message: String) -> some View {
+    Text(message)
+        .font(.system(size: 12))
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity)
+        .frame(height: height)
+}
+
+/// 区分"还在扫描/刷新中"和"确实没有数据"两种空态,避免用户误以为没有记录。
+private func loadingPlaceholder(_ height: CGFloat, message: String) -> some View {
+    HStack(spacing: 6) {
+        ProgressView().controlSize(.small)
         Text(message)
             .font(.system(size: 12))
             .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity)
-            .frame(height: height)
     }
-
-    /// 区分"还在扫描/刷新中"和"确实没有数据"两种空态,避免用户误以为没有记录。
-    private func loadingPlaceholder(_ height: CGFloat, message: String) -> some View {
-        HStack(spacing: 6) {
-            ProgressView().controlSize(.small)
-            Text(message)
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-        .frame(height: height)
-    }
-
-    private var cursorUsageIsInCurrentScope: Bool {
-        SettingsStore.shared.isUsageServiceEffectivelyVisible(.cursor)
-            && (serviceFilter == .all || serviceFilter == .cursor)
-    }
-
-    /// 当前范围外的历史由 Stats 选择时按月静默补拉；All 没有可靠的远端起点，
-    /// 所以只使用现有缓存，绝不偷偷发起无界回溯。
-    private var cursorHistoryRequest: CursorHistoryRequest? {
-        guard viewMode == .overview,
-              cursorUsageIsInCurrentScope,
-              range != .all,
-              let accountID = appState.cursorAccount?.userID
-        else { return nil }
-
-        let current = rangeBounds
-        let requested = previousRangeBounds.map { $0.from..<current.to } ?? current.from..<current.to
-        guard !appState.usageService.isCursorRemoteUsageCovered(requested) else { return nil }
-        return CursorHistoryRequest(accountID: accountID, from: requested.lowerBound, to: requested.upperBound)
-    }
-
+    .frame(maxWidth: .infinity)
+    .frame(height: height)
 }
+
 
 // MARK: - Panel container
 
@@ -2616,104 +2502,7 @@ private struct QuotaTimelineTable: View {
     }
 }
 
-// MARK: - Daily / Model row models
-
-/// 用量图表的 X 轴不用日期轴，改用「每个周期一个类别」的离散轴：日期轴上 Swift Charts
-/// 会按自己推断(或指定)的 unit 给柱子分箱、把柱心挪到箱中点，刻度却落在箱起点，日 / 周 /
-/// 月三种粒度都对不齐；周粒度还会按 `Calendar.current` 的周起点(可能是周日)算箱边界，
-/// 和本项目的周一口径再差一天。类别轴下柱心与刻度共用同一个 band 中心，天然对齐。
-private enum StatsPeriodKey {
-    private static let formatter: DateFormatter = {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "yyyy-MM-dd"
-        return f
-    }()
-
-    static func key(for day: Date) -> String { formatter.string(from: day) }
-    static func date(from key: String) -> Date? { formatter.date(from: key) }
-}
-
-/// 图表的一根柱。`day` 是该柱所属周期的起点(日粒度即当天,周粒度为周一,月粒度为 1 号),
-/// 命名沿用历史,不随粒度改名。
-private struct DailySample: Identifiable {
-    var id: Date { day }
-    let day: Date
-    /// 用量图表 X 轴用的离散类别键，见 `StatsPeriodKey`。
-    let key: String
-    let codex: UsageTotals
-    let claude: UsageTotals
-    let cursor: UsageTotals
-    let pi: UsageTotals
-    let opencode: UsageTotals
-    let dsh: UsageTotals
-
-    var codexCost: Decimal { codex.costUSD }
-    var claudeCost: Decimal { claude.costUSD }
-    var cursorCost: Decimal { cursor.costUSD }
-    var piCost: Decimal { pi.costUSD }
-    var opencodeCost: Decimal { opencode.costUSD }
-    var dshCost: Decimal { dsh.costUSD }
-    var totalCost: Decimal { totalUsage.costUSD }
-    var totalTokens: Int { totalUsage.totalTokens }
-
-    func totals(for app: UsageApp) -> UsageTotals {
-        switch app {
-        case .codex: return codex
-        case .claude: return claude
-        case .cursor: return cursor
-        case .pi: return pi
-        case .opencode: return opencode
-        case .dsh: return dsh
-        }
-    }
-
-    func cost(for app: UsageApp) -> Decimal {
-        switch app {
-        case .codex: return codexCost
-        case .claude: return claudeCost
-        case .cursor: return cursorCost
-        case .pi: return piCost
-        case .opencode: return opencodeCost
-        case .dsh: return dshCost
-        }
-    }
-
-    /// 所有统计服务合并后的口径，供每日悬浮明细展示 token 拆分 + 命中率。
-    var totalUsage: UsageTotals {
-        var t = UsageTotals.zero
-        for totals in [codex, claude, cursor, pi, opencode, dsh] {
-            t.add(totals)
-        }
-        return t
-    }
-}
-
-private struct ModelRow: Identifiable {
-    var id: String { model }
-    let model: String
-    let totals: UsageTotals
-    let speed: UsageSpeedBreakdown
-}
-
-/// 「按提供商」面板的提供商级聚合：跨服务归并 totals / 速度拆分，保留来源服务与模型子明细。
-private struct ProviderGroup: Identifiable {
-    var id: ModelProvider { provider }
-    let provider: ModelProvider
-    var totals = UsageTotals.zero
-    var speed = UsageSpeedBreakdown()
-    var sources: Set<UsageApp> = []
-    var models: [ProviderModelRow] = []
-}
-
-/// 提供商展开区内的模型明细行（模型 + 来源服务）。
-private struct ProviderModelRow: Identifiable {
-    var id: String { "\(app.rawValue)/\(model)" }
-    let model: String
-    let app: UsageApp
-    var totals: UsageTotals
-    var speed: UsageSpeedBreakdown
-}
+// MARK: - Timeline row models
 
 private struct QuotaTimelineSection: Identifiable {
     var id: String { accountKey }
@@ -2737,39 +2526,38 @@ private struct QuotaTimelineWindow: Identifiable {
 // MARK: - Formatter
 
 enum StatsFormatter {
-    static func cost(_ value: Decimal) -> String {
-        let ns = NSDecimalNumber(decimal: value)
+    /// 固定小数位的金额 / 数量格式器。统计页每次刷新要格式化上百个数字，
+    /// 每次调用都新建 `NumberFormatter` 开销不小，这里按配置各建一个复用。
+    private static func decimalFormatter(minimumFractionDigits: Int?, maximumFractionDigits: Int?) -> NumberFormatter {
         let f = NumberFormatter()
         f.numberStyle = .decimal
         f.locale = Locale(identifier: "en_US_POSIX")
         f.groupingSeparator = ","
-        f.minimumFractionDigits = 2
-        f.maximumFractionDigits = 2
-        return "$\(f.string(from: ns) ?? "0.00")"
+        if let minimumFractionDigits { f.minimumFractionDigits = minimumFractionDigits }
+        if let maximumFractionDigits { f.maximumFractionDigits = maximumFractionDigits }
+        return f
+    }
+
+    private static let costFormatter = decimalFormatter(minimumFractionDigits: 2, maximumFractionDigits: 2)
+    private static let costWholeFormatter = decimalFormatter(minimumFractionDigits: 0, maximumFractionDigits: 0)
+    private static let costPreciseFormatter = decimalFormatter(minimumFractionDigits: 4, maximumFractionDigits: 6)
+    private static let tokenFormatter = decimalFormatter(minimumFractionDigits: nil, maximumFractionDigits: nil)
+
+    static func cost(_ value: Decimal) -> String {
+        let ns = NSDecimalNumber(decimal: value)
+        return "$\(costFormatter.string(from: ns) ?? "0.00")"
     }
 
     /// 美元显示取整（四舍五入到整数），仅周期页面使用，存储仍用原始 Decimal。
     static func costWhole(_ value: Decimal) -> String {
         let ns = NSDecimalNumber(decimal: value)
             .rounding(accordingToBehavior: nil)
-        let f = NumberFormatter()
-        f.numberStyle = .decimal
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.groupingSeparator = ","
-        f.minimumFractionDigits = 0
-        f.maximumFractionDigits = 0
-        return "$\(f.string(from: ns) ?? "0")"
+        return "$\(costWholeFormatter.string(from: ns) ?? "0")"
     }
 
     static func costPrecise(_ value: Decimal) -> String {
         let ns = NSDecimalNumber(decimal: value)
-        let f = NumberFormatter()
-        f.numberStyle = .decimal
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.groupingSeparator = ","
-        f.minimumFractionDigits = 4
-        f.maximumFractionDigits = 6
-        return "$\(f.string(from: ns) ?? "0.0000")"
+        return "$\(costPreciseFormatter.string(from: ns) ?? "0.0000")"
     }
 
     /// 图表 Y 轴专用：正常金额保持紧凑，小额刻度保留足够小数避免全部显示为 $0。
@@ -2831,11 +2619,7 @@ enum StatsFormatter {
     }
 
     static func token(_ value: Int) -> String {
-        let f = NumberFormatter()
-        f.numberStyle = .decimal
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.groupingSeparator = ","
-        return f.string(from: NSNumber(value: value)) ?? "\(value)"
+        tokenFormatter.string(from: NSNumber(value: value)) ?? "\(value)"
     }
 
     /// 紧凑显示。中文用 万 / 亿,英文用 k / M / B。

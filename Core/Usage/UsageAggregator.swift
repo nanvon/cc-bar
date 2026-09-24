@@ -11,6 +11,9 @@ import Observation
 final class UsageAggregator {
     private var localBuckets: [BucketKey: UsageBucket] = [:]
     private var remoteBuckets: [BucketKey: UsageBucket] = [:]
+    /// 任一分区写入后递增。统计页以它作为派生结果的缓存键：值不变就复用上次的派生结果，
+    /// 不必每次 body 求值都重新取快照、重新聚合。
+    private(set) var revision: UInt64 = 0
 
     struct BucketKey: Hashable {
         let day: Date
@@ -25,6 +28,7 @@ final class UsageAggregator {
             let key = BucketKey(day: b.day, app: b.app, model: b.model, speed: b.speed)
             localBuckets[key] = b
         }
+        revision &+= 1
     }
 
     /// 恢复独立保存的远端日桶；不会影响本地 rollup。
@@ -34,10 +38,14 @@ final class UsageAggregator {
             let key = BucketKey(day: bucket.day, app: bucket.app, model: bucket.model, speed: bucket.speed)
             remoteBuckets[key] = bucket
         }
+        revision &+= 1
     }
 
     /// 本地扫描器的累计入口。远端数据不得调用此方法，以免重复拉取重复累计。
     func ingestLocal(_ entries: [UsageEntry]) {
+        // 空批次（没有新日志的扫描轮次）不算写入，不能推进 revision 触发统计页重算。
+        guard entries.contains(where: { $0.app != .cursor }) else { return }
+        defer { revision &+= 1 }
         for e in entries where e.app != .cursor {
             let key = BucketKey(day: e.day, app: e.app, model: e.model, speed: e.speed)
             if var b = localBuckets[key] {
@@ -90,6 +98,7 @@ final class UsageAggregator {
             )
             remoteBuckets[key] = bucket
         }
+        revision &+= 1
     }
 
     /// 用一份**完整重算**过的本地分区替换同一 app 的全部日桶。
@@ -108,6 +117,7 @@ final class UsageAggregator {
             )
             localBuckets[key] = bucket
         }
+        revision &+= 1
     }
 
     /// 仅本地日志分区；供扫描状态、定价指纹、缺价补全及本地 rollup 持久化使用。

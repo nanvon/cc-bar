@@ -63,6 +63,7 @@
 		49C1BF03000000000001AABB /* ImportedCodexStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BF03000000000001AAAA /* ImportedCodexStoreTests.swift */; };
 		49C1BF04000000000001AABB /* ScannerIncrementalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BF04000000000001AAAA /* ScannerIncrementalTests.swift */; };
 		49C1BF05000000000001AABB /* UsageEquivalenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BF05000000000001AAAA /* UsageEquivalenceTests.swift */; };
+		49C1BF30000000000001AABB /* StatsOverviewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BF30000000000001AAAA /* StatsOverviewModelTests.swift */; };
 		49C1B131000000000001AABB /* Scheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B131000000000001AAAA /* Scheduler.swift */; };
 		49C1B132000000000001AABB /* L10n.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B132000000000001AAAA /* L10n.swift */; };
 		49C1BD01000000000001AABB /* AppLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BD01000000000001AAAA /* AppLog.swift */; };
@@ -98,6 +99,7 @@
 		49C1B16A000000000001AABB /* ModelProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B16A000000000001AAAA /* ModelProvider.swift */; };
 		49C1B161000000000001AABB /* MainWindowRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B161000000000001AAAA /* MainWindowRootView.swift */; };
 		49C1B162000000000001AABB /* StatsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B162000000000001AAAA /* StatsView.swift */; };
+		49C1B1F0000000000001AABB /* StatsOverviewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B1F0000000000001AAAA /* StatsOverviewModel.swift */; };
 		49C1B163000000000001AABB /* DesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B163000000000001AAAA /* DesignSystem.swift */; };
 		49C1B164000000000001AABB /* ConversationStatsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B164000000000001AAAA /* ConversationStatsView.swift */; };
 		49C1BA12000000000001AABB /* CycleStatsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BA12000000000001AAAA /* CycleStatsView.swift */; };
@@ -181,6 +183,7 @@
 		49C1BF03000000000001AAAA /* ImportedCodexStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportedCodexStoreTests.swift; sourceTree = "<group>"; };
 		49C1BF04000000000001AAAA /* ScannerIncrementalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScannerIncrementalTests.swift; sourceTree = "<group>"; };
 		49C1BF05000000000001AAAA /* UsageEquivalenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageEquivalenceTests.swift; sourceTree = "<group>"; };
+		49C1BF30000000000001AAAA /* StatsOverviewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatsOverviewModelTests.swift; sourceTree = "<group>"; };
 		49C1B131000000000001AAAA /* Scheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Scheduler.swift; sourceTree = "<group>"; };
 		49C1B132000000000001AAAA /* L10n.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = L10n.swift; sourceTree = "<group>"; };
 		49C1BD01000000000001AAAA /* AppLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLog.swift; sourceTree = "<group>"; };
@@ -229,6 +232,7 @@
 		49C1B15A000000000001AAAA /* PricingCatalogStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PricingCatalogStore.swift; sourceTree = "<group>"; };
 		49C1B161000000000001AAAA /* MainWindowRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainWindowRootView.swift; sourceTree = "<group>"; };
 		49C1B162000000000001AAAA /* StatsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatsView.swift; sourceTree = "<group>"; };
+		49C1B1F0000000000001AAAA /* StatsOverviewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatsOverviewModel.swift; sourceTree = "<group>"; };
 		49C1B163000000000001AAAA /* DesignSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignSystem.swift; sourceTree = "<group>"; };
 		49C1B164000000000001AAAA /* ConversationStatsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationStatsView.swift; sourceTree = "<group>"; };
 		49C1BA12000000000001AAAA /* CycleStatsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CycleStatsView.swift; sourceTree = "<group>"; };
@@ -480,6 +484,7 @@
 			children = (
 				49C1B161000000000001AAAA /* MainWindowRootView.swift */,
 				49C1B162000000000001AAAA /* StatsView.swift */,
+				49C1B1F0000000000001AAAA /* StatsOverviewModel.swift */,
 				49C1B163000000000001AAAA /* DesignSystem.swift */,
 				49C1B164000000000001AAAA /* ConversationStatsView.swift */,
 				49C1BA12000000000001AAAA /* CycleStatsView.swift */,
@@ -516,6 +521,7 @@
 				49C1BF03000000000001AAAA /* ImportedCodexStoreTests.swift */,
 				49C1BF04000000000001AAAA /* ScannerIncrementalTests.swift */,
 				49C1BF05000000000001AAAA /* UsageEquivalenceTests.swift */,
+				49C1BF30000000000001AAAA /* StatsOverviewModelTests.swift */,
 				49C1BF07000000000001AAAA /* QuotaPersistenceCoordinatorTests.swift */,
 				49C1BD04000000000001AAAA /* RedactTests.swift */,
 				49C1B31000000000000FAAAA /* PiJSONLScannerTests.swift */,
@@ -734,6 +740,7 @@
 				49C1B15A000000000001AABB /* PricingCatalogStore.swift in Sources */,
 				49C1B161000000000001AABB /* MainWindowRootView.swift in Sources */,
 				49C1B162000000000001AABB /* StatsView.swift in Sources */,
+				49C1B1F0000000000001AABB /* StatsOverviewModel.swift in Sources */,
 				49C1B163000000000001AABB /* DesignSystem.swift in Sources */,
 				49C1B164000000000001AABB /* ConversationStatsView.swift in Sources */,
 				49C1BA12000000000001AABB /* CycleStatsView.swift in Sources */,
@@ -765,6 +772,7 @@
 				49C1BF03000000000001AABB /* ImportedCodexStoreTests.swift in Sources */,
 				49C1BF04000000000001AABB /* ScannerIncrementalTests.swift in Sources */,
 				49C1BF05000000000001AABB /* UsageEquivalenceTests.swift in Sources */,
+				49C1BF30000000000001AABB /* StatsOverviewModelTests.swift in Sources */,
 				49C1BF07000000000001AABB /* QuotaPersistenceCoordinatorTests.swift in Sources */,
 				49C1BD04000000000001AABB /* RedactTests.swift in Sources */,
 				49C1BF09000000000001AABB /* UpdateCheckerTests.swift in Sources */,

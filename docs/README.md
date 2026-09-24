@@ -20,7 +20,7 @@
 | 文件 | 状态 |
 |---|---|
 | [草案-CCBar2.0-设计方案.md](草案-CCBar2.0-设计方案.md) | **待评审、未实施**：下一大版本候选方案，涵盖 SQLite 历史存储与迁移、项目分析、费用解释、性能功耗优化及验收分批；保存方案不代表已确认全部范围或授权实施 |
-| [草案-性能与功耗等价优化方案.md](草案-性能与功耗等价优化方案.md) | 批次 A/B/C 已落地(单一时基调度、FSEvents 日志门控、rollup / 额度写盘节流与 `QuotaPersistenceCoordinator`、`QuotaRefreshPlan`)，批次 D 保留为后续候选 |
+| [草案-性能与功耗等价优化方案.md](草案-性能与功耗等价优化方案.md) | 批次 A/B/C/D 已落地(单一时基调度、FSEvents 日志门控、rollup / 额度写盘节流与 `QuotaPersistenceCoordinator`、`QuotaRefreshPlan`、统计概览 `StatsOverviewModel` 单次派生 + revision 缓存) |
 | [草案-Cursor支持-设计方案.md](草案-Cursor支持-设计方案.md) | 已落地：`CursorAuth` 只读 SQLite、`CursorQuotaClient` / `CursorUsageFetcher`、独立 `cursor-usage-rollup.json`、Popover / 菜单栏 / 悬浮窗 / 统计页 / 设置 / Onboarding 全部接入。文档保留接口字段与风险说明的追溯细节 |
 | [草案-CommandCode支持-设计方案.md](草案-CommandCode支持-设计方案.md) | 已落地：`CommandCodeAuth` 五级凭据扫描 + Keychain 手动 Key、`CommandCodeQuotaClient`、设置账号行与凭据 Sheet、Popover / 菜单栏 / 悬浮窗。按设计不进入主窗口用量统计 |
 | [草案-Antigravity支持-设计方案.md](草案-Antigravity支持-设计方案.md) | 已落地：`AntigravityCredentials` 读 `~/.gemini/jetski-standalone-oauth-token`(兜底 `oauth_creds.json`) + 双 client 刷新、`AntigravityQuotaClient` 四段云端富化、Popover / 菜单栏 / 悬浮窗 / 设置 / Onboarding。无本地日志，不进入用量统计 |
