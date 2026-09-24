@@ -1,441 +1,179 @@
-# 草案 · DSH 本地用量（技术方案）
+# 草案 · DSH 本地用量接入技术方案
 
-> 状态：**未实施**。当前 `UsageApp` 没有 `dsh` case，也没有 `dsh` 对应的扫描器、watermark、日志监听、设置探测与诊断路径。本文是范围与技术契约已收敛的设计方案，尚未落地。实现完成并通过验收后，把最终行为并入 `技术实现.md` / `界面布局.md` / `设计风格.md` / `产品需求.md`，并把本草案归档。
+> 状态：**未实施**。2026-09-23 重新核对本机 DSH Desktop 2.0.13、随包的 `@deepseek-ai/dsh-session-persistence-jsonl` 0.1.5-rc.2、会话日志与 cc-bar 当前代码。本次只修改草案与文档索引，未修改应用代码，也未运行构建或测试。
 >
-> 方案已完成的调研：DSH 官方会话持久化实现位于 `DSH Desktop.app/Contents/Resources/app/node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/index.js`（CLI 与 Desktop 共用同一个包），帧扫描算法、压缩参数、generation 选择逻辑均以该实现为契约，不靠猜测。
+> 同日已对照现有实现确定四项实施决策与实施步骤，见 §6、§7。
 
-## 1. 背景、目标与范围
+## 1. 结论与第一版范围
 
-### 1.1 用户诉求
+DSH CLI 与当前稳定版 DSH Desktop 在默认配置下共用 Harness home `~/.dsh`，会话日志位于 `~/.dsh/sessions`。cc-bar 第一版只从这个默认根**只读**采集，统一显示为一个「DSH」本地用量服务，不按 CLI、Desktop 或 profile 拆分。Desktop 自定义数据目录、显式 `DSH_HOME`、Beta home 与自定义持久化 root 不做自动发现；没有默认日志不能据此断定用户未安装 DSH。
 
-在 cc-bar 主窗口的本地用量统计中接入 **DSH（DeepSeek Harness）**，让 DSH 和已支持的 Codex / Claude Code / Pi / OpenCode 一样，能看到 token、请求数、预估费用、对话归属与时间线。
+接入主窗口统计的 Overview、Conversations、用量图表以及按服务、模型、提供商分组。**不接入 Cycles 和额度 Timeline**：它们依赖 Codex / Claude 的额度周期和额度历史；DSH 没有对应 `QuotaApp`。不进入菜单栏、Popover、悬浮窗或 Onboarding。设置页增加统计服务开关与本地日志探测；诊断只记录默认根存在性、候选文件数量和扫描结果，不记录会话路径、标题、正文或凭据。
 
-### 1.2 第一版范围
+默认日志是 zstd。Apple `Compression` 公开算法集合**没有 Zstandard**，旧草案所说的 `COMPRESSION_ZSTD` 不存在。第一版要读默认日志，建议引入 [Zstandard 官方仓库的 `libzstd` Swift Package，固定 v1.5.7](https://github.com/facebook/zstd/blob/v1.5.7/Package.swift)，由 Xcode 工程链接其 `libzstd` 产品。不调用用户机器上的 `zstd` 命令，也不依赖 DSH Desktop.app 内部文件。[Apple 算法列表](https://developer.apple.com/documentation/compression/algorithm)与本机 Xcode SDK 的 `compression.h` 都不含 zstd。
 
-- **主窗口统计**：DSH 作为一个本地用量数据源进入 Overview / Conversations / Timeline / Cycles / 按服务 / 按提供商 / 按模型全部面板，复用现有 `UsageEntry` → `UsageAggregator` → `ConversationAggregator` 链路。
-- **设置**：统计服务可见性列表新增 DSH 一行（默认可见，见 §4.2）；用量数据源探测新增 DSH 一行。
-- **诊断**：`DiagnosticsBundle` 纳入 DSH 会话目录的存在性与元信息。
-- **展示位**：只进主窗口统计。**不进**菜单栏、Popover、桌面悬浮窗、Onboarding——这两处是"额度 Provider"的展示位，DSH 没有订阅额度概念。
+## 2. 调研依据
 
-### 1.3 第一版明确不做
+### 2.1 默认数据根与 Desktop
 
-- 不做 DSH 的额度 / 订阅查询，`QuotaApp` 不新增 case。
-- 不画 DSH 的 logo SVG（`ServiceTile` 资源缺失时回退字母 `T`/占位，见 §4.6）。
-- 不引入任何第三方 zstd 依赖，不调用系统 `zstd` 命令行，不新增 Xcode framework 链接（见 §2.3）。
-- 不读取 `~/.dsh/.credentials.yaml`、`~/.dsh/settings.yaml`、`storages/*.json`、`agy-accounts/pool.json` 等**非会话**文件；只读会话日志。
-- 不解析消息正文（`content` / `reasoning` / `text`），不落盘任何对话内容；只取标题摘要，口径与现有对话档案一致。
-- 不做 DSH 子代理（`delegationDepth > 0`）的独立会话拆分，全部归入所属会话文件。
-- 不改动 `ModelProvider` 的归并规则（DSH 的 provider 前缀已被现有前缀表覆盖，见 §4.5）。
+随 Desktop 安装的 `@deepseek-ai/dsh-home-paths` 按“显式路径 → `DSH_HOME` → `~/.dsh`”解析 home；`@deepseek-ai/dsh-base/cordis.patch.yml` 把持久化 root 配为 `dshHomePath('sessions')`。当前 Desktop stable 默认 home 是 `~/.dsh`，启动时将选定 home 注入 `DSH_HOME`。profile 只决定插件组合。Desktop 另有自定义数据目录功能，因此“永远只有 `~/.dsh`”不是 DSH 的通用契约，只是本方案的支持范围。参见 [DSH 官方持久化说明](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/session/session-persistence-jsonl/README.md)。
 
-## 2. 调研结论与技术选择
+本机 `~/.dsh/sessions` 存在；`/Applications/DSH Desktop.app` 为 2.0.13，随包持久化模块为 0.1.5-rc.2；Desktop 的 `data-directory/state.json` 当前不存在。没有读取设置文件或凭据。旧版 `~/Library/Application Support/dsh-desktop/harness/sessions/` 不作为候选根。
 
-### 2.1 DSH 与 DSH Desktop 是同一个产品
+### 2.2 本机只读快照
 
-**结论：当作一个实体处理，UI 只出现一个「DSH」条目，扫描层同时覆盖两个根目录。**
+2026-09-23 对默认根做字段统计：每个会话目录只取数值最高的规范 generation，逐帧解压，仅提取记录类型、会话关系、模型与 usage 数值；没有输出或保存消息正文、标题和原始路径。以下是会变化的样本数据，不能写成实现常量。
 
-依据：
+| 项目 | 本次结果 |
+|---|---:|
+| 项目目录 / 会话目录 | 3 / 19 |
+| 选中日志编码 | zstd 19、明文 0 |
+| 同目录另有旧 generation | 1 |
+| 完整 zstd 帧 | 2,498 |
+| 压缩 / 解压字节 | 4,825,778 / 17,143,475 |
+| 顶层 / 一层子代理 / 更深子代理 | 9 / 5 / 5 |
+| `assistant/message` / 其中带 usage | 695 / 693 |
+| `data.usage` 与 stream usage 同时出现 / 不等值 | 693 / 0 |
+| input / output / cacheRead / cacheWrite tokens | 1,287,386 / 507,382 / 58,163,712 / 0 |
 
-1. **同一份持久化实现。** CLI 与 Desktop 共用 `@deepseek-ai/dsh-session-persistence-jsonl` 这一个包，帧格式、generation 命名规则、压缩参数完全一致。
-2. **只差根目录和文件名。** 唯一的物理差异见 §2.2 的表。
-3. **项目内已有先例。** cc-bar 现在就是这么处理 OpenCode 的：`OpencodeScanner` 只读 `~/.local/share/opencode/opencode.db`，而归并为一个 `opencode` 条目——[OpenChamber](https://github.com/openchamber/openchamber) 是与 OpenCode **同源同库**的可视化工作区（本机实测：`~/.local/share/opencode/` 下存在 OpenChamber 自己创建的 `auth.json.openchamber.backup`，且 `~/Library/Application Support/OpenChamber/` 已安装），cc-bar 从未为它单列条目。DSH 与 DSH Desktop 的关系与此同构。
+直接把整份拼接帧文件交给一次单帧解压，只得到第一帧会话头；上述统计先定位帧边界，再逐帧解码。这是实现必须遵守的物理格式。
 
-用户几乎只使用 Desktop 版本，但把 CLI 根目录一并纳入的边际成本只是候选目录列表多一项，因此两个根都扫。
+### 2.3 文件与记录
 
-### 2.2 数据源契约（已实测 + 已对源码）
+目录形态是 `sessions/<项目段>/<会话段>/<日志文件>`。目录段经过编码，不从目录名反推原始 `cwd` 或 session id；从文件内 `session` 头取 `id`、`cwd`、`parentSession` 与 `delegationDepth`。无 cwd 的 `_no-cwd` 项目段也须处理。
 
-```text
-DSH Desktop: ~/Library/Application Support/dsh-desktop/harness/sessions/
-DSH CLI:     ~/.dsh/sessions/
-```
+只识别规范名：v0 的 `session.jsonl.zstd` / `session.jsonl`，正整数 vN 的 `session.vN.jsonl.zstd` / `session.vN.jsonl`。忽略大写、`v0`、前导零、锁文件与临时文件。一个会话目录只选**版本号最高**的规范日志；相同版本的两种编码并存属于异常，cc-bar 可固定优先 zstd 并报告诊断。官方在配置编码与现存编码冲突时会报错，cc-bar 的宽容读取不表示 DSH 可以继续写该目录。[官方迁移说明](https://github.com/deepseek-ai/deepseek-harness/blob/master/.agents/notes/implemented/architecture/2026-08-31-released-session-format-migrations.md)确认旧 generation 保留，新文件包含同一段逻辑历史。
 
-两个根下都是 `<编码后的 cwd>/<session 目录>/<日志文件>` 两级结构。`<编码后的 cwd>` 形如 `--Users-alice-Code-my-project--`，但**解析不依赖目录名**——`session` 记录里有原始 `cwd` 字段，直接用它（比反解编码可靠）。
+当前格式只消费三类记录：`session`（元数据）、`session/title`（最后一个有效标题）、`assistant/message`（用量）。其他事件不计费，不从正文推算 token。用量优先取 `data.usage`；缺失时取 `data.stream` 最后一个 usage chunk。两处是同一份用量，**不可相加**。两处都缺失时既不计 token，也不计请求。`time` 是 Unix 毫秒，转为 `Date` 后用现有 `UsageDay.startOfDay` 计算本地日。
 
-日志文件名有两种形态，都要扫：
-
-| 形态 | 文件名 | 说明 |
+| DSH usage 字段 | `UsageEntry` | 规则 |
 |---|---|---|
-| v0 | `session.jsonl.zstd` | 无版本号，仅 CLI 侧存在 |
-| vN | `session.v3.jsonl.zstd` | 当前格式（实测 v3），Desktop 侧 |
+| `inputTokens` | `inputTokens` | 已排除缓存读写，不再扣减 |
+| `outputTokens` | `outputTokens` | 原值 |
+| `cacheReadTokens` | `cacheReadTokens` | 可选，缺省 0 |
+| `cacheWriteTokens` | `cacheCreationTokens` | 可选，缺省 0 |
+| `reasoningTokens` | 无额外字段 | 属于 output 子集，不重复计数 |
+| `totalTokens` | 校验字段 | 有值时校验四项之和，不参与二次求和 |
+| 一条有效 `assistant/message` | `requestCount = 1` | 无 usage 不计请求 |
 
-**generation 是追加写、写完后不可变的**。官方选择逻辑是取**版本号最大**的 canonical generation（`generations.sort((l,r) => r.version - l.version)[0]`）。所以同一目录可能同时残留多个版本的日志文件，**只读最高版本那一个**；旧版本不再增长，不必重复计入。
+模型标签按 `source.provider/source.model` 组合，外层 provider 只加一次，例如 `commandcode/deepseek/deepseek-v4.1-flash`。`Pricing.normalize` 再剥前缀查价。日志中的 provider 可能是转发商，不证明用户按 DeepSeek 官方 API 价付款。
 
-> 实测一个目录下会并存 `session.jsonl.zstd` 与 `session.v3.jsonl.zstd`，若两者都扫会重复计费。
+## 3. 解码与增量扫描
 
-### 2.3 zstd 解压：不需要任何新依赖
+### 3.1 zstd 依赖与帧处理
 
-三个结论决定了这一点：
+在 `ccbar.xcodeproj` 中加入官方 `facebook/zstd` package，固定 v1.5.7，App 和测试 target 链接 `libzstd`。不用 Homebrew、DSH 的 Node 运行时或私有系统 dylib；既有 `scripts/build.sh` 和 GitHub macOS runner 都须能解析此依赖。[官方 C 实现](https://github.com/facebook/zstd)采用 BSD 或 GPLv2 双许可，接入时保留选定许可声明。增加的构建时间和应用体积要在实施时测量。
 
-1. **帧边界可以纯字节扫描。** 官方 `scanZstdFrames()` 在不做任何解压的前提下定位完整帧，算法完全公开（见 §3.1）。
-2. **每帧独立可解码且带校验和。** 官方压缩参数为 `{ zstd: checksumFlag: 1 }`，注释明确写 "Compress one independently decodable, checksummed Zstandard frame"，且**不启用字典**（实测 `DictID: 0`）。
-3. **系统框架够用。** 部署目标是 macOS 14.0，Apple `Compression` 框架自 10.15 起支持 `COMPRESSION_ZSTD`。
+Swift 封装只暴露“解码**一个完整帧**”接口。用 `ZSTD_createDCtx` / `ZSTD_decompressStream` / `ZSTD_isError` 检查解码错误与帧末状态，让 libzstd 校验 checksum；输出按块收集并设置每帧解压上限，避免损坏文件造成无界分配。`ZSTD_findFrameCompressedSize` 可用作边界交叉校验；API 用法以[官方 `zstd.h`](https://github.com/facebook/zstd/blob/v1.5.7/lib/zstd.h)为准。
 
-因此实现路径是：**Swift 复刻约 100 行帧扫描（定位边界）+ Apple Compression 逐帧解压**。不引入 libzstd、不引入 SPM 依赖、不改 `project.pbxproj` 的链接配置、不 shell out 到 `zstd`（GUI App 不保证 PATH，且进程开销不可接受）。
+按 DSH 随包源码的 `scanZstdFrames()` 规则扫描 magic、frame descriptor、可选字典与内容大小头、各 block 和 checksum 长度。只将完整帧交给 libzstd。尾部字节不足时返回 `tornStart`，本轮不消费；非法 magic、保留位、非法 block 或 checksum 失败视为损坏。偏移与长度加法要逐次检查越界。
 
-### 2.4 体量与压缩比实测
+### 3.2 watermark 与失败处理
 
-| 指标 | 实测值 |
+`ScanFileState.offset` 对 zstd 恒落在上一个**成功解析并入账的完整帧末尾**；明文恒落在上一个完整换行末尾。未变化文件按 mtime + size 跳过，变化文件从旧 offset 续读。明文复用 `JSONLLineReader` 的整行规则。zstd 按块读取，只缓存当前未完成帧及其解压输出；本机首扫较小不构成整份文件无上限读取的理由。
+
+每个文件先局部暂存本轮 entries、seed 和新 offset。解码、UTF-8、JSON 或读取失败时，丢弃**该文件本轮结果**并保留旧 watermark，其他文件照常处理。正常撕裂尾帧不算失败。新增完整帧只计一次。文件被截断或原地替换时不能简单将 offset 归零后累加，否则历史用量会翻倍。
+
+### 3.3 逐会话贡献与 generation 切换
+
+现有 `UsageAggregator.ingestLocal`、`ConversationAggregator.ingest` 都是累加。若 v0 已入账，DSH 随后发布内容等价的 v3，从新路径全量扫会把旧历史再加一次。旧草案所说的“新 key 天然安全”错误。单纯清掉 DSH 桶并重扫**当前所有日志**也有缺陷：此前已删除的会话文件无法重读，其历史桶会在这次重建中消失。
+
+第一版增加持久化的 **DSH 逐会话贡献缓存**。每个 session id 保存：所选 generation 路径、文件身份（device/inode 与 mtime/size）、帧或行 watermark、头部元数据，以及按日、模型、速度汇总的该会话 token、请求数、费用分项与首末时间。它是本地派生数据，不含消息正文。缓存与两个主 rollup 同级落在 `~/Library/Application Support/CCBar/`，不放 `~/Library/Caches`——Caches 会被系统清理，而这份缓存的意义正是保住已删除会话文件的历史（见 §6 决策 2）。普通增量只把新 entries 合入对应会话贡献；已有会话切换 generation、原路径被替换或截断时，从新文件零 offset 重算并**替换该会话贡献**。新文件解码失败则保留该会话旧贡献和 watermark，报告扫描不完整，不把新旧版本相加。
+
+每次贡献或父子关系图变化，从全部逐会话贡献重新归并出 DSH 的日桶与对话桶，只替换 `UsageAggregator`、`ConversationAggregator` 的 DSH 分区；Codex、Claude、Pi、OpenCode 保持原样。两个主 rollup、逐会话贡献缓存与 scan-state 必须带同一个 generationID，按“派生快照先写、watermark 最后写”的现有顺序提交。启动时若贡献缓存缺失、版本不符或代次不一致，就从现存 DSH 日志重建，不能将不匹配的贡献与旧桶混用。旧 generation 移除后，只要该会话贡献仍在，版本切换仍可精确替换此会话，并保留其他已清理会话的历史。
+
+实施时给两个聚合器加按 `UsageApp` 替换分区的最小接口。普通源文件删除沿用现有扫描器保留历史入账的语义：保留其贡献，不因日志清理倒扣历史。若逐会话贡献缓存本身损坏或丢失，只能从仍存在的日志恢复；已删除源文件无法恢复，这是第一版限制，不可静默宣称历史完整。未来要支持删除同步，另定产品规则。
+
+## 4. 子代理与预估费用
+
+### 4.1 子代理归并
+
+DSH 子代理有独立文件和 session id，`parentSession` 指向直接父会话。本机样本为 9 个顶层和 10 个子代理。父文件记自己的模型调用，子文件记子代理用量。第一版将子代理归到所属**根会话**，Conversations 只显示一行并标 `includesSubtasks`；总量不因归并改变。
+
+每轮从所选日志头与逐会话贡献缓存建 `id → parentSession` 图，再解析根 id；设置环与深度上限。`conversationKey = "dsh:<根 id>"`。根会话 cwd、标题、sourcePath 优先。父文件暂缺时子会话先作为根，不丢用量；**父文件后来出现或父链改变时重新归并已有逐会话贡献**，不能只给未来条目换 key。相同 id 落在多个项目目录按损坏处理，不重复计费。扫描状态持久化 `conversationID`、`conversationCwd`、`fallbackTitle`、`conversationParentSession`；标题后到可通过现有 seed 合并，不需重算 token。
+
+### 4.2 费用口径
+
+DSH 日志提供 token usage，**没有可当作真实账单的费用**。沿用 `Pricing.resolveCostBreakdown`：有可靠价目时计算 USD API 等值估算，缺价时 `costUSD = nil`、token 仍入账。经过 `commandcode`、`opencode-go` 等转发商的调用，模型官方价可能不同于实付价，界面和文档不能称其为真实花费。
+
+[DeepSeek 官方价格页](https://api-docs.deepseek.com/quick_start/pricing/)与[变更日志](https://api-docs.deepseek.com/updates)给出的 Flash（V4.1-Flash）价：2026-09-10 04:00 UTC 起高峰价为未命中缓存的输入 0.3、缓存命中的输入 0.006、输出 1.2（USD / 百万 tokens），空闲时段为高峰的一半；2026-08-16 16:00 UTC 起至 2026-09-10 04:00 UTC 之间为 0.44 / 0.014 / 1.32。官方明确旧名 `deepseek-v4-flash`、`deepseek-v4-flash-vision-exp` 仍被接受、请求由 V4.1-Flash 服务并按 Flash 价计费；本机日志里的 `deepseek-v4.1-flash` 是此方案要处理的本地模型标识，不声称它也是官方请求参数。
+
+第一版不用「DSH 专用兜底价」，改为把上述官方节点做成**分段生效价**，同时挂在四个归一化 key 上（`deepseek-flash`、`deepseek-v4-flash`、`deepseek-v4-flash-vision-exp`、`deepseek-v4.1-flash`），数值与实现约束见 §6 决策 1。这样同一模型在 DSH / Pi / OpenCode 下口径一致，历史天数仍落在旧价（分段按天判定，手动重算也不会改写历史），也不影响其他服务价目。
+
+扁平价无法准确表达每日峰谷、历史调价与转发商收费，因此金额始终是估算。若未来 DSH 日志出现 cache write，而模型没有可靠写入费率，不能把未知费用伪装成已知零费用。后续调整价格规则、并要求历史金额自动更新时，按第 5 节的缓存版本与重建规则处理。
+
+## 5. 与当前代码的接线
+
+| 位置 | 必要改动 |
 |---|---|
-| 会话文件数 | 15（Desktop 14 + CLI 1） |
-| 累计 zstd 帧数 | 1507 |
-| 压缩后体积 | 2.7 MB |
-| 解压后体积 | 9.7 MB |
-| 压缩比 | **约 3x**（帧小，平均 6.4 KB/帧，压缩收益有限） |
-| 单文件最大帧数 | 165 |
+| `Core/Usage/` | 新增 DSH 目录扫描、帧封装；`UsageApp` 加 `dsh` 和 `localApps` 条目 |
+| `Core/Usage/UsageService.swift` | 后台并行扫描 DSH；按第 3.3 节更新逐会话贡献并替换 DSH 聚合分区；纳入进度、错误、持久化与扫描日志，DSH 的 `failedFileCount` 计入 `lastError`（`pi` / `opencode` 现状不动，见 §6 决策 4）。**不加入 `cycleEntries`** |
+| `Core/Storage/ScanCache.swift` | 保存 DSH watermark、选中 generation、文件身份与父关系；`ScanState.currentVersion` 14 → 15 |
+| 新增 DSH 贡献缓存与主 rollup | 落 `~/Library/Application Support/CCBar/`（决策 2）；持久化逐会话日、模型、速度聚合及元数据，和 scan-state、日/对话 rollup 同代；`UsageRollupPayload.currentVersion` 9 → 10、`ConversationRollupPayload.currentVersion` 7 → 8。DSH 不增加周期桶 |
+| `Core/Usage/UsageLogWatcher.swift` | 将默认 `~/.dsh/sessions` 加入候选根；根未创建时沿用现有发现与 30 分钟兜底 |
+| `Core/Usage/Pricing.swift` 等 | `case .dsh` 穷举分支（`Pricing.price` 的 fast 分支、`PricingCatalogStore.rate`、`ModelProvider`）；按 §6 决策 1 补四组 Flash key 的分段价（`deepseek-v4-pro` 是否一并纳入待确认）；不改其他服务价目 |
+| 主窗口、设置、诊断 | 服务名、识别色、Stats 过滤项、Conversations 映射、统计服务开关、数据源探测与脱敏诊断；Cycles 和额度 Timeline 保持现状 |
+| Xcode 工程与发布 | 工程是 `objectVersion 77` 的显式文件引用（无 file-system synchronized group），新增源文件要同时改 `PBXBuildFile` / `PBXFileReference` / group children / Sources 阶段；加官方 `facebook/zstd` v1.5.7 远程包与 product `libzstd`，**App 与 CCBarTests 两个 target 都要挂**（两者当前 `packageProductDependencies` 均为空，仓库现无任何 SPM 依赖）；源码包不涉及签名，但保留许可声明；后续验证 Debug 和仓库既定发布脚本 |
 
-两个含义：
+默认开关沿用 `SettingsStore`：除 Cursor 外的新 `UsageApp` 默认可见。未装 DSH 的用户会看到空服务项，和 Pi / OpenCode 现状一致；若未来要“未检测到则隐藏”，另加可用性状态，不要改写用户偏好。
 
-- 数据量级远小于已支持的 Codex（3.5 GB / 1948 文件）和 Claude（737 MB / 1135 文件），**首扫无压力**。
-- 但压缩比只有 3x，**全量重解没有任何收益**，而 DSH 是每天都在用的主力工具，会话文件持续增长。因此必须走增量，这与现有四个扫描器的架构一致（见 §3.2）。
+首版落地要使旧扫描状态和主 rollup **一起失效**；只清 watermark 会重复计费，只清桶会漏计。后续 DSH 解析或价格规则改变，要重算受影响的逐会话贡献，再替换 DSH 分区；父子归属改变只需重新归并贡献。首次版本升级按现有机制全仓重建，实施验收要记录其他日志重扫成本。
 
-## 3. 扫描架构
+## 6. 实施决策（已定）
 
-### 3.1 帧扫描算法（核心新增代码）
+### 决策 1：价格口径用分段生效价，不用「DSH 专用兜底价」
 
-复刻官方 `scanZstdFrames()`。这段代码**不解压**，只做结构校验并返回完整帧区间；遇到写了一半的帧则返回其起始位置（`tornStart`）而不是报错。
+四个归一化 key 共用同一套分段规则（`deepseek-v4.1-flash` 是本机日志标识，其余三个是官方现名与兼容名）：
 
-```text
-输入：整个文件的字节 buffer（或从 offset 起的新增字节）
-输出：完整帧的 [(start, end)] 列表 + 可选 tornStart
+| 归一化 key | `< 2026-08-16 16:00 UTC`（沿用 `Pricing.table` 现值） | `≥ 2026-08-16 16:00 UTC` | `≥ 2026-09-10 04:00 UTC` |
+|---|---|---|---|
+| `deepseek-flash` / `deepseek-v4-flash` / `deepseek-v4-flash-vision-exp` / `deepseek-v4.1-flash` | input 0.14 · cacheRead 0.0028 · output 0.28 | input 0.44 · cacheRead 0.014 · output 1.32 | input 0.3 · cacheRead 0.006 · output 1.2 |
 
-offset = 0
-while offset < buffer.length:
-    start = offset
-    if 剩余 < 4:                      → tornStart = start，返回
-    校验 buffer.readUInt32LE(offset) == 0x28B52FFD   // ZSTD magic
-    offset += 4
-    if 剩余 == 0:                     → tornStart = start，返回
-    descriptor = buffer.readUInt8(offset); offset += 1
-    if (descriptor & 0x18) != 0:      → 结构损坏，抛错（reserved 位被置位）
+- `input` 是未命中缓存的输入价，`cacheRead` 是命中缓存的输入价，`cacheCreation` 恒 0，与 `ModelPrice` 字段一一对应；单位 USD / 百万 token。
+- 两段新价都取**高峰价**，是估算上界（真实账单按时段计费，空闲为半价）。第一版不实现峰谷时段与中国法定假日日历，金额偏高但不低报。
+- 官方称 `deepseek-v4-pro` 自 2026-08-16 起即为 input 1.32 · cacheRead 0.044 · output 3.96，此后未再调整；表内现值 0.435 · 0.003625 · 0.87 同样过期。**是否一并纳入待确认**：纳入则该 key 按同一分段规则修正，不纳入则维持现状。
+- 实现约束（源码里是 `precondition`，违反会直接崩）：进 `timedOverrides` 的 key 必须在 `Pricing.table` 有基础价，所以四个 key 都要先补表行。进 `timedOverrides` 还等于把该 key 归入 A 类（`localOverrideKeys`），**远端价格目录对这些 key 零参与**——这是刻意选择：本地已按官方节点编码，不能让目录的单一现价覆盖分段规则。
+- 规则按模型 key 生效、不分 app，所以 Pi / OpenCode 之后的 DeepSeek 估算也会对齐官方价；历史天数按分段规则仍落在旧价，满足「不静默重算历史金额」。
+- key 变体按仓库既有惯例写成重复行（同 `claude-fable-5.1` / `claude-fable-5-1`），不引入别名映射机制。
 
-    contentSizeFlag  = descriptor >>> 6
-    singleSegment    = (descriptor & 0x20) != 0
-    hasChecksum      = (descriptor & 0x04) != 0
-    dictionaryFlag   = descriptor & 0x03
-    dictionaryBytes  = (dictionaryFlag == 3) ? 4 : dictionaryFlag
-    contentSizeBytes = (contentSizeFlag == 0) ? (singleSegment ? 1 : 0) : (1 << contentSizeFlag)
-    remainingHeader  = (singleSegment ? 0 : 1) + dictionaryBytes + contentSizeBytes
-    if 剩余 < remainingHeader:        → tornStart = start，返回
-    offset += remainingHeader
+### 决策 2：逐会话贡献缓存落 Application Support
 
-    loop:                             // 逐个 block 推进
-        if 剩余 < 3:                  → tornStart = start，返回
-        blockHeader = buffer.readUIntLE(offset, 3); offset += 3
-        lastBlock  = (blockHeader & 1) != 0
-        blockType  = (blockHeader >>> 1) & 3
-        blockSize  = blockHeader >>> 3
-        if blockType == 3:            → 结构损坏，抛错
-        payloadBytes = (blockType == 1) ? 1 : blockSize     // RLE block
-        if 剩余 < payloadBytes:       → tornStart = start，返回
-        offset += payloadBytes
-        if lastBlock: break
+`scan-state.json` 在 `~/Library/Caches`，两个 rollup 在 `~/Library/Application Support/CCBar/`。这份贡献缓存的全部意义是保住已删除会话文件的历史，放 Caches 等于把最该保护的东西放在系统可清理的位置。因此与两个 rollup 同级存放；缺失、版本不符或代次不一致时按第 3.3 节从现存日志重建，并接受「已删除文件无法恢复」这一限制。
 
-    if hasChecksum:
-        if 剩余 < 4:                  → tornStart = start，返回
-        offset += 4
+### 决策 3：接受首版全量重建，并记录成本
 
-    记录完整帧 (start, end = offset)
-```
+`ScanState` 14 → 15 加两个 rollup bump，会让所有老用户升级后重扫 Codex / Claude 全量日志。这是既有 v9 / v13 / v14 迁移的同类代价，可以接受；验收时要记录重扫耗时，并确认其他服务数值不变。
 
-`readUInt32LE` / `readUIntLE` 在多字节读取前都做了剩余长度检查，因此对"文件正在被写入"这一常态是安全的：**返回的帧区间一定是完整帧，tornStart 一定是未完成的尾部**。
+### 决策 4：DSH 的失败文件计入 `lastError`
 
-### 3.2 增量 watermark：帧边界对齐的字节偏移
+`UsageService` 目前只把 `claude` + `codex` 的 `failedFileCount` 累加进 `lastError`（`pi` / `opencode` 没有）。DSH 的坏帧、坏文件要能浮出来，因此把 `dsh` 加进这一行；`pi` / `opencode` 的既有行为不顺手改，不属本任务。
 
-现有四个扫描器共用同一套热路径原则（实测确认）：`ScanFileState{mtime, offset}` 三元组中 **mtime 与 size 都没变就整个文件跳过，连 open 都不做**；只有文件真变了才从 `offset` 续扫。Claude（1135 文件 / 737 MB）、Codex（1948 文件 / 3.5 GB）就是靠这个把每轮扫描成本压到近似 `stat`。
+## 7. 实施步骤
 
-DSH 沿用同一契约，但偏移语义比明文 JSONL **更强**：
+按「每步都能单独编译、单独验证、单独提交」切，是**技术依赖顺序，不是时间表**。S0 与 S4 是仅有的两处「一动手就影响所有人」的步骤，各自单独提交。
 
-| | Claude / Codex / Pi（明文 JSONL） | DSH（zstd 帧） |
+| 步 | 产出 | 验证 |
 |---|---|---|
-| offset 语义 | 字节偏移，靠"整行消费"对齐 | **恒落在帧边界上** |
-| 半截数据处理 | 末尾残行留到下次 | 官方 `tornStart` 明确告知 |
-| 续扫范围 | 从 offset 读新行 | 从 offset 扫新帧、逐帧解压 |
+| S0 | `ccbar.xcodeproj` 加远程包 `facebook/zstd`（固定 v1.5.7）与 product `libzstd`，App 与 CCBarTests 两个 target 都链接 | Debug build 通过、`import libzstd` 可用 |
+| S1 | `Core/Usage/DshZstdFrames.swift`：帧边界扫描 + 单帧解码（`ZSTD_createDCtx` / `ZSTD_decompressStream` / `ZSTD_isError`，每帧输出上限） | 单测：坏 magic、保留位、checksum 失败、撕裂尾帧、补齐后正常入账；fixture 用 libzstd 现场编码 |
+| S2 | `Core/Usage/DshSessionScanner.swift`：目录枚举、四种规范名与最高 generation、三类记录与字段映射、zstd 帧与明文两种 watermark、单文件失败隔离 | 单测对齐 `PiJSONLScannerTests` 风格（可注入 `root:` + 临时目录） |
+| S3 | DSH 逐会话贡献缓存（新文件 + 版本 + generationID）；`UsageAggregator.replaceLocal(app:buckets:)`（照 `replaceRemote` 的形状）；`ConversationAggregator` 的等价替换接口 | 单测：generation 切换是替换而非相加、父链变化重归并、贡献缓存损坏时回退 |
+| S4 | `UsageService` 接线：第 5 个 `async let dshTask`、`hasNewEntries`、`ScanState` 加 dsh 字段、贡献缓存插入落盘序列（两个 rollup 之后、`ScanCache.save` 之前）、扫描日志行；`ScanState` 15 / `UsageRollupPayload` 10 / `ConversationRollupPayload` 8 | 端到端扫一轮：其他服务桶数值不变，DSH 首次入账正确 |
+| S5 | 定价：三处 `case .dsh` + 决策 1 的分段价与基础表行 | 复用 `UsageEquivalenceTests`，确认其他服务金额不变 |
+| S6 | UI / 设置 / 诊断 / 资源：`StatsView`（14 处 `.opencode` 引用）、`SettingsRootView`（6 处 + 服务开关 + 数据源探测）、`DiagnosticsBundle`、`DesignSystem`；确认 Cycles 与额度 Timeline 不出现 DSH | 静态检查 + 手动验收 |
+| S7 | §8 的四条跨轮聚合回归与中断写盘一致性测试；文档回写 | 测试通过 + 手动验收清单 |
 
-扫描流程：
+## 8. 验证与完成条件
 
-```text
-对每个候选日志文件：
-  1. stat 取 mtime / size
-  2. 若 mtime == state.mtime && state.offset == size  → 跳过（不 open）
-  3. 否则从 state.offset 起读新增字节，跑 §3.1 帧扫描
-  4. 对每个完整帧：解压 → 按行 JSON 解析 → 抽取 §3.3 的记录
-  5. offset 推进到「最后一个完整帧的 end」；存在 tornStart 时不推进到那里
-     （本轮丢弃该帧，下轮文件再增长时自然重读）
-  6. 按行累加 linesParsed，写回 newState
-```
+使用脱敏合成 fixture 和本次引入的 libzstd 编码能力生成**带 checksum 的多帧文件**；不再使用不存在的 Apple `COMPRESSION_ZSTD`。覆盖四种规范名、最高 generation、明文与 zstd、拼接帧、半截尾帧补齐、checksum 错误、无效 JSON、读失败不推进 watermark、未变化跳过、增量只计新增 usage、双位置 usage 只计一次、token 口径、无 usage 跳过、子代理多层归根和环保护。
 
-关键不变式：
+必须做四条**跨轮聚合**回归，单测扫描器返回值不足以发现这些问题：① 第一轮入账 v0，第二轮发布内容等价 v3，总 token 与请求数不变；② 第一轮子文件缺父，第二轮父文件出现，总量不变且对话桶迁到根；③ 一个会话的新 generation 损坏，旧会话贡献保留，其他服务及 DSH 其他会话的新增量正常提交；④ 已删除会话文件的贡献留存，另一个会话切换 generation 后，已清理会话的历史桶仍在。另验证逐会话贡献、scan-state、日 rollup、对话 rollup 在中断写盘后不会形成同代但不同进度组合。
 
-- **页内每帧只解压一次**：offset 只在帧边界推进，已计入的帧不会被重读。
-- **写一半的帧不会漏也不会重**：不推进 offset → 下轮重读；帧内数据不完整所以本轮不入账。
-- **generation 切换天然安全**：文件名含版本号，切换后是新的 `ScanFileState` key，走一次全量；旧 key 成为不再命中的陈旧项（现有扫描器同样会残留失效 key，随 `ScanCache` 落盘，不需要特殊清理）。
+后续实施按仓库规则单独征得构建/测试许可。本次调研没有运行 Xcode 构建或 App 验收。自动化通过后，仍须在本机 DSH CLI 与 Desktop 产生新会话做手动验收：只出现一个 DSH 服务；普通统计与对话显示共享日志；子代理归一行；generation 切换不翻倍；设置与诊断正确；Cycles 和额度 Timeline 不出现 DSH。
 
-### 3.3 每行读什么（三类记录）
+## 9. 复核入口
 
-DSH 日志的记录类型实测共 20 种，**只关心以下三类**，其余全部忽略。
-
-**① `session` — 会话元数据（取 `cwd` / `id`）**
-
-```json
-{"type":"session","version":3,"id":"session-1a2b3c4d-...","createdAt":1768435200000,
- "cwd":"~/Code/my-project","delegationDepth":0,"agentPreset":"standard"}
-```
-
-**② `session/title` — 对话标题**
-
-```json
-{"type":"session/title","seq":14,"time":1768435200000,
- "data":{"title":"重构用量统计面板","messageSeqs":[3],"source":{"kind":"fallback"}}}
-```
-
-**③ `assistant/message` — 用量（唯一权威来源）**
-
-```json
-{"type":"assistant/message","seq":147,"time":1768435200000,
- "data":{"turn":1,"step":1,
-   "message":{"role":"assistant","content":[...],
-              "source":{"kind":"model","provider":"<provider>","model":"<provider>/<model-id>"}},
-   "usage":{"inputTokens":12247,"outputTokens":330,"cacheReadTokens":1280,
-            "reasoningTokens":129,"totalTokens":13857}}}
-```
-
-> 上述示例为脱敏样本：会话 id、`cwd`、标题、`time` 均为占位值。`usage` 数值保留真实形态，用于说明 §3.4 的恒等式（示例满足 `12247 + 330 + 1280 = 13857`）。`provider` / `model` 在真实日志中是具体标识（如 `commandcode` + `deepseek/deepseek-v4.1-flash`），`message.content` 是完整消息正文本，扫描器**不读**该字段。
-
-字段映射：
-
-| DSH 字段 | `UsageEntry` | 处理 |
-|---|---|---|
-| `data.message.source.provider` + `.model` | `model` | 拼成 `provider/model`，与 Pi / OpenCode 的日志形态一致 |
-| `data.usage.inputTokens` | `inputTokens` | **直接赋值，无需换算**（见 §3.4） |
-| `data.usage.outputTokens` | `outputTokens` | 直接赋值 |
-| `data.usage.cacheReadTokens` | `cacheReadTokens` | 缺省 0 |
-| `data.usage.reasoningTokens` | —— | **不单独入账**（是 `outputTokens` 的子集，见 §3.4） |
-| `data.usage.totalTokens` | —— | 只用于 §3.4 的口径校验，不参与聚合 |
-| （DSH 无缓存写入概念） | `cacheCreationTokens` | 恒 0 |
-| 每条 `assistant/message` | `requestCount` | 计 1 |
-| `time`（epoch 毫秒） | `timestamp` / `day` | 按现有 ISO8601 / 本地日切逻辑换算 |
-| —— | `speed` | `.standard`（DSH 无 Fast 档位概念，与 Pi / OpenCode 一致） |
-| —— | `costUSD` | 走 §3.5 定价解析 |
-
-**必须只认 `assistant/message` 一处。** 同一份 usage 还会出现在 `assistant/chunk` 且 `chunk.type == "usage"` 的事件里，实测两者**逐字段完全等值**（8/8 相同）。两处都取会**翻倍计费**。
-
-### 3.4 口径校验（实测 384 条记录）
-
-对全部会话、全部 `assistant/message` 记录（含 `totalTokens` 的 384 条）验证：
-
-```text
-totalTokens == inputTokens + outputTokens + cacheReadTokens   → 384 命中 / 0 不匹配
-```
-
-这条恒等式说明两件事，且都与 cc-bar 的既有约定一致：
-
-1. **`inputTokens` 已扣除 `cacheReadTokens`。** 这正是 `UsageEntry.inputTokens` 的注释约定（"已扣 cacheRead"），所以直接赋值即可，**不要**再做减法。
-2. **`reasoningTokens` 是 `outputTokens` 的子集**，不额外加进 total。因此不单独入账，避免重复计数。若将来要在 UI 暴露 reasoning 维度，必须新建独立字段而不是并入 output。
-
-> 另有 10 条记录没有 `totalTokens` 字段（早期格式），不影响入账——只读 `inputTokens` / `outputTokens` / `cacheReadTokens`，这三个字段在实测中恒存在。
-
-### 3.5 定价与 `ModelProvider` 归并
-
-DSH 的模型名是 `provider/model` 的**双层嵌套**形态（例：`commandcode/deepseek/deepseek-v4.1-flash`）。现有实现已覆盖这条路径：
-
-- `Pricing.normalize` 会**循环剥除** provider 前缀，注释里明确写了 `commandcode/deepseek/...` 这种双层情形，剥完得 `deepseek-v4.1-flash`。
-- `ModelProvider.resolve` 的前缀表已含 `commandcode/`、`command-code/`、`deepseek/`、`anthropic/`、`openai/`、`opencode-go/`，无需改动。
-- `Pricing.standardPrice` 的 `speed == .fast` 分支需要为新 app 补 `case .dsh: return nil`（DSH 无 Fast 档位），属编译期穷举要求。
-
-**已知缺口**：本地价格表里有 `deepseek-v4-flash`，但**没有 `deepseek-v4.1-flash`**。未命中时 `resolve` 返回 `nil`，聚合按 0 计，UI 显示 token 但金额为空——这是既有约定（`costUSD == nil` 表示"没有可靠价格"），不是 bug。是否补价目见 §7。
-
-## 4. 数据流与接线
-
-### 4.1 新增文件与改动清单
-
-**新增：**
-
-| 文件 | 内容 |
-|---|---|
-| `Core/Usage/DshZstdFrames.swift` | §3.1 帧扫描 + 逐帧解压（Compression 框架封装） |
-| `Core/Usage/DshJSONLScanner.swift` | 复刻 `PiJSONLScanner` 骨架：枚举、watermark、解析、seed |
-| `CCBarTests/DshJSONLScannerTests.swift` | 见 §6 |
-
-**改造：**
-
-| 文件 | 改动 |
-|---|---|
-| `Core/Usage/UsageModels.swift` | `UsageApp` 加 `case dsh`；`localApps` 加 `.dsh` |
-| `Core/Usage/UsageService.swift` | 加 `async let dshTask`；`ingestLocal` / `conversationAggregator.ingest` / `cycleEntries` / `hasNewEntries` / `newState` / 日志行 / `appState.dshTodayCost` |
-| `Core/Storage/ScanCache.swift` | `ScanState` 加 `dsh: [String: ScanFileState]`；`ScanState.currentVersion` **14 → 15**；`UsageRollupPayload.currentVersion` **9 → 10**（理由见 §4.7）；补两处版本注释 |
-| `Core/Usage/UsageLogWatcher.swift` | `candidateRoots()` 加 `~/Library/Application Support/dsh-desktop/harness` 与 `~/.dsh` |
-| `Core/Usage/Pricing.swift` | `case .dsh: return nil`（两处 fast 分支） |
-| `Core/Pricing/PricingCatalogStore.swift` | 同上 |
-| `Core/Usage/ModelProvider.swift` | `case .dsh: return .other`（app 兜底分支） |
-| `Core/AppState.swift` | `var dshTodayCost: Decimal?` |
-| `Core/Diagnostics/DiagnosticsBundle.swift` | 纳入两个 DSH 会话根 |
-| `Main/DesignSystem.swift` | `tintColor` + `displayName` |
-| `Main/StatsView.swift` | 约 8 处穷举分支（filter / accent / totals / pair / range / domain / tooltip） |
-| `Main/ConversationStatsView.swift` | app → 视图映射 |
-| `Main/CycleStatsView.swift` | 按 app 分桶 |
-| `Settings/SettingsRootView.swift` | `usageServiceInfo` 探测 + `scanProgressText` 的 appName |
-| `Resources/Assets.xcassets/` | `DshAccent.colorset`（见 §4.6） |
-
-> `Settings.usageServiceVisibility` 与 `isUsageServiceVisible` 用 `allCases` + `default: app == .cursor ? false : true` 推导，**新 app 自动默认可见**，无需改动——但这带来一个体验问题，见 §4.2。
-
-### 4.2 设置可见性默认值（需注意的体验副作用）
-
-`Settings.isUsageServiceVisible` 对非 Cursor 的 app 默认 `true`，`loadUsageServiceVisibility` 也用同一规则给 `allCases` 补默认值。因此加 `case dsh` 后：
-
-- **没装 DSH 的用户**也会在统计页看到一行空的 DSH 服务。
-
-这与 Pi / OpenCode 的现状一致（它们同样默认可见），所以不是新引入的问题。但 DSH 目前装机量低于 Pi / OpenCode，空行出现的概率更高。三个处理选项：
-
-1. **保持现状**（默认可见），与 Pi / OpenCode 完全一致，零改动。**推荐**——一致性优先，用户可自行在设置里关掉。
-2. 仿 Cursor 的 `isUsageServiceEffectivelyVisible` 模式，叠加"磁盘上是否存在会话目录"的运行时探测，目录不存在则整行不显示。改动小（一个 `dshSessionsDetected` 运行时状态），但引入了 Cursor 特有的"偏好 + 运行时可用性"双层语义。
-3. 默认关闭。不推荐——已装 DSH 的用户要手动打开才能看到数据，违背"自动检测"的既有产品习惯。
-
-### 4.3 扫描器返回契约
-
-严格复用现有四者的形状（`PiJSONLScanner.Result` 逐字段同构）：
-
-```swift
-struct Result: Sendable {
-    var entries: [UsageEntry]
-    var conversationSeeds: [ConversationSeed]
-    var newState: [String: ScanFileState]
-    var newSeenIds: [String]        // DSH 恒为空数组，见 §4.4
-    var filesScanned: Int
-    var linesParsed: Int
-    var failedFileCount: Int        // zstd 结构损坏 / 解压失败计数
-}
-```
-
-签名照搬 Pi，含可注入 `root:` 以便测试：
-
-```swift
-nonisolated static func scan(
-    previous: [String: ScanFileState],
-    seenEntryIds: [String],          // 保留形参以对齐契约，内部不使用
-    root: URL,
-    onProgress: ScanProgressCallback? = nil
-) -> Result
-```
-
-生产入口 `scan(previous:seenEntryIds:onProgress:)` 内部**遍历两个根目录**（§4.4）。
-
-### 4.4 为什么不需要 `seenIds` 去重集合
-
-Claude / Codex / Pi 各自都有跨文件去重集合（`claudeSeenMessageIds` / `codexSeenTokenIds` / `piSeenEntryIds`），存在的唯一理由是**这些工具的日志会把历史消息原样重放进新文件**：Claude 有 sidechain / subagent 重复引用，Codex 有 fork 会话重放父会话历史（`ScanState` v14 的注释就是专门修这个 bug），Pi 会话树有 fork / clone 复制旧行。
-
-**DSH 没有这个行为**：每个会话文件独立、纯追加、不重放历史。因此：
-
-- `seenIds` 恒为空数组，`newSeenIds` 也返回空。
-- 不去重是**有依据的**，不是偷懒。若将来 DSH 引入会话 fork/分支复制，需要在此处补齐（并在 `ScanCache` bump 版本）。
-
-同时这也意味着**不需要** §2.2 里"两个根目录可能互相重复"的额外去重——两个根是两套独立安装，会话文件不重叠。
-
-### 4.5 对话归属与标题
-
-| 维度 | 取值 |
-|---|---|
-| `conversationKey` | `"dsh:\(session.id)"`（对齐 Pi 的 `"pi:\(id)"`） |
-| `id`（ConversationSeed） | `session.id` |
-| `project` | `resolver.resolve(rawPath: session.cwd, source: .cwd)` —— 直接用 `cwd` 原始值，不反解目录名 |
-| `title` | `session/title` 的 `data.title`；作为 `fallbackTitle` 参与现有标题优先级 |
-| `sourcePath` | 日志文件的真实路径 |
-| `includesSubtasks` | `false` |
-| `cacheCreationAvailable` | `true`（对齐 Pi；DSH 无 cache creation，恒 0 不影响展示逻辑） |
-| `gitBranch` | `nil`（DSH 日志不含分支，与 Pi 一致） |
-
-`session/title` 可能晚于 `assistant/message` 出现（实测 seq 14 vs 11），因此 seed 需要在扫描过程中持续累积、以最后一次读到的值为准——与 Pi 处理 `fallbackTitle` 的方式相同。
-
-### 4.6 识别色
-
-需要一个 `DshAccent.colorset`。按 `设计风格.md` 的既有约束：
-
-- 识别色**只用于 tile / logo 品牌识别**，不参与额度状态着色（状态色统一走 `statusColor`）。
-- 参考现有 `PiAccent` / `OpencodeAccent` 的取色与命名规范（`Resources/Assets.xcassets/*.colorset`，含 light/dark 两档）。
-- DSH 品牌色取 DeepSeek 蓝系，但**必须与既有 `CodexAccent`（石墨灰）、`ClaudeAccent`（桃橙）、`OpencodeAccent`、`PiAccent` 在明度/饱和度上可区分**，避免新色与既有色混淆。
-- 第一版若无正式品牌色，允许先落地一个占位色并在 `ServiceTile` 资源缺失时回退字母，按 §1.3 不阻塞主流程。
-
-### 4.7 升级路径：两个版本号必须一起 bump（**易漏，务必执行**）
-
-已有用户的 `scan-state` 里没有 `dsh` 字段，解码时该字段缺省为空字典，所以启动后会从零重扫全部 DSH 会话。这里有个容易误判的地方——**首版落地其实不会出错，但必须靠 bump 版本号来保证今后也不出错**，原因在聚合器的累加语义：
-
-```swift
-// UsageService.bootstrap()：代次一致时直接加载磁盘 rollup，不清空
-if generationsMatch { aggregator.load(from: payload.buckets) }
-
-// UsageAggregator.ingestLocal()：纯累加，不用新结果替换既有桶
-b.inputTokens += e.inputTokens
-```
-
-**首版落地**：旧版本从未扫过 DSH，磁盘 rollup 里没有 dsh 桶，所以"重扫全量 + 累加到空桶"= 正确结果。此时不 bump 也不会算错。
-
-**真正的风险在第二次改口径时**（例如补 §7 的 `deepseek-v4.1-flash` 价目）：
-
-```text
-磁盘 rollup:  dsh 桶 = 按 0 价累计的存量
-重扫产出:     dsh 条目 = 全量（按新价）
-→ ingestLocal 二次累加 → token 翻倍、费用口径混杂 ✗
-```
-
-这与 `ScanCache` 注释里 "v9: Claude 流式半成品不再入账；旧 seen / rollup 可能已污染，必须全量重建" 以及 v14 修 Codex fork 重复计费，是同一类问题。
-
-**规则：任何影响已入账 DSH 数值的改动（新增数据源、改口径、改价目），`ScanState.currentVersion` 与 `UsageRollupPayload.currentVersion` 必须同时 bump。** 只 bump 前者不足以清掉被污染的聚合桶；只 bump 后者会丢 watermark，全量重扫后再叠加到**未清空**的聚合器上，问题反而更严重。
-
-首版落地时两个都 bump（`14 → 15` / `9 → 10`），一次性走全量重建，成本与既有 v9 / v14 迁移相同。**即便首版不 bump 也算得对，也建议照做**——把这条通路在第一次就验证过，比等到改口径时才发现漏 bump 更安全。
-
-## 5. 性能与正确性
-
-| 场景 | 行为 | 成本 |
-|---|---|---|
-| 无任何变化 | `UsageLogWatcher` 事件门控直接返回 false | 0 次系统调用 |
-| 事件门控放行、所有文件 mtime+size 未变 | 逐文件 `stat` 后全部跳过 | O(文件数) 次 stat，不解压 |
-| 当前会话正在追加 | 只读新增字节、只解新增帧 | O(增量)，与文件总长无关 |
-| 单个文件结构损坏 | 该帧解压/解析失败 → `failedFileCount += 1`，**保留已有快照**（对齐"网络请求失败不清空可展示数据"的既有约束） | 不影响其他文件与其他 app |
-| 首次全量 | 15 文件 / 1507 帧 / 9.7 MB | 与 Codex 首扫（3.5 GB）不同量级 |
-| 30 分钟兜底 | `maxSkipInterval` 强制扫一轮 | 同上，走增量路径 |
-
-正确性不变式（对应 §6 的测试点）：
-
-1. 已入账的帧不会被二次解压计入（offset 只在帧边界推进）。
-2. 写一半的帧既不计入也不丢失（不推进 offset）。
-3. `assistant/chunk` 的等值 usage 副本不被计入。
-4. 同一目录存在多版本日志时只计最高版本。
-5. `inputTokens` 不再减 `cacheReadTokens`。
-
-## 6. 验证方案
-
-按项目现有 fixture 风格（`CCBarTests/PiJSONLScannerTests.swift`：`canonicalTempDirectory` + 临时目录 + 可注入 `root:`）新增 `DshJSONLScannerTests`：
-
-**测试基础设施**：测试需要**生成** zstd 帧。用 Apple Compression 的 `COMPRESSION_ZSTD` 编码即可（与解压同框架），把 fixture 明文按 §2.3 的"每批一帧、带 checksum"形态切帧写入，确保帧结构与生产一致。
-
-| 用例 | 断言 |
-|---|---|
-| 目录枚举 | 返回元数据；只识别 `session.jsonl.zstd` 与 `session.vN.jsonl.zstd`；忽略 `session.lock` |
-| 全量解析 | 正确产出 entries 与 seed；token 三字段映射正确；`requestCount == 1` |
-| **只认 `assistant/message`** | 同一 (turn, step) 同时写入 message 与 chunk usage → **只计 1 条**（回归防线，最重要） |
-| **口径不变式** | `inputTokens` 直接等于日志值，不减 cacheRead；`reasoningTokens` 不额外入账 |
-| **增量：未变跳过** | 二次扫描 `entries.count == 0`、`linesParsed == 0` |
-| **增量：追加只读新帧** | 追加帧后只产出新增 entry；已有 entry 不重复 |
-| **撕裂帧** | 截断最后一帧的部分字节 → 该帧不入账、offset 不越过它；补齐后下一轮正常入账 |
-| **多 generation** | 同目录并存 v0 与 v3 → 只计最高版本 v3 |
-| **损坏帧** | 破坏某帧结构 → `failedFileCount` 增加，其余帧正常入账 |
-| 标题 | `session/title` 作为 fallbackTitle；后到覆盖先到 |
-| 未知模型定价 | token 正常入账、`costUSD == nil`（聚合按 0），不报错 |
-| 双根目录 | 两个 root 的会话都入账，且互不重复 |
-
-**手动验收**（静态检查通过后）：在 Xcode 打开 `ccbar.xcodeproj` 运行 App，按以下点检查——主窗口统计页出现 DSH 服务行；Overview / 按服务 / 按模型 / Timeline 有数据；对话页出现 DSH 会话且标题、项目归属正确；设置页统计服务列表出现 DSH 且可切换；设置页用量数据源探测显示"已检测到本地日志"。
-
-## 7. 待定项
-
-| 项 | 说明 | 建议 |
-|---|---|---|
-| `deepseek-v4.1-flash` 定价 | 本地价格表无此条目，不补则金额显示 0 | 需拍板：补本地价目 / 只靠在线目录 / 先不计价。按 `ScanCache` 注释的既有约束，**若补本地价目需同时 bump `currentVersion`**，否则已发布用户的历史费用不会自动对齐 |
-| DSH 识别色 | 无正式品牌色 | 先取可区分的占位色，后续替换 |
-| 实时追加的读取时机 | DSH 按批次持久化（`batchTimer` 有界批处理），写入时机与扫描时机可能交错 | 交给 §3.2 的"tornStart 不推进"机制处理，无需额外协调 |
-| Windows / Linux 路径 | 当前实现只覆盖 macOS（沿用现有扫描器的 `homeDirectoryForCurrentUser` 约定） | 不在第一版范围 |
-
-## 8. 落地顺序（技术依赖顺序，非时间表）
-
-1. `DshZstdFrames.swift`：帧扫描 + 解压，配单元测试（含撕裂帧、损坏帧）。这是唯一的技术未知点，先单独立住。
-2. `DshJSONLScanner.swift`：解析 + watermark，配 §6 全部 fixture 用例。
-3. `ScanCache` v15 + `UsageModels` / `UsageService` 接线，跑通端到端聚合。
-4. 其余 UI / 设置 / 诊断 / 资源接线（编译期穷举驱动，逐一补齐）。
-5. 文档回写：`技术实现.md`（数据源、扫描器、watermark）、`界面布局.md`（统计服务列表、探测行）、`设计风格.md`（双语词表 + 识别色）、`产品需求.md`（本地数据源清单）、`docs/README.md`（本草案状态改为已落地）。
+- 本机安装包：`/Applications/DSH Desktop.app/Contents/Resources/app/lib/main.js`（home 选择与注入）、`node_modules/@deepseek-ai/dsh-home-paths/lib/index.js`、`node_modules/@deepseek-ai/dsh-base/cordis.patch.yml`、`node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/index.js`（文件名、帧扫描、编码和 generation 选择）。这些只作调研证据，不是 cc-bar 的运行时依赖。
+- [DSH 官方持久化说明](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/session/session-persistence-jsonl/README.md)、[官方 generation 迁移说明](https://github.com/deepseek-ai/deepseek-harness/blob/master/.agents/notes/implemented/architecture/2026-08-31-released-session-format-migrations.md)。
+- [Apple Compression 算法](https://developer.apple.com/documentation/compression/algorithm)、[Zstandard v1.5.7 Swift Package](https://github.com/facebook/zstd/blob/v1.5.7/Package.swift)、[zstd C API](https://github.com/facebook/zstd/blob/v1.5.7/lib/zstd.h)。
+- 价格分段依据：[DeepSeek 当前价格页](https://api-docs.deepseek.com/quick_start/pricing/)、[2026-09-10 V4.1-Flash 发布公告](https://api-docs.deepseek.com/news/news260910)（降价生效时点）、[2026-08-13 V4-Pro GA 公告](https://api-docs.deepseek.com/news/news260813)（峰谷价生效时点与价目图）、[变更日志](https://api-docs.deepseek.com/updates)。
