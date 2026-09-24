@@ -28,7 +28,7 @@
 | [草案-诊断日志-设计方案.md](草案-诊断日志-设计方案.md) | 已落地：`AppLog` 门面 + `Redact` 脱敏 + `DiagnosticsBundle` 导出，全部 `print` 与散落的 `os.Logger` 已收编，设置页「通用 → 诊断」提供导出 / 打开日志目录 / 详细日志。行为已并入 `技术实现.md` §15 与 `界面布局.md` §4.5.4；草案保留脱敏规则表与取舍依据的追溯细节 |
 | [草案-用量统计增强与对话明细-需求.md](草案-用量统计增强与对话明细-需求.md) | 单对话能力已并入常驻文档;仅保留未实施后续候选 |
 | [草案-用量统计增强与对话明细-技术方案.md](草案-用量统计增强与对话明细-技术方案.md) | 原宽范围方案已收窄;仅保留后续技术候选 |
-| [草案-DSH本地用量-技术方案.md](草案-DSH本地用量-技术方案.md) | **未实施**：当前稳定版 DSH CLI 与 Desktop 默认共用 `~/.dsh/sessions`，计划作为一个本地用量服务接入主窗口普通统计与对话。默认 zstd 日志需要引入官方 `libzstd`；逐会话贡献缓存用于处理 generation 切换与子代理归属变化，避免重复计费。不接入额度 Timeline 和 Cycles。已补实施决策与落地顺序（§6、§7） |
+| [草案-DSH本地用量-技术方案.md](草案-DSH本地用量-技术方案.md) | 已落地：官方 `facebook/zstd` 1.5.7 SPM 依赖（App 与 CCBarTests 都链接 `libzstd`）、`DshZstdFrames` / `DshZstdDecoder` / `DshSessionScanner`、逐会话贡献缓存（落 Application Support）与两个聚合器的 `replaceLocal`、`UsageService` 第 5 个扫描任务、DeepSeek 分段价、统计页 / 设置页 / 脱敏诊断接入。不接入额度 Timeline 和 Cycles。实施中与草案的三处偏差（S1 拆两个文件、UI 穷举分支提前到 S2、`DshContributionStore.apply` 返回 `Update`）见草案头部说明 |
 
 ## 历史参考
 

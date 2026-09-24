@@ -1,6 +1,15 @@
 # 草案 · DSH 本地用量接入技术方案
 
-> 状态：**未实施**。2026-09-23 重新核对本机 DSH Desktop 2.0.13、随包的 `@deepseek-ai/dsh-session-persistence-jsonl` 0.1.5-rc.2、会话日志与 cc-bar 当前代码。本次只修改草案与文档索引，未修改应用代码，也未运行构建或测试。
+> 状态：**已实施**（2026-09-24）。§7 的 S0–S7 全部落地：工程引入官方 `facebook/zstd` 1.5.7（App 与 CCBarTests 都链接 `libzstd`）、`Core/Usage/DshZstdFrames.swift` + `DshZstdDecoder.swift` + `DshSessionScanner.swift` + `DshContributionStore.swift` + `DshContributionRollup.swift`、`Core/Storage/DshContributionCache.swift`、`UsageService` 第 5 个扫描任务、DeepSeek 分段价、统计页 / 设置页 / 脱敏诊断接入。验证：`xcodebuild` Debug 构建通过；`xcodebuild test` 287 通过 / 1 跳过 / 0 失败。
+>
+> 实施中与本文档的三处偏差（有效内容已并入常驻文档，这里只作追溯）：
+> 1. **S1 拆成两个文件**：§7 S1 原写「`DshZstdFrames.swift`：帧边界扫描 + 单帧解码」，实际拆为 `DshZstdFrames.swift`（纯 Swift 帧边界扫描，无外部依赖）与 `DshZstdDecoder.swift`（`import libzstd` 的单帧解码）。
+> 2. **UI 穷举分支提前到 S2 落地**：给 `UsageApp` 增加 `dsh` 会同时打断 Core 与 UI 的穷举 `switch`，不补齐就无法编译，因此 `StatsView` / `DesignSystem` / `ConversationStatsView` / `CycleStatsView` / `SettingsRootView` 的分支随 S2 一起提交，S6 只补识别色、设置探测与诊断。
+> 3. **`DshContributionStore.apply` 返回 `Update{contributions, changed}`**：第 5 个扫描器没有 seen 集合兜底，未落盘的一轮会重扫同样的帧，因此需要 `changed` 供 `UsageService` 做「只在真的落盘时才计入聚合」的门控。
+>
+> 另：本机只读快照的样本量随时间变化（§2.2 记的是 3 个项目 / 19 个会话 / 2498 帧），实施后复核为 24 个规范日志 / 3151 帧，0 撕裂 0 损坏。
+>
+> 2026-09-23 的调研依据：本机 DSH Desktop 2.0.13、随包的 `@deepseek-ai/dsh-session-persistence-jsonl` 0.1.5-rc.2、会话日志与 cc-bar 当时的代码。
 >
 > 同日已对照现有实现确定四项实施决策与实施步骤，见 §6、§7。
 
