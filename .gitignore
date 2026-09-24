@@ -25,7 +25,8 @@ Resources/AppIcon.icns
 
 # Swift Package Manager
 .swiftpm/
-Package.resolved
+# Package.resolved 刻意入库：App 用它锁定依赖的具体 revision（当前为 zstd 1.5.7），
+# 保证本机、CI 与发布流程拿到同一份源码；升级依赖时把该文件一起提交。
 
 # CocoaPods / Carthage (预留)
 Pods/
