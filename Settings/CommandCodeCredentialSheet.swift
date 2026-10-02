@@ -120,8 +120,8 @@ struct CommandCodeCredentialSheet: View {
     private var manualSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(tr(
-                "The API key is stored in the macOS Keychain and only sent to Command Code to query quota.",
-                "API Key 保存在 macOS 钥匙串中，只发送给 Command Code 用于查询额度。"
+                "The API key is stored in the macOS Keychain and only used to check quota with the official Command Code API.",
+                "API Key 保存在 macOS 钥匙串中，仅用于连接 Command Code 官方接口查询额度。"
             ))
             .font(.system(size: 11.5))
             .foregroundStyle(.secondary)

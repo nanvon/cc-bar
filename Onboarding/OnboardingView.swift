@@ -347,8 +347,8 @@ private struct CredentialInfoCard: View {
                 Text(tr("Your credentials", "关于凭据"))
                     .font(.system(size: 11.5, weight: .medium))
                 Text(tr(
-                    "Credentials are only sent to each service's official API. Some services' expired logins are renewed and saved back to their original file.",
-                    "凭据只发送给各服务的官方接口。部分服务登录过期时，会自动续期并写回原凭据文件。"
+                    "CCBar connects directly to each service's official API to check quota, with no third-party servers in between. For some services, expired logins are renewed automatically and the local credential file is updated.",
+                    "CCBar 直接连接各服务的官方接口查询额度，不经过任何第三方服务器。部分服务登录过期时会自动续期，并更新本机的凭据文件。"
                 ))
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
