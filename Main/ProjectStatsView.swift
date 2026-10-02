@@ -276,9 +276,8 @@ struct ProjectStatsView: View {
                 navigate: navigate
             )
         } else {
-            Text(output.overview.projects.isEmpty
-                 ? tr("No project usage in this range.", "该范围内没有项目用量。")
-                 : tr("Select a project to see details.", "请选择项目查看详情。"))
+            // 列表为空时空态已在列表栏说明，详情栏留空。
+            Text(output.overview.projects.isEmpty ? "" : tr("Select a project", "选择项目查看详情"))
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -939,12 +938,8 @@ private struct UnattributedDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 8) {
-                        Text(tr("Unattributed", "未归属"))
-                            .font(.system(size: 18, weight: .semibold))
-                        ProjectBadge(text: tr("Not in any project", "不属于任何项目"))
-                        Spacer()
-                    }
+                    Text(tr("Unattributed", "未归属"))
+                        .font(.system(size: 18, weight: .semibold))
                     Text(tr(
                         "This usage counts toward the Overview total but does not appear in any project.",
                         "这些用量计入概览总量，但不出现在任何项目里。"

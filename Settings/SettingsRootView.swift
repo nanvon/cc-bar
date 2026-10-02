@@ -192,9 +192,7 @@ struct SettingsRootView: View {
         // 已接入服务矩阵：每个服务一行，列为状态 / 启用 / 菜单栏 / 悬浮窗 / 用量统计 / 专属操作
         PrefsGroup(
             title: "Connected Services",
-            chinese: "已接入服务",
-            desc: "Configure quota monitoring, menu bar, floating HUD, and usage stats per service.",
-            chineseDesc: "按服务配置配额监控、菜单栏、悬浮窗与本地统计"
+            chinese: "已接入服务"
         ) {
             ServiceMatrixHeader()
 
@@ -273,8 +271,8 @@ struct SettingsRootView: View {
         PrefsGroup(
             title: "Other Codex Accounts",
             chinese: "其他 Codex 账号",
-            desc: "Paste auth.json to monitor additional Codex accounts (view only).",
-            chineseDesc: "粘贴 auth.json 添加更多 Codex 账号额度，仅查看，不会切换 CLI 登录状态"
+            desc: "View quota only. Your Codex CLI login is not changed.",
+            chineseDesc: "只查看额度，不会切换 Codex CLI 的登录账号"
         ) {
             ImportedCodexAccountsView()
         }
@@ -286,18 +284,14 @@ struct SettingsRootView: View {
     private func appearanceSection(settings: SettingsStore) -> some View {
         PrefsGroup(
             title: "Menu Bar",
-            chinese: "菜单栏",
-            desc: "Global menu bar preferences.",
-            chineseDesc: "菜单栏全局偏好"
+            chinese: "菜单栏"
         ) {
             PrefsRow(
                 label: "Quota period",
-                chinese: "额度周期",
-                desc: "Which window to display in the menu bar.",
-                chineseDesc: "菜单栏显示哪个窗口"
+                chinese: "额度周期"
             ) {
                 Picker("", selection: Binding(get: { settings.menuBarWindow }, set: { settings.menuBarWindow = $0 })) {
-                    Text(tr("Main", "主要")).tag(MenuBarWindowChoice.primary)
+                    Text(tr("Main", "主额度")).tag(MenuBarWindowChoice.primary)
                     Text(tr("Weekly", "周额度")).tag(MenuBarWindowChoice.weekly)
                     Text(tr("Both", "都显示")).tag(MenuBarWindowChoice.both)
                 }
@@ -309,15 +303,13 @@ struct SettingsRootView: View {
 
         PrefsGroup(
             title: "Floating HUD",
-            chinese: "桌面悬浮窗",
-            desc: "A small always-on-top window pinned to your desktop.",
-            chineseDesc: "桌面常驻的小悬浮窗"
+            chinese: "桌面悬浮窗"
         ) {
             PrefsRow(
                 label: "Show floating window",
                 chinese: "显示悬浮窗",
-                desc: "Toggle global HUD visibility. Service rows can be configured in Services & Accounts.",
-                chineseDesc: "控制桌面悬浮窗总开关。各服务具体行可在「服务与账号」中独立勾选"
+                desc: "Choose services in Services & Accounts.",
+                chineseDesc: "显示哪些服务在「服务与账号」中设置"
             ) {
                 Toggle("", isOn: Binding(
                     get: { settings.floatingEnabled },
@@ -338,9 +330,7 @@ struct SettingsRootView: View {
         ) {
             PrefsRow(
                 label: "Reset time",
-                chinese: "重置时间",
-                desc: "How quota reset time is shown in the popover.",
-                chineseDesc: "弹出窗口中额度重置时间的显示方式"
+                chinese: "重置时间"
             ) {
                 Picker("", selection: Binding(
                     get: { settings.resetTimeDisplay },
@@ -356,9 +346,7 @@ struct SettingsRootView: View {
             InsetDivider()
             PrefsRow(
                 label: "Service status dot",
-                chinese: "服务状态圆点",
-                desc: "Show OpenAI / Anthropic status next to each service in the popover.",
-                chineseDesc: "在弹出窗口为每个服务显示官方状态页圆点"
+                chinese: "服务状态圆点"
             ) {
                 Toggle("", isOn: Binding(get: { settings.showServiceStatus }, set: { settings.showServiceStatus = $0 }))
                     .labelsHidden()
@@ -369,8 +357,8 @@ struct SettingsRootView: View {
             PrefsRow(
                 label: "Privacy mode",
                 chinese: "隐私模式",
-                desc: "Hide sensitive account, project, and conversation information while keeping usage stats visible, so you can share screenshots.",
-                chineseDesc: "开启隐私模式，隐藏账号、项目及对话等敏感信息，保留用量统计，方便您截图分享。"
+                desc: "Hide account, project, and conversation names for screenshots. Usage numbers stay visible.",
+                chineseDesc: "隐藏账号、项目和对话名称，用量数据照常显示，便于截图分享"
             ) {
                 Toggle("", isOn: Binding(get: { settings.privacyMode }, set: { settings.privacyMode = $0 }))
                     .labelsHidden()
@@ -386,8 +374,8 @@ struct SettingsRootView: View {
             PrefsRow(
                 label: "Ranking metric",
                 chinese: "排行口径",
-                desc: "How usage composition, top conversations, and project details are sorted and shared. Also the default sort of the project list.",
-                chineseDesc: "概览用量构成、高消耗对话与详情列表按此排序并计算占比，也是项目列表的默认排序"
+                desc: "Used for sorting and shares in Overview and Projects.",
+                chineseDesc: "用于概览和项目页的排序与占比"
             ) {
                 Picker("", selection: Binding(
                     get: { settings.statsRankMetric },
@@ -409,9 +397,7 @@ struct SettingsRootView: View {
     private func dataSection(settings: SettingsStore) -> some View {
         PrefsGroup(
             title: "Polling Intervals",
-            chinese: "后台刷新",
-            desc: "How often the app polls usage and logs in the background.",
-            chineseDesc: "后台轮询额度与日志的频率"
+            chinese: "后台刷新"
         ) {
             PrefsRow(label: "Quota refresh", chinese: "额度刷新") {
                 Picker("", selection: Binding(
@@ -462,15 +448,13 @@ struct SettingsRootView: View {
 
         PrefsGroup(
             title: "Data Maintenance",
-            chinese: "数据维护",
-            desc: "Model pricing catalogs and historical usage calculation.",
-            chineseDesc: "模型价格目录与历史用量计算"
+            chinese: "数据维护"
         ) {
             PrefsRow(
                 label: "Price catalog",
                 chinese: "价格目录",
-                desc: "Fetch the latest Standard and Fast pricing. Applies to new records only; use Recalculate to reprice history.",
-                chineseDesc: "获取最新的 Standard 与 Fast 模型价格；只对新记录生效，历史费用需用「重新计算」对齐"
+                desc: "Applies to new usage only. Use Recalculate to update past costs.",
+                chineseDesc: "只影响新记录；历史费用需「重新计算」"
             ) {
                 HStack(spacing: 8) {
                     if let pricingCatalogMessage {
@@ -506,8 +490,8 @@ struct SettingsRootView: View {
             PrefsRow(
                 label: "Recalculate usage",
                 chinese: "重新计算用量",
-                desc: "Rescan all local logs, fill in missing prices, and recompute every cost with the current pricing table.",
-                chineseDesc: "重新扫描全部本地日志，补齐缺价并按当前定价表重算所有费用",
+                desc: "Recompute all past costs with current prices.",
+                chineseDesc: "按当前价格重算全部历史费用",
                 detail: recalculateOutcomeDetail
             ) {
                 HStack(spacing: 8) {
@@ -519,8 +503,8 @@ struct SettingsRootView: View {
                         .font(.system(size: 11))
                         .foregroundStyle(.orange)
                         .help(tr(
-                            "Some historical cycle usage could not be restored from cache. Recalculate to fill it in.",
-                            "部分历史周期的用量无法从缓存恢复，点「重新计算」补齐"
+                            "Some past cycles are missing usage data. Recalculate to fill it in.",
+                            "部分历史周期缺少用量数据，点「重新计算」补齐"
                         ))
                     }
                     if let progress = appState.usageService.scanProgress, isRecalculatingUsage {
@@ -600,8 +584,8 @@ struct SettingsRootView: View {
             PrefsRow(
                 label: "Export diagnostics",
                 chinese: "导出诊断日志",
-                desc: "Package redacted logs and app state into a zip you can send to the developer.",
-                chineseDesc: "把脱敏后的日志与运行状态打包成 zip，可直接发给开发者"
+                desc: "A redacted zip for reporting issues.",
+                chineseDesc: "生成脱敏的 zip，用于反馈问题"
             ) {
                 HStack(spacing: 8) {
                     if let diagnosticsMessage {
@@ -631,8 +615,8 @@ struct SettingsRootView: View {
             PrefsRow(
                 label: "Reveal log folder",
                 chinese: "打开日志目录",
-                desc: "Logs live in ~/Library/Logs/CCBar and are kept to about 8 MB.",
-                chineseDesc: "日志存放在 ~/Library/Logs/CCBar，总量约 8 MB 上限"
+                desc: "~/Library/Logs/CCBar",
+                chineseDesc: "~/Library/Logs/CCBar"
             ) {
                 Button(tr("Open", "打开")) {
                     DiagnosticsBundle.revealLogDirectory()
@@ -644,8 +628,8 @@ struct SettingsRootView: View {
             PrefsRow(
                 label: "Verbose logging",
                 chinese: "详细日志",
-                desc: "Record extra detail for troubleshooting. Turn it off when you are done.",
-                chineseDesc: "记录更详细的排查信息，排查完建议关闭"
+                desc: "Turn on while troubleshooting, then turn it off.",
+                chineseDesc: "排查问题时开启，用完建议关闭"
             ) {
                 Toggle("", isOn: Binding(
                     get: { settings.verboseLogging },
@@ -667,9 +651,7 @@ struct SettingsRootView: View {
             InsetDivider()
             PrefsRow(
                 label: "Check for updates",
-                chinese: "检查更新",
-                desc: "Fetch the newest release info from GitHub.",
-                chineseDesc: "从 GitHub 获取最新版本信息"
+                chinese: "检查更新"
             ) {
                 HStack(spacing: 8) {
                     if let updateStatusText {
@@ -709,8 +691,6 @@ struct SettingsRootView: View {
                 .tint(.green)
             }
         }
-
-        footer
     }
 
     // MARK: - Bindings & Actions Helpers
@@ -915,33 +895,33 @@ struct SettingsRootView: View {
         switch outcome {
         case .rejectedUsageChanged:
             return tr(
-                "Rebuild not applied: logs changed, previous history kept",
-                "重算未生效：日志已变化，保留原历史"
+                "Not applied: logs changed during recalculation. Existing data kept.",
+                "未生效：重算期间日志有变化，原数据未改动"
             )
         case .rejectedIncompleteSources:
             return tr(
-                "Rebuild not applied: some logs unreadable",
-                "重算未生效：部分日志读取不完整"
+                "Not applied: some logs could not be read. Existing data kept.",
+                "未生效：部分日志读取失败，原数据未改动"
             )
         case .commitFailed:
             return tr(
-                "Rebuild could not be saved; previous history kept",
-                "重算保存失败：原历史未改动"
+                "Could not save the result. Existing data kept.",
+                "结果保存失败，原数据未改动"
             )
         case .partiallyCommitted:
             return tr(
-                "Partly applied: price refresh was not saved",
-                "部分生效：缺价刷新那一轮未保存"
+                "Partly applied: costs for models with newly fetched prices were not updated.",
+                "部分生效：新获取价格的模型费用未更新"
             )
         case .restrictedRecoveryRejected:
             return tr(
-                "Verification failed: history preserved, collection paused. Restore logs or resolve read/write errors before retrying.",
-                "核对失败：历史已保留，采集暂停。恢复日志或解决读写故障后再重试。"
+                "Verification failed. Existing data kept; new usage is paused. Restore the logs or fix disk read/write errors, then retry.",
+                "校验未通过：原数据保留，已暂停统计新用量。恢复日志或解决磁盘读写问题后再试"
             )
         case .replaced(cycleVerified: false):
             return tr(
-                "Costs updated; cycle attribution differs and could not be verified",
-                "费用已更新；周期归属存在差异，完整性未确认"
+                "Costs updated; some usage could not be matched to its quota cycle.",
+                "费用已更新；部分用量未能确认所属额度周期"
             )
         case .replaced(cycleVerified: true), .recoveredFromRestrictedHistory, .none:
             return nil
@@ -1093,18 +1073,6 @@ struct SettingsRootView: View {
                 .foregroundStyle(launchAtLoginMessageIsError ? Color.red : Color.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         )
-    }
-
-    private var footer: some View {
-        HStack(spacing: 8) {
-            // 版本号只在「版本」行显示，页脚不重复。
-            Text(tr("CCBar · AI subscription quota & local usage stats",
-                    "CCBar · AI 订阅服务额度查询与本地用量统计"))
-                .font(.system(size: 11))
-                .foregroundStyle(.tertiary)
-            Spacer()
-        }
-        .padding(.top, 8)
     }
 
     // MARK: Helpers
@@ -1437,7 +1405,7 @@ private struct ServiceSettingsRow: View {
     }
 
     private var localUsageOnlyHelp: String {
-        tr("Local usage only, no subscription quota", "仅支持本地用量，无订阅配额")
+        tr("Local usage only, no subscription quota", "仅统计本地用量，没有订阅额度")
     }
 
     /// 悬浮窗列不可勾选的原因：不支持优先；总开关关闭时不提示；其余是全局悬浮窗未开启。

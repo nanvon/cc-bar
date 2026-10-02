@@ -81,8 +81,8 @@ private struct WelcomeStep: View {
                 .kerning(-0.4)
 
             Text(tr(
-                "Track your AI subscription quota & local usage right from your menu bar. We'll detect local providers automatically.",
-                "在菜单栏即时查看 AI 订阅服务额度与本地用量，我们将自动检测本机服务。"
+                "Check your AI subscription quota and local usage from the menu bar.",
+                "在菜单栏查看 AI 订阅额度和本地用量。"
             ))
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
@@ -224,7 +224,7 @@ private struct DetectAccountsStep: View {
             }
             .padding(.top, 18)
 
-            ReadOnlyInfoCard()
+            CredentialInfoCard()
                 .padding(.top, 18)
 
             Spacer()
@@ -336,7 +336,7 @@ private struct CheckmarkBox: View {
     }
 }
 
-private struct ReadOnlyInfoCard: View {
+private struct CredentialInfoCard: View {
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "info.circle")
@@ -344,11 +344,11 @@ private struct ReadOnlyInfoCard: View {
                 .foregroundStyle(Color.accentColor)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(tr("Read-only access", "仅读取"))
+                Text(tr("Your credentials", "关于凭据"))
                     .font(.system(size: 11.5, weight: .medium))
                 Text(tr(
-                    "CCBar reads quota status locally. It never sends your credentials anywhere.",
-                    "CCBar 仅本地读取额度，不会向任何地方发送你的凭据。"
+                    "Credentials are only sent to each service's official API. Some services' expired logins are renewed and saved back to their original file.",
+                    "凭据只发送给各服务的官方接口。部分服务登录过期时，会自动续期并写回原凭据文件。"
                 ))
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
@@ -432,7 +432,7 @@ private struct ConfigureStep: View {
                 ConfigureRow(title: "Floating HUD",
                              chineseTitle: "桌面悬浮窗",
                              subtitle: "Pin a small percentage HUD to your desktop.",
-                             chineseSubtitle: "在桌面常驻一个小悬浮窗") {
+                             chineseSubtitle: "在桌面置顶显示剩余百分比") {
                     Toggle(tr("Enabled", "启用"), isOn: Binding(
                         get: { settings.floatingEnabled },
                         set: { v in
@@ -512,8 +512,8 @@ private struct ReadyStep: View {
                 .kerning(-0.4)
 
             Text(tr(
-                "Open Statistics now, or just keep an eye on the menu bar.",
-                "现在打开统计，或者直接在菜单栏盯着看。"
+                "Click the menu bar icon any time to check your quota.",
+                "随时点击菜单栏图标查看额度。"
             ))
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)

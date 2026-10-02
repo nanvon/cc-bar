@@ -15,8 +15,8 @@ struct QuotaCycleCardsSection: View {
                 Text(tr("Full-quota estimate", "额度用满预估"))
                     .font(.system(size: 13, weight: .semibold))
                 Text(tr(
-                    "What a full cycle is worth, estimated from local usage and the official used percentage. For reference only.",
-                    "按本机用量和官方已用比例，估算整个周期额度用满约值多少，仅供参考。"
+                    "Estimated from local usage and the official used percentage. For reference only.",
+                    "按本机用量和官方已用比例估算，仅供参考。"
                 ))
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)

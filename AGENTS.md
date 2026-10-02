@@ -30,7 +30,7 @@ cc-bar 是一个原生 macOS 菜单栏 App，用 Swift / SwiftUI 实现。
 
 - `docs/产品需求.md`：产品形态、功能范围、边界
 - `docs/技术实现.md`：架构、模块、关键流程、并发与持久化
-- `docs/设计风格.md`：视觉规范、颜色、字体、状态色、组件尺寸、双语词表
+- `docs/设计风格.md`：视觉规范、颜色、字体、状态色、组件尺寸、界面文案规则、双语词表
 - `docs/界面布局.md`：菜单栏、Popover、主窗口、悬浮窗、设置、引导的逐界面尺寸与字段
 - `docs/打包发布.md`：`scripts/build.sh` 与 GitHub Actions 发布流程、Developer ID 公证归档
 - `docs/历史用量数据补录指南.md`：Claude 日志被自动清理后如何补录历史用量（一次性操作手册）
@@ -60,6 +60,7 @@ cc-bar 是一个原生 macOS 菜单栏 App，用 Swift / SwiftUI 实现。
   - 额度状态色按剩余比例分 3 档（统一走 `statusColor`）：剩余 `>=20%` 中性石墨灰、`<20%` 橙、`=0` 红。
   - 数字使用 `.monospacedDigit()`。
   - 图标优先使用 SF Symbols。
+  - 界面文案遵守 `设计风格.md` §5.4：标题能说清的不加说明，说明不复述标题，状态提示先说结果再说下一步，涉及隐私和凭据的说法要与代码行为一致。
 - 不自造大面积背景、玻璃阴影、Web 风格控件或无关装饰。
 - 菜单栏和 Popover 中 Provider 顺序固定：Codex → Claude Code → Antigravity → Cursor → Command Code（由 `QuotaProviderDescriptor.allProviders` 定义）。
 - 网络请求失败时保留已有快照，不要清空可展示数据。

@@ -339,8 +339,8 @@ struct AddImportedCodexAccountSheet: View {
             Text(tr("Paste auth.json content", "粘贴 auth.json 内容"))
                 .font(.system(size: 12, weight: .semibold))
             Text(tr(
-                "Supports a single auth.json, a JSON array of multiple accounts (e.g. cc-switch export), or a personal access token form ({\"personal_access_token\": \"at-...\"}). The display name is taken from the email prefix automatically.",
-                "支持单个 auth.json、多账号 JSON 数组(如 cc-switch 导出),以及个人访问令牌形态({\"personal_access_token\": \"at-...\"})。显示名自动取邮箱 @ 前的部分。"
+                "Supports a single auth.json, a JSON array of accounts (e.g. cc-switch export), or {\"personal_access_token\": \"at-...\"}.",
+                "支持单个 auth.json、多账号 JSON 数组（如 cc-switch 导出）或 {\"personal_access_token\": \"at-...\"}。"
             ))
             .font(.system(size: 11))
             .foregroundStyle(.secondary)

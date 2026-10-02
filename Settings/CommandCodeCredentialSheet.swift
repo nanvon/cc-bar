@@ -82,8 +82,8 @@ struct CommandCodeCredentialSheet: View {
     private var automaticSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(tr(
-                "Automatically scans local login credentials in order: ~/.commandcode, Pi, OpenCode, and environment variables.",
-                "只读扫描本机登录态，检测顺序：~/.commandcode → Pi → OpenCode → 环境变量。"
+                "Reads local credentials in order: ~/.commandcode, Pi, OpenCode, environment variables.",
+                "按顺序读取本机凭据：~/.commandcode → Pi → OpenCode → 环境变量。"
             ))
             .font(.system(size: 11.5))
             .foregroundStyle(.secondary)
@@ -120,8 +120,8 @@ struct CommandCodeCredentialSheet: View {
     private var manualSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(tr(
-                "API keys are securely stored in the macOS Keychain and only used locally to query quota.",
-                "手动输入的 API Key 将加密存储在 macOS Keychain 中，仅在本地查询额度。"
+                "The API key is stored in the macOS Keychain and only sent to Command Code to query quota.",
+                "API Key 保存在 macOS 钥匙串中，只发送给 Command Code 用于查询额度。"
             ))
             .font(.system(size: 11.5))
             .foregroundStyle(.secondary)

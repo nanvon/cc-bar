@@ -228,10 +228,8 @@ struct ConversationStatsView: View {
            ) {
             ConversationDetailView(detail: detail)
         } else {
-            // 与项目页一致：列表有内容时默认选中第一条，这里只在列表为空时出现。
-            Text(result.rows.isEmpty
-                 ? tr("No conversations in this range.", "该范围内没有对话。")
-                 : tr("Select a conversation to see details.", "请选择对话查看详情。"))
+            // 与项目页一致：列表有内容时默认选中第一条。列表为空时空态已在列表栏说明，详情栏留空。
+            Text(result.rows.isEmpty ? "" : tr("Select a conversation", "选择对话查看详情"))
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)

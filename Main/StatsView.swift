@@ -826,13 +826,7 @@ struct StatsView: View {
             StatsScanningIndicator()
                 .frame(maxWidth: .infinity, alignment: .trailing)
         case .quota:
-            Text(tr(
-                "Full-quota estimates for current cycles, and how quota changed.",
-                "当前额度周期的用满预估，以及额度的变化记录。"
-            ))
-            .font(.system(size: 11))
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
+            EmptyView()
         case .projects:
             if appState.usageService.isScanning, !appState.usageService.conversationAggregator.isEmpty {
                 HStack(spacing: 6) {
@@ -894,18 +888,10 @@ struct StatsView: View {
 
     private var timelineHeader: some View {
         HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(timelineWindow == .weekly
-                     ? tr("Quota changes this cycle", "本周期的额度变化")
-                     : tr("Quota changes today", "今天的额度变化"))
-                    .font(.system(size: 13, weight: .semibold))
-                Text(tr(
-                    "5H shows today. Weekly shows the current and previous quota cycles.",
-                    "5小时展示今天；周视图展示当前和上一额度周期。"
-                ))
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-            }
+            Text(timelineWindow == .weekly
+                 ? tr("Weekly quota changes", "周额度变化")
+                 : tr("Quota changes today", "今天的额度变化"))
+                .font(.system(size: 13, weight: .semibold))
             Spacer()
             Picker(tr("Quota window", "额度窗口"), selection: $timelineWindow) {
                 ForEach(QuotaTimelineWindowKind.pickable, id: \.self) { item in
@@ -1226,32 +1212,32 @@ private struct StatsUsageErrorBanner: View {
     private func historyMessage(notice: UsageHistoryRecoveryNotice?, hasError: Bool) -> String {
         if notice?.isUnavailable == true {
             return tr(
-                "No valid local usage history could be loaded. Files are preserved; collection is paused. Restore a valid backup before restarting.",
-                "无法加载有效的本地用量历史。原文件已保留，采集已暂停；请恢复有效备份后重启。"
+                "Local usage history could not be loaded, so new usage is paused. Files are untouched; restore a backup and restart CCBar.",
+                "无法读取本地用量历史，已暂停统计新用量。原文件未改动，恢复备份后重启 CCBar。"
             )
         }
         if notice?.isReadOnly == true {
             return tr(
-                "The history format is unsupported. Only a compatible backup, if available, can be shown. Collection is paused; use a compatible app version.",
-                "历史格式不受支持，仅展示可读取的备份（如有）。采集已暂停，请使用兼容版本。"
+                "Usage history was saved by a newer CCBar. New usage is paused and only a compatible backup (if any) is shown. Update CCBar to continue.",
+                "用量历史由更新版本的 CCBar 保存，已暂停统计新用量，仅显示兼容的备份（如有）。请更新 CCBar。"
             )
         }
         if notice?.isRestricted == true {
             return notice?.verificationRejected == true
-                ? tr("History verification failed. Available history is preserved; local collection is paused. Retry only after restoring logs or resolving read/write errors; changed usage cannot be merged safely.",
-                     "历史核对未通过。可用历史已保留，本地采集已暂停。恢复日志或解决读写故障后可重试；已变化的用量无法安全合并。")
-                : tr("Available history is preserved. Local collection is paused until history and scan progress can be verified.",
-                     "可用历史已保留。历史与扫描进度通过核对前，本地采集暂停。")
+                ? tr("History verification failed. Existing data kept; new usage is paused. Restore the logs or fix disk read/write errors, then retry.",
+                     "历史校验未通过。现有数据保留，已暂停统计新用量。恢复日志或解决磁盘读写问题后再试。")
+                : tr("Existing data kept. New usage is paused until history is verified.",
+                     "现有数据保留。历史校验通过前，暂停统计新用量。")
         }
         if notice?.isDshFrozen == true {
-            return tr("DSH history is preserved, but its session contributions are unavailable. DSH collection is paused; other services continue.",
-                      "DSH 历史已保留，但逐会话贡献不可用，DSH 采集暂停；其他服务继续采集。")
+            return tr("DSH session details are unavailable, so DSH usage is paused. Existing data kept; other services are not affected.",
+                      "DSH 会话明细不可用，已暂停统计 DSH。现有数据保留，其他服务不受影响。")
         }
         return hasError
-            ? tr("Usage statistics may be incomplete. Available data is preserved; retry or recalculate in Settings.",
-                 "用量统计可能不完整。可用的已有数据会保留，请稍后重试或前往设置重新计算。")
-            : tr("Usage history was restored from the last complete commit. Logs deleted after that point cannot be recovered.",
-                 "本地用量已从上一份完整提交恢复。该时点之后被删除的日志无法补回。")
+            ? tr("Usage statistics may be incomplete. Existing data kept; retry later or recalculate in Settings.",
+                 "用量统计可能不完整。现有数据保留，可稍后重试或到设置中重新计算。")
+            : tr("Usage history was restored from the last complete save. Logs deleted after that cannot be recovered.",
+                 "用量历史已恢复到最近一次完整保存，之后被删除的日志无法找回。")
     }
 
     var body: some View {
@@ -1267,8 +1253,8 @@ private struct StatsUsageErrorBanner: View {
                     .fixedSize(horizontal: false, vertical: true)
                     if let notice, let restoredAt = notice.restoredFromPreviousAt {
                         Text(tr(
-                            "Restored to the commit from \(restoredAt.formatted(date: .abbreviated, time: .shortened)).",
-                            "恢复到的提交时点：\(restoredAt.formatted(date: .abbreviated, time: .shortened))。"
+                            "Saved at \(restoredAt.formatted(date: .abbreviated, time: .shortened)).",
+                            "保存时间：\(restoredAt.formatted(date: .abbreviated, time: .shortened))"
                         ))
                         .font(.system(size: 11))
                         .lineLimit(1)
