@@ -1764,7 +1764,7 @@ private struct OverviewCompositionPanel: View {
 
     private var emptyMessage: String {
         if dimension == .service, model.visibleApps.isEmpty {
-            return tr("No services selected · enable in Settings → Services & Accounts", "未选择任何服务 · 到「设置 → 服务与账号」开启")
+            return tr("No services turned on · turn one on in Settings → Services & Accounts", "没有开启的服务 · 到「设置 → 服务与账号」开启")
         }
         return tr("No data", "无数据")
     }

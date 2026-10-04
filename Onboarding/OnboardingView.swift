@@ -155,7 +155,7 @@ private struct DetectAccountsStep: View {
         VStack(alignment: .leading, spacing: 0) {
             Text(anyDetected
                  ? tr("We found these accounts", "检测到以下账号")
-                 : tr("No accounts detected yet", "未检测到账号，可稍后在设置中查看"))
+                 : tr("No services found yet. They'll be detected after you sign in.", "暂未检测到服务，登录后会自动识别"))
                 .font(.system(size: 18, weight: .bold))
                 .kerning(-0.3)
 
@@ -402,7 +402,7 @@ private struct ConfigureStep: View {
                                 set: { shown in
                                     settings.setProviderShownInMenuBar(shown, for: .cursor)
                                     if shown {
-                                        settings.setProviderEnabled(true, for: .cursor)
+                                        settings.setServiceEnabled(true, for: .cursor)
                                         Task {
                                             await appState.refreshQuotas(reason: .userInitiated)
                                         }
@@ -416,7 +416,7 @@ private struct ConfigureStep: View {
                                 set: { shown in
                                     settings.setProviderShownInMenuBar(shown, for: .commandCode)
                                     if shown {
-                                        settings.setProviderEnabled(true, for: .commandCode)
+                                        settings.setServiceEnabled(true, for: .commandCode)
                                         Task {
                                             await appState.refreshQuotas(reason: .userInitiated)
                                         }
@@ -433,7 +433,7 @@ private struct ConfigureStep: View {
                              chineseTitle: "桌面悬浮窗",
                              subtitle: "Pin a small percentage HUD to your desktop.",
                              chineseSubtitle: "在桌面置顶显示剩余百分比") {
-                    Toggle(tr("Enabled", "启用"), isOn: Binding(
+                    Toggle(tr("On", "开启"), isOn: Binding(
                         get: { settings.floatingEnabled },
                         set: { v in
                             settings.floatingEnabled = v

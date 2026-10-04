@@ -154,10 +154,10 @@ struct PopoverRootView: View {
 
         if providers.isEmpty && !hasImported {
             VStack(spacing: 6) {
-                Text(tr("No services enabled", "未启用任何服务"))
+                Text(tr("No services turned on", "未开启任何服务"))
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.secondary)
-                Text(tr("Enable a service in Settings → Services & Accounts", "到「设置 → 服务与账号」开启"))
+                Text(tr("Turn one on in Settings → Services & Accounts", "到「设置 → 服务与账号」开启"))
                     .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
             }

@@ -50,6 +50,7 @@ struct SettingsRootView: View {
     @State private var pricingCatalogMessageIsError = false
     @State private var showCodexResetCreditsSheet = false
     @State private var showCommandCodeSheet = false
+    @State private var showOtherServices = false
     @State private var isExportingDiagnostics = false
     @State private var diagnosticsMessage: String?
     @State private var diagnosticsMessageIsError = false
@@ -189,93 +190,110 @@ struct SettingsRootView: View {
 
     @ViewBuilder
     private func servicesSection(settings: SettingsStore) -> some View {
-        // 已接入服务矩阵：每个服务一行，列为状态 / 启用 / 菜单栏 / 悬浮窗 / 用量统计 / 专属操作
-        PrefsGroup(
-            title: "Connected Services",
-            chinese: "已接入服务"
-        ) {
-            ServiceMatrixHeader()
+        let entries = serviceEntries(settings: settings)
+        let inUse = entries.filter(\.isDetected)
+        let others = entries.filter { !$0.isDetected }
 
-            let providers = QuotaProviderDescriptor.allProviders
-            ForEach(providers, id: \.id) { provider in
-                let info = accountInfo(for: provider.app)
-                let usageApp = provider.app.usageApp
-                ServiceSettingsRow(
-                    provider: provider,
-                    email: info.email.map { PrivacyDisplay.isEnabled ? PrivacyDisplay.account("primary:\(provider.app.rawValue)") : $0 },
-                    plan: info.plan,
-                    availability: info.availability,
-                    accessory: accessoryView(for: provider.app),
-                    isEnabled: isProviderEnabledBinding(for: provider.app, settings: settings),
-                    showInMenuBar: menuBarBinding(for: provider.app, settings: settings),
-                    showInFloatingHUD: floatingBinding(for: provider.app, settings: settings),
-                    floatingHUDGloballyEnabled: settings.floatingEnabled,
-                    usageApp: usageApp,
-                    isUsageVisible: usageApp.map { usageStatsBinding(for: $0, settings: settings) }
-                )
+        VStack(alignment: .leading, spacing: 12) {
+            servicesIntro
 
-                InsetDivider()
+            // 正在使用：这台 Mac 上检测到的服务，每个服务一行，列为额度与用量 / 开启 / 菜单栏 / 悬浮窗 / 专属操作
+            PrefsGroup(
+                title: "In Use",
+                chinese: "正在使用",
+                desc: "Services found on this Mac. Turning one off hides its quota and usage; existing records are kept.",
+                chineseDesc: "这台 Mac 上检测到的服务。关闭后不再显示它的额度和用量，已有记录会保留。"
+            ) {
+                if inUse.isEmpty {
+                    Text(tr(
+                        "No services found on this Mac yet. See Other Supported Services below.",
+                        "暂未检测到任何服务，见下方「其他支持的服务」"
+                    ))
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 20)
+                } else {
+                    ServiceMatrixHeader()
+                    ForEach(Array(inUse.enumerated()), id: \.element.id) { index, entry in
+                        if index > 0 {
+                            InsetDivider()
+                        }
+                        ServiceSettingsRow(entry: entry, floatingHUDGloballyEnabled: settings.floatingEnabled)
+                        if entry.id == .quota(.codex) {
+                            moreCodexAccounts
+                        }
+                    }
+                }
+            }
+        }
+
+        // 其他支持的服务：未检测到的服务默认折叠，只给接入提示。
+        // 保留开启开关：额度服务即使未检测到，开着也会在 Popover 里占一张卡片，用户需要能在这里关掉。
+        if !others.isEmpty {
+            CollapsiblePrefsGroup(
+                title: "Other Supported Services (\(others.count))",
+                chinese: "其他支持的服务（\(others.count)）",
+                desc: "Not found on this Mac yet. Sign in or use one as described, and it will appear above.",
+                chineseDesc: "暂未在这台 Mac 上检测到。按提示登录或使用后，会自动出现在上方。",
+                isExpanded: $showOtherServices
+            ) {
+                ForEach(Array(others.enumerated()), id: \.element.id) { index, entry in
+                    if index > 0 {
+                        InsetDivider()
+                    }
+                    OtherServiceRow(entry: entry)
+                    if entry.id == .quota(.codex) {
+                        moreCodexAccounts
+                    }
+                }
+            }
+        }
+    }
+
+    /// 页面顶部说明：先讲清额度和用量是两类信息，再看下面每个服务支持哪类。
+    private var servicesIntro: some View {
+        let markdown = tr(
+            "CCBar shows two kinds of info for each service: **Quota**, how much of your plan is left, and **Usage**, how many tokens you've used and what they cost. Support varies by service.",
+            "CCBar 为每个服务提供两类信息：**额度**，即套餐还剩多少；**用量**，即用了多少 Token、折合多少钱。不同服务支持的不一样。"
+        )
+        let text = (try? AttributedString(markdown: markdown)) ?? AttributedString(markdown)
+        return Text(text)
+            .font(.system(size: 12))
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 4)
+    }
+
+    /// 更多 Codex 账号：缩进挂在 Codex 行下方，与服务名左对齐（16 行内边距 + 22 tile + 10 间距）。
+    private var moreCodexAccounts: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(tr("More Codex Accounts", "更多 Codex 账号"))
+                    .font(.system(size: 12, weight: .semibold))
+                Text(tr(
+                    "Paste another account's auth.json to view its quota. Quota only, no usage, and your Codex CLI sign-in is not affected.",
+                    "粘贴其他账号的 auth.json，在 CCBar 里查看它们的额度。只看额度、不统计用量，也不影响 Codex CLI 当前登录的账号。"
+                ))
+                .font(.system(size: 10.5))
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
             }
 
-            // 本地用量服务：Pi
-            let piInfo = usageServiceInfo(for: .pi)
-            ServiceSettingsRow(
-                logoName: "pi",
-                fallback: "P",
-                tint: UsageApp.pi.tintColor,
-                title: "Pi",
-                vendor: "pi.dev",
-                detailText: piInfo.detailText,
-                availability: piInfo.availability,
-                isEnabled: usageStatsBinding(for: .pi, settings: settings),
-                supportsMenuBar: false,
-                supportsFloatingHUD: false
-            )
-
-            InsetDivider()
-
-            // 本地用量服务：OpenCode
-            let opencodeInfo = usageServiceInfo(for: .opencode)
-            ServiceSettingsRow(
-                logoName: "opencode",
-                fallback: "O",
-                tint: UsageApp.opencode.tintColor,
-                title: "OpenCode",
-                vendor: "opencode.ai",
-                detailText: opencodeInfo.detailText,
-                availability: opencodeInfo.availability,
-                isEnabled: usageStatsBinding(for: .opencode, settings: settings),
-                supportsMenuBar: false,
-                supportsFloatingHUD: false
-            )
-
-            InsetDivider()
-
-            // 本地用量服务：DSH（只进主窗口普通统计与对话，不进菜单栏 / 悬浮窗 / Cycles）
-            let dshInfo = usageServiceInfo(for: .dsh)
-            ServiceSettingsRow(
-                logoName: "dsh",
-                fallback: "D",
-                tint: UsageApp.dsh.tintColor,
-                title: "DSH",
-                vendor: "DeepSeek Harness",
-                detailText: dshInfo.detailText,
-                availability: dshInfo.availability,
-                isEnabled: usageStatsBinding(for: .dsh, settings: settings),
-                supportsMenuBar: false,
-                supportsFloatingHUD: false
-            )
-        }
-
-        // 其他 Codex 账号（手动导入）
-        PrefsGroup(
-            title: "Other Codex Accounts",
-            chinese: "其他 Codex 账号",
-            desc: "View quota only. Your Codex CLI login is not changed.",
-            chineseDesc: "只查看额度，不会切换 Codex CLI 的登录账号"
-        ) {
             ImportedCodexAccountsView()
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color.primary.opacity(0.03))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
+        .padding(.leading, 48)
+        .padding(.trailing, 16)
+        .padding(.bottom, 12)
     }
 
     // MARK: - Section 2: Appearance & Display
@@ -695,25 +713,15 @@ struct SettingsRootView: View {
 
     // MARK: - Bindings & Actions Helpers
 
-    private func isProviderEnabledBinding(for app: QuotaApp, settings: SettingsStore) -> Binding<Bool> {
+    /// 设置页「开启」开关：一个服务一个开关，同时管额度和用量（见 `SettingsStore.setServiceEnabled`）。
+    private func serviceEnabledBinding(for app: QuotaApp, settings: SettingsStore) -> Binding<Bool> {
         Binding(
             get: { settings.isProviderEnabled(app) },
             set: { newValue in
-                switch app {
-                case .codex:
-                    settings.showCodex = newValue
-                case .claude:
-                    settings.showClaude = newValue
-                case .antigravity:
-                    settings.showAntigravity = newValue
-                    if newValue {
-                        Task { await appState.refreshQuotas(reason: .userInitiated) }
-                    }
-                case .cursor:
-                    setCursorProviderEnabled(newValue, settings: settings)
-                case .commandCode:
-                    setCommandCodeProviderEnabled(newValue, settings: settings)
-                }
+                settings.setServiceEnabled(newValue, for: app)
+                // Antigravity / Cursor / Command Code 开启后立即取一次额度，不等下一轮调度。
+                guard newValue, [QuotaApp.antigravity, .cursor, .commandCode].contains(app) else { return }
+                Task { await appState.refreshQuotas(reason: .userInitiated) }
             }
         )
     }
@@ -735,120 +743,274 @@ struct SettingsRootView: View {
         )
     }
 
+    /// 仅有用量的服务（Pi / OpenCode / DSH）的「开启」开关，直接对应统计服务可见性。
     private func usageStatsBinding(for usageApp: UsageApp, settings: SettingsStore) -> Binding<Bool> {
         Binding(
             get: { settings.isUsageServiceVisible(usageApp) },
-            set: { visible in
-                settings.setUsageServiceVisible(visible, for: usageApp)
-                if usageApp == .cursor, visible {
-                    Task { await appState.refreshQuotas(reason: .userInitiated) }
-                }
-            }
+            set: { settings.setUsageServiceVisible($0, for: usageApp) }
         )
     }
 
-    private func setCursorProviderEnabled(_ enabled: Bool, settings: SettingsStore) {
-        settings.setProviderEnabled(enabled, for: .cursor)
-        guard enabled else { return }
-        Task {
-            await appState.refreshQuotas(reason: .userInitiated)
-        }
-    }
-
-    private func setCommandCodeProviderEnabled(_ enabled: Bool, settings: SettingsStore) {
-        settings.setProviderEnabled(enabled, for: .commandCode)
-        guard enabled else { return }
-        Task {
-            await appState.refreshQuotas(reason: .userInitiated)
-        }
-    }
-
-    private func accountInfo(for app: QuotaApp) -> (email: String?, plan: String?, availability: AccountAvailability) {
+    private func accountInfo(for app: QuotaApp) -> (email: String?, plan: String?, signedIn: Bool) {
         switch app {
         case .codex:
             return (
                 email: appState.codexAccount?.email,
                 plan: appState.codexAccount?.planType?.capitalized,
-                availability: appState.codexAccount == nil ? .notDetected : .connected
+                signedIn: appState.codexAccount != nil
             )
         case .claude:
             return (
                 email: appState.claudeAccount?.email,
                 plan: appState.claudeAccount?.subscriptionType?.capitalized,
-                availability: appState.claudeAccount == nil ? .notDetected : .connected
+                signedIn: appState.claudeAccount != nil
             )
         case .antigravity:
             return (
                 email: appState.antigravityAccount?.email,
                 plan: (appState.antigravityAccount?.planType ?? appState.antigravityQuota?.planType)?.capitalized,
-                availability: appState.antigravityAccount == nil ? .notDetected : .connected
+                signedIn: appState.antigravityAccount != nil
             )
         case .cursor:
             return (
                 email: appState.cursorAccount?.email,
                 plan: appState.cursorQuota?.planType,
-                availability: appState.cursorAccount == nil ? .notDetected : .connected
+                signedIn: appState.cursorAccount != nil
             )
         case .commandCode:
             return (
                 email: appState.commandCodeAccount?.email ?? appState.commandCodeAccount?.login,
                 plan: appState.commandCodeQuota?.planType ?? appState.commandCodeAccount?.planType,
-                availability: appState.commandCodeAccount == nil ? .notDetected : .connected
+                signedIn: appState.commandCodeAccount != nil
             )
         }
     }
 
-    private func usageServiceInfo(for app: UsageApp) -> (detailText: String, availability: AccountAvailability) {
+    /// 本机记录探测：只看默认位置是否存在，不扫描内容。
+    /// `installedOnly` 表示找到了工具的数据目录，但默认位置还没有对话记录。
+    private func localRecordState(for app: UsageApp) -> LocalRecordState {
         let fileManager = FileManager.default
         let home = fileManager.homeDirectoryForCurrentUser
+        func exists(_ path: String) -> Bool {
+            fileManager.fileExists(atPath: home.appendingPathComponent(path).path)
+        }
+        func directoryExists(_ path: String) -> Bool {
+            var isDirectory: ObjCBool = false
+            return fileManager.fileExists(atPath: home.appendingPathComponent(path).path, isDirectory: &isDirectory)
+                && isDirectory.boolValue
+        }
+
+        let hasRecords: Bool
+        let installed: Bool
         switch app {
+        case .codex:
+            hasRecords = exists(".codex/sessions") || exists(".codex/archived_sessions")
+            installed = exists(".codex")
+        case .claude:
+            hasRecords = exists(".claude/projects")
+            installed = exists(".claude")
         case .pi:
-            let sessionsDir = home.appendingPathComponent(".pi/agent/sessions", isDirectory: true)
-            let configDir = home.appendingPathComponent(".pi", isDirectory: true)
-            let detected = fileManager.fileExists(atPath: sessionsDir.path) || fileManager.fileExists(atPath: configDir.path)
-            return (
-                detailText: detected
-                    ? tr("Local logs detected (~/.pi)", "已检测到本地日志 (~/.pi)")
-                    : tr("No logs detected (~/.pi)", "未检测到本地日志 (~/.pi)"),
-                availability: detected ? .connected : .notDetected
+            hasRecords = exists(".pi/agent/sessions")
+            installed = exists(".pi")
+        case .opencode:
+            hasRecords = exists(".local/share/opencode/opencode.db")
+            installed = exists(".config/opencode") || exists(".local/share/opencode")
+        case .dsh:
+            // 只探测默认根：不做 Desktop 自定义数据目录、显式 DSH_HOME、Beta home 的自动发现。
+            // 没有默认日志不能据此断定用户未安装 DSH。
+            hasRecords = directoryExists(".dsh/sessions")
+            installed = exists(".dsh")
+        case .cursor:
+            // Cursor 没有本机记录，用量来自账号远端计量。
+            return .missing
+        }
+        if hasRecords { return .found }
+        return installed ? .installedOnly : .missing
+    }
+
+    /// 按固定顺序组装服务行：先 5 个额度服务（`allProviders` 顺序），再仅有用量的 Pi / OpenCode / DSH。
+    private func serviceEntries(settings: SettingsStore) -> [ServiceEntry] {
+        QuotaProviderDescriptor.allProviders.map { quotaServiceEntry($0, settings: settings) }
+            + [UsageApp.pi, .opencode, .dsh].map { localUsageServiceEntry($0, settings: settings) }
+    }
+
+    private func quotaServiceEntry(_ provider: QuotaProviderDescriptor, settings: SettingsStore) -> ServiceEntry {
+        let app = provider.app
+        let info = accountInfo(for: app)
+        let email = info.email.map {
+            PrivacyDisplay.isEnabled ? PrivacyDisplay.account("primary:\(app.rawValue)") : $0
+        }
+        let plan = info.plan.flatMap { $0.isEmpty ? nil : $0 }
+        let subtitle: String? = switch (email, plan) {
+        case (let email?, let plan?): "\(email) · \(plan)"
+        case (let email?, nil): email
+        case (nil, let plan?): plan
+        case (nil, nil): nil
+        }
+
+        let quota = ServiceCapabilityStatus(
+            text: info.signedIn ? tr("Signed in", "已登录") : tr("Not signed in", "未登录"),
+            isWarning: !info.signedIn,
+            help: quotaSourceHelp(for: app)
+        )
+
+        let usage: ServiceCapabilityStatus?
+        let isDetected: Bool
+        switch app {
+        case .codex, .claude:
+            let usageApp: UsageApp = app == .codex ? .codex : .claude
+            let records = localRecordState(for: usageApp)
+            usage = ServiceCapabilityStatus(
+                text: records == .found
+                    ? tr("Local records found", "已找到本机记录")
+                    : tr("No local records yet", "暂无本机记录"),
+                isWarning: false,
+                help: app == .codex
+                    ? tr("Reads conversation records in ~/.codex/sessions and calculates tokens and cost on this Mac.",
+                         "读取 ~/.codex/sessions 中的对话记录，在本机计算 Token 和费用。")
+                    : tr("Reads conversation records in ~/.claude/projects and calculates tokens and cost on this Mac.",
+                         "读取 ~/.claude/projects 中的对话记录，在本机计算 Token 和费用。")
+            )
+            // 只导入了其他 Codex 账号、本机没登录 Codex 时也算在用，让「更多 Codex 账号」留在上方。
+            isDetected = info.signedIn
+                || records != .missing
+                || (app == .codex && !appState.importedCodexAccounts.isEmpty)
+        case .cursor:
+            usage = ServiceCapabilityStatus(
+                text: tr("From your Cursor account", "来自 Cursor 账号"),
+                isWarning: false,
+                help: tr("Fetches usage records from your Cursor account online.", "联网读取 Cursor 账号的用量记录。")
+            )
+            isDetected = info.signedIn
+        case .antigravity, .commandCode:
+            usage = nil
+            isDetected = info.signedIn
+        }
+
+        return ServiceEntry(
+            id: .quota(app),
+            logoName: provider.logoName,
+            fallback: provider.fallback,
+            tint: app.tintColor,
+            title: provider.title,
+            vendor: provider.vendor,
+            subtitle: subtitle,
+            quota: quota,
+            usage: usage,
+            isDetected: isDetected,
+            connectHint: connectHint(for: app),
+            connectAccessory: app == .commandCode ? commandCodeManualCredentialButton : nil,
+            offHint: offHint(for: app),
+            isEnabled: serviceEnabledBinding(for: app, settings: settings),
+            showInMenuBar: provider.supportsMenuBar ? menuBarBinding(for: app, settings: settings) : nil,
+            showInFloatingHUD: provider.supportsFloatingHUD ? floatingBinding(for: app, settings: settings) : nil,
+            accessory: accessoryView(for: app)
+        )
+    }
+
+    private func localUsageServiceEntry(_ app: UsageApp, settings: SettingsStore) -> ServiceEntry {
+        let records = localRecordState(for: app)
+        let (logoName, fallback, title, vendor, help, connectHint): (String, String, String, String, String, String) = switch app {
+        case .pi:
+            (
+                "pi", "P", "Pi", "pi.dev",
+                tr("Reads conversation records in ~/.pi/agent/sessions and calculates tokens and cost on this Mac.",
+                   "读取 ~/.pi/agent/sessions 中的对话记录，在本机计算 Token 和费用。"),
+                tr("Start a conversation in Pi to detect it", "使用 Pi 产生对话后自动识别")
             )
         case .opencode:
-            let dbURL = home.appendingPathComponent(".local/share/opencode/opencode.db", isDirectory: false)
-            let configDir = home.appendingPathComponent(".config/opencode", isDirectory: true)
-            let shareDir = home.appendingPathComponent(".local/share/opencode", isDirectory: true)
-            let detected = fileManager.fileExists(atPath: dbURL.path)
-                || fileManager.fileExists(atPath: configDir.path)
-                || fileManager.fileExists(atPath: shareDir.path)
-            return (
-                detailText: detected
-                    ? tr("Local database detected (~/.local/share/opencode)", "已检测到本地数据库 (~/.local/share/opencode)")
-                    : tr("No database detected (~/.local/share/opencode)", "未检测到本地数据库 (~/.local/share/opencode)"),
-                availability: detected ? .connected : .notDetected
-            )
-        case .dsh:
-            // 只探测默认根：不做 Desktop 自定义数据目录、显式 DSH_HOME、Beta home 的自动发现（§1）。
-            // 没有默认日志不能据此断定用户未安装 DSH。
-            let sessionsDir = home.appendingPathComponent(".dsh/sessions", isDirectory: true)
-            let homeDir = home.appendingPathComponent(".dsh", isDirectory: true)
-            var isDirectory: ObjCBool = false
-            if fileManager.fileExists(atPath: sessionsDir.path, isDirectory: &isDirectory), isDirectory.boolValue {
-                return (
-                    detailText: tr("Session directory detected (~/.dsh/sessions)", "已检测到会话目录 (~/.dsh/sessions)"),
-                    availability: .connected
-                )
-            }
-            if fileManager.fileExists(atPath: homeDir.path) {
-                return (
-                    detailText: tr("DSH data directory detected; no default session directory", "已检测到 DSH 数据目录，未发现默认会话目录"),
-                    availability: .notDetected
-                )
-            }
-            return (
-                detailText: tr("No session directory detected (~/.dsh/sessions)", "未检测到会话目录 (~/.dsh/sessions)"),
-                availability: .notDetected
+            (
+                "opencode", "O", "OpenCode", "opencode.ai",
+                tr("Reads conversation records in ~/.local/share/opencode and calculates tokens and cost on this Mac.",
+                   "读取 ~/.local/share/opencode 中的对话记录，在本机计算 Token 和费用。"),
+                tr("Start a conversation in OpenCode to detect it", "使用 OpenCode 产生对话后自动识别")
             )
         default:
-            return (detailText: "", availability: .connected)
+            (
+                "dsh", "D", "DSH", "DeepSeek Harness",
+                tr("Reads session records in ~/.dsh/sessions and calculates tokens and cost on this Mac. Only the default location is checked.",
+                   "读取 ~/.dsh/sessions 中的会话记录，在本机计算 Token 和费用。只查找这个默认位置。"),
+                tr("Start a session in DSH to detect it (default location only)", "使用 DSH 产生会话后自动识别，只查找默认位置")
+            )
+        }
+
+        let usageText: String = switch records {
+        case .found:
+            tr("Local records found", "已找到本机记录")
+        case .installedOnly where app == .dsh:
+            tr("DSH found, but no sessions in the default location", "已找到 DSH，默认位置没有会话记录")
+        case .installedOnly, .missing:
+            tr("No local records yet", "暂无本机记录")
+        }
+
+        return ServiceEntry(
+            id: .usage(app),
+            logoName: logoName,
+            fallback: fallback,
+            tint: app.tintColor,
+            title: title,
+            vendor: vendor,
+            subtitle: nil,
+            quota: nil,
+            usage: ServiceCapabilityStatus(text: usageText, isWarning: false, help: help),
+            isDetected: records != .missing,
+            connectHint: connectHint,
+            connectAccessory: nil,
+            offHint: nil,
+            isEnabled: usageStatsBinding(for: app, settings: settings),
+            showInMenuBar: nil,
+            showInFloatingHUD: nil,
+            accessory: nil
+        )
+    }
+
+    /// 额度的数据来源说明（hover），排查问题时用。
+    private func quotaSourceHelp(for app: QuotaApp) -> String {
+        switch app {
+        case .codex:
+            tr("Reads the sign-in in ~/.codex/auth.json and asks OpenAI for remaining quota. Read-only; your sign-in is not changed.",
+               "读取 ~/.codex/auth.json 的登录状态，向 OpenAI 查询剩余额度。只读取，不改动登录。")
+        case .claude:
+            tr("Reads the sign-in from Claude Code CLI or Claude Desktop and asks Anthropic for remaining quota. Read-only; your sign-in is not changed.",
+               "读取 Claude Code CLI 或 Claude 桌面版的登录状态，向 Anthropic 查询剩余额度。只读取，不改动登录。")
+        case .antigravity:
+            tr("Reads the sign-in in ~/.gemini (agy CLI / IDE plugin) and asks Google for remaining quota. Read-only; your sign-in is not changed.",
+               "读取 ~/.gemini 中的登录状态（agy CLI / IDE 插件登录），向 Google 查询剩余额度。只读取，不改动登录。")
+        case .cursor:
+            tr("Reads the sign-in from the Cursor app and asks Cursor for remaining quota. Read-only; your sign-in is not changed.",
+               "读取 Cursor 应用的登录状态，向 Cursor 查询剩余额度。只读取，不改动登录。")
+        case .commandCode:
+            tr("Reads Command Code's local credentials or the ones you entered, and asks Command Code for remaining quota. Read-only; your sign-in is not changed.",
+               "读取 Command Code 的本机凭据或手动填写的凭据，向 Command Code 查询剩余额度。只读取，不改动登录。")
+        }
+    }
+
+    /// 「其他支持的服务」里的接入提示。
+    private func connectHint(for app: QuotaApp) -> String {
+        switch app {
+        case .codex:
+            tr("Sign in with the Codex CLI to detect it", "用 Codex CLI 登录后自动识别")
+        case .claude:
+            tr("Sign in to Claude Code CLI or Claude Desktop to detect it", "登录 Claude Code CLI 或 Claude 桌面版后自动识别")
+        case .antigravity:
+            tr("Sign in to Antigravity (agy CLI or IDE plugin) to detect it", "登录 Antigravity（agy CLI 或 IDE 插件）后自动识别")
+        case .cursor:
+            tr("Sign in to the Cursor app to detect it", "登录 Cursor 应用后自动识别")
+        case .commandCode:
+            tr("Sign in with the Command Code CLI to detect it, or", "登录 Command Code CLI 后自动识别，或")
+        }
+    }
+
+    /// 检测到但默认关闭的服务，关闭态说明开启后会发生什么（两者开启后才联网请求）。
+    private func offHint(for app: QuotaApp) -> String? {
+        switch app {
+        case .cursor:
+            tr("Turning on reads Cursor's sign-in to fetch quota and usage online",
+               "开启后会读取 Cursor 的登录状态，联网查询额度和用量")
+        case .commandCode:
+            tr("Turning on fetches Command Code quota online", "开启后会联网查询 Command Code 额度")
+        default:
+            nil
         }
     }
 
@@ -863,6 +1025,17 @@ struct SettingsRootView: View {
         }
     }
 
+    private var commandCodeManualCredentialButton: AnyView {
+        AnyView(
+            Button(tr("Enter credentials", "手动填写凭据")) {
+                showCommandCodeSheet = true
+            }
+            .buttonStyle(.link)
+            .font(.system(size: 11))
+            .focusEffectDisabled()
+        )
+    }
+
     private var commandCodeCredentialButton: some View {
         Button {
             showCommandCodeSheet = true
@@ -873,7 +1046,7 @@ struct SettingsRootView: View {
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
-        .help(tr("Command Code credentials", "Command Code 凭据设置"))
+        .help(tr("Enter Command Code credentials", "填写 Command Code 凭据"))
     }
 
     private var codexResetCreditsButton: some View {
@@ -886,7 +1059,7 @@ struct SettingsRootView: View {
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
-        .help(tr("Reset credits", "使用限额重置"))
+        .help(tr("Reset credits", "额度重置次数"))
     }
 
     /// 手动重算的结果提示。成功不提示（费用已在统计页可见）；被拒 / 失败必须说明
@@ -1179,15 +1352,109 @@ private struct InsetDivider: View {
     }
 }
 
+// MARK: - CollapsiblePrefsGroup
+
+/// 可折叠的设置分组，标题样式同 `PrefsGroup`，点标题展开 / 收起。
+private struct CollapsiblePrefsGroup<Content: View>: View {
+    let title: String
+    let chinese: String
+    let desc: String
+    let chineseDesc: String
+    @Binding var isExpanded: Bool
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    isExpanded.toggle()
+                }
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 5) {
+                        Text(tr(title, chinese))
+                            .font(.system(size: 13, weight: .semibold))
+                            .kerning(-0.05)
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.tertiary)
+                            .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    }
+                    Text(tr(desc, chineseDesc))
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.tertiary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .focusEffectDisabled()
+            .pointingHandCursor()
+            .accessibilityValue(isExpanded ? tr("Expanded", "已展开") : tr("Collapsed", "已收起"))
+            .padding(.horizontal, 4)
+            .padding(.bottom, isExpanded ? 8 : 0)
+
+            if isExpanded {
+                VStack(spacing: 0) {
+                    content()
+                }
+                .ccPanel(cornerRadius: 10)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+        }
+    }
+}
+
 // MARK: - Service matrix
 
-/// 「已接入服务」矩阵列宽。服务列占剩余宽度；主窗口最小宽 1040 时服务列仍有约 330pt。
+/// 「正在使用」矩阵列宽。服务列占剩余宽度；主窗口最小宽 1040 时服务列约 285pt。
 private enum ServiceMatrixColumn {
-    static let status: CGFloat = 96
-    static let toggle: CGFloat = 64
+    static let status: CGFloat = 220
+    static let toggle: CGFloat = 56
     static let destination: CGFloat = 64
-    static let usage: CGFloat = 72
     static let accessory: CGFloat = 40
+}
+
+/// 设置页一行服务的展示数据。额度服务和仅有用量的服务共用，不支持的能力为 nil、不显示。
+private struct ServiceEntry: Identifiable {
+    enum ID: Hashable {
+        case quota(QuotaApp)
+        case usage(UsageApp)
+    }
+
+    let id: ID
+    let logoName: String
+    let fallback: String
+    let tint: Color
+    let title: String
+    let vendor: String
+    /// 账号 · 套餐；没有账号概念的服务为 nil。
+    let subtitle: String?
+    let quota: ServiceCapabilityStatus?
+    let usage: ServiceCapabilityStatus?
+    /// 这台 Mac 上检测到了（登录态或本机记录），决定放在「正在使用」还是「其他支持的服务」。
+    let isDetected: Bool
+    let connectHint: String
+    let connectAccessory: AnyView?
+    /// 关闭态的专属说明；nil 时按支持的能力给通用文案。
+    let offHint: String?
+    let isEnabled: Binding<Bool>
+    /// 菜单栏 / 悬浮窗只跟额度有关；仅有用量的服务为 nil。
+    let showInMenuBar: Binding<Bool>?
+    let showInFloatingHUD: Binding<Bool>?
+    let accessory: AnyView?
+}
+
+private struct ServiceCapabilityStatus {
+    let text: String
+    let isWarning: Bool
+    /// 数据来源说明（hover），排查问题时用。
+    let help: String
+}
+
+private enum LocalRecordState: Equatable {
+    case found
+    case installedOnly
+    case missing
 }
 
 private struct ServiceMatrixHeader: View {
@@ -1195,12 +1462,11 @@ private struct ServiceMatrixHeader: View {
         HStack(spacing: 0) {
             Text(tr("Service", "服务"))
                 .frame(maxWidth: .infinity, alignment: .leading)
-            Text(tr("Status", "状态"))
+            Text(tr("Quota & Usage", "额度与用量"))
                 .frame(width: ServiceMatrixColumn.status, alignment: .leading)
-            centered(tr("Enabled", "启用"), width: ServiceMatrixColumn.toggle)
+            centered(tr("On", "开启"), width: ServiceMatrixColumn.toggle)
             centered(tr("Menu Bar", "菜单栏"), width: ServiceMatrixColumn.destination)
             centered(tr("Floating HUD", "悬浮窗"), width: ServiceMatrixColumn.destination)
-            centered(tr("Usage Stats", "用量统计"), width: ServiceMatrixColumn.usage)
             Color.clear
                 .frame(width: ServiceMatrixColumn.accessory, height: 1)
         }
@@ -1224,171 +1490,112 @@ private struct ServiceMatrixHeader: View {
     }
 }
 
-private struct ServiceSettingsRow: View {
-    let logoName: String
-    let fallback: String
-    let tint: Color
-    let title: String
-    let vendor: String
-    let detailText: String
-    let availability: AccountAvailability
-    let accessory: AnyView?
-    @Binding var isEnabled: Bool
-    @Binding var showInMenuBar: Bool
-    var supportsMenuBar: Bool = true
-    @Binding var showInFloatingHUD: Bool
-    var supportsFloatingHUD: Bool = true
-    var floatingHUDGloballyEnabled: Bool
-    var isUsageVisible: Binding<Bool>?
+/// 服务 tile + 名称 · 厂商，下面一行由调用方给出（账号副标题或接入提示）。
+private struct ServiceNameBlock<Detail: View>: View {
+    let entry: ServiceEntry
+    @ViewBuilder var detail: () -> Detail
 
-    init(
-        provider: QuotaProviderDescriptor,
-        email: String?,
-        plan: String?,
-        availability: AccountAvailability,
-        accessory: AnyView?,
-        isEnabled: Binding<Bool>,
-        showInMenuBar: Binding<Bool>,
-        showInFloatingHUD: Binding<Bool>,
-        floatingHUDGloballyEnabled: Bool,
-        usageApp: UsageApp?,
-        isUsageVisible: Binding<Bool>?
-    ) {
-        self.logoName = provider.logoName
-        self.fallback = provider.fallback
-        self.tint = provider.app.tintColor
-        self.title = provider.title
-        self.vendor = provider.vendor
-        self.availability = availability
-        self.accessory = accessory
-        self._isEnabled = isEnabled
-        self._showInMenuBar = showInMenuBar
-        self.supportsMenuBar = provider.supportsMenuBar
-        self._showInFloatingHUD = showInFloatingHUD
-        self.supportsFloatingHUD = provider.supportsFloatingHUD
-        self.floatingHUDGloballyEnabled = floatingHUDGloballyEnabled
-        self.isUsageVisible = isUsageVisible
+    var body: some View {
+        HStack(spacing: 10) {
+            ServiceTile(logoName: entry.logoName, fallback: entry.fallback, tint: entry.tint)
 
-        if let email {
-            if let plan, !plan.isEmpty {
-                self.detailText = "\(email) · \(plan)"
-            } else {
-                self.detailText = email
-            }
-        } else {
-            switch availability {
-            case .connected: self.detailText = plan ?? tr("Connected", "已连接")
-            case .notDetected: self.detailText = tr("Not detected", "未检测到")
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Text(entry.title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .lineLimit(1)
+                    Text("· \(entry.vendor)")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .fixedSize()
+                }
+                detail()
             }
         }
     }
+}
 
-    init(
-        logoName: String,
-        fallback: String,
-        tint: Color,
-        title: String,
-        vendor: String,
-        detailText: String,
-        availability: AccountAvailability,
-        accessory: AnyView? = nil,
-        isEnabled: Binding<Bool>,
-        showInMenuBar: Binding<Bool> = .constant(false),
-        supportsMenuBar: Bool = false,
-        showInFloatingHUD: Binding<Bool> = .constant(false),
-        supportsFloatingHUD: Bool = false,
-        floatingHUDGloballyEnabled: Bool = false,
-        isUsageVisible: Binding<Bool>? = nil
-    ) {
-        self.logoName = logoName
-        self.fallback = fallback
-        self.tint = tint
-        self.title = title
-        self.vendor = vendor
-        self.detailText = detailText
-        self.availability = availability
-        self.accessory = accessory
-        self._isEnabled = isEnabled
-        self._showInMenuBar = showInMenuBar
-        self.supportsMenuBar = supportsMenuBar
-        self._showInFloatingHUD = showInFloatingHUD
-        self.supportsFloatingHUD = supportsFloatingHUD
-        self.floatingHUDGloballyEnabled = floatingHUDGloballyEnabled
-        self.isUsageVisible = isUsageVisible
+private struct ServiceEnabledToggle: View {
+    let entry: ServiceEntry
+
+    var body: some View {
+        // 小号开关：表格行更紧凑，接近设计稿 32×20。
+        Toggle(entry.title, isOn: entry.isEnabled)
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .tint(.green)
+            .help(tr(
+                "Turning off hides this service's quota and usage. Records are kept.",
+                "关闭后不再显示这个服务的额度和用量，已有记录保留，重新开启即可看到"
+            ))
     }
+}
+
+/// 「额度与用量」列里的一行：`额度  已登录`。
+private struct CapabilityStatusLine: View {
+    let label: String
+    let status: ServiceCapabilityStatus
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(label)
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(.tertiary)
+                .frame(width: 36, alignment: .leading)
+            Text(status.text)
+                .font(.system(size: 11))
+                .foregroundStyle(status.isWarning ? Color.orange : Color.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .help(status.help)
+    }
+}
+
+/// 「正在使用」里的服务行。
+private struct ServiceSettingsRow: View {
+    let entry: ServiceEntry
+    let floatingHUDGloballyEnabled: Bool
+
+    private var isEnabled: Bool { entry.isEnabled.wrappedValue }
 
     var body: some View {
         HStack(spacing: 0) {
-            HStack(spacing: 10) {
-                ServiceTile(logoName: logoName, fallback: fallback, tint: tint)
-
-                VStack(alignment: .leading, spacing: 1) {
-                    HStack(alignment: .firstTextBaseline, spacing: 5) {
-                        Text(title)
-                            .font(.system(size: 13, weight: .semibold))
-                            .lineLimit(1)
-                        Text("· \(vendor)")
-                            .font(.system(size: 11.5))
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(1)
-                            .fixedSize()
-                    }
-                    Text(detailText)
+            ServiceNameBlock(entry: entry) {
+                if let subtitle = entry.subtitle {
+                    Text(subtitle)
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
-                        .help(detailText)
+                        .help(subtitle)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.trailing, 8)
 
-            statusBadge
+            statusColumn
                 .frame(width: ServiceMatrixColumn.status, alignment: .leading)
 
-            // 小号开关：表格行更紧凑，接近设计稿 32×20，也不会撑满 64pt 列宽。
-            Toggle("", isOn: $isEnabled)
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.small)
-                .tint(.green)
+            ServiceEnabledToggle(entry: entry)
                 .frame(width: ServiceMatrixColumn.toggle)
 
-            // 展示位置三列：总开关关闭时整组置灰且不可点，不再隐藏，保持表格对齐。
+            // 菜单栏 / 悬浮窗只跟额度有关：仅有用量的服务留空占位，保持列对齐。
+            // 服务关闭时整组置灰且不可点，不隐藏。
             HStack(spacing: 0) {
-                DisplayDestinationCheckbox(
-                    title: "\(title) \(tr("Menu Bar", "菜单栏"))",
-                    isOn: $showInMenuBar,
-                    disabled: !isEnabled || !supportsMenuBar,
-                    disabledHelp: supportsMenuBar ? nil : localUsageOnlyHelp
+                destinationCell(
+                    entry.showInMenuBar,
+                    title: tr("Menu Bar", "菜单栏"),
+                    unavailable: false,
+                    help: nil
                 )
-                .frame(width: ServiceMatrixColumn.destination)
-
-                DisplayDestinationCheckbox(
-                    title: "\(title) \(tr("Floating HUD", "悬浮窗"))",
-                    isOn: $showInFloatingHUD,
-                    disabled: !isEnabled || !supportsFloatingHUD || !floatingHUDGloballyEnabled,
-                    disabledHelp: floatingDisabledHelp
+                destinationCell(
+                    entry.showInFloatingHUD,
+                    title: tr("Floating HUD", "悬浮窗"),
+                    unavailable: !floatingHUDGloballyEnabled,
+                    help: floatingDisabledHelp
                 )
-                .frame(width: ServiceMatrixColumn.destination)
-
-                Group {
-                    if let isUsageVisible {
-                        DisplayDestinationCheckbox(
-                            title: "\(title) \(tr("Usage Stats", "用量统计"))",
-                            isOn: isUsageVisible,
-                            disabled: !isEnabled
-                        )
-                    } else {
-                        // 不适用：无用量数据的服务，或本地用量服务（启用即用量统计）。
-                        Text("—")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.tertiary)
-                            .accessibilityLabel(tr("Not applicable", "不适用"))
-                    }
-                }
-                .frame(width: ServiceMatrixColumn.usage)
             }
             .opacity(isEnabled ? 1 : 0.4)
 
@@ -1396,7 +1603,7 @@ private struct ServiceSettingsRow: View {
             ZStack {
                 Color.clear
                     .frame(width: ServiceMatrixColumn.accessory, height: 1)
-                if let accessory { accessory }
+                if let accessory = entry.accessory { accessory }
             }
             .frame(width: ServiceMatrixColumn.accessory)
         }
@@ -1404,34 +1611,91 @@ private struct ServiceSettingsRow: View {
         .padding(.horizontal, 16)
     }
 
-    private var localUsageOnlyHelp: String {
-        tr("Local usage only, no subscription quota", "仅统计本地用量，没有订阅额度")
+    @ViewBuilder
+    private var statusColumn: some View {
+        if isEnabled {
+            VStack(alignment: .leading, spacing: 2) {
+                if let quota = entry.quota {
+                    CapabilityStatusLine(label: tr("Quota", "额度"), status: quota)
+                }
+                if let usage = entry.usage {
+                    CapabilityStatusLine(label: tr("Usage", "用量"), status: usage)
+                }
+            }
+        } else {
+            Text(offText)
+                .font(.system(size: 11))
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
-    /// 悬浮窗列不可勾选的原因：不支持优先；总开关关闭时不提示；其余是全局悬浮窗未开启。
+    private var offText: String {
+        if let offHint = entry.offHint { return offHint }
+        switch (entry.quota != nil, entry.usage != nil) {
+        case (true, true): return tr("Off, quota and usage hidden", "已关闭，不显示额度和用量")
+        case (true, false): return tr("Off, quota hidden", "已关闭，不显示额度")
+        default: return tr("Off, usage hidden", "已关闭，不显示用量")
+        }
+    }
+
+    /// 悬浮窗列不可勾选的原因：服务关闭时不提示；其余是全局悬浮窗未开启。
     private var floatingDisabledHelp: String? {
-        if !supportsFloatingHUD { return localUsageOnlyHelp }
-        if !isEnabled || floatingHUDGloballyEnabled { return nil }
+        guard isEnabled, !floatingHUDGloballyEnabled else { return nil }
         return tr("Enable Floating HUD in Appearance & Display first", "需先在「外观与显示」中开启桌面悬浮窗")
     }
 
     @ViewBuilder
-    private var statusBadge: some View {
-        HStack(spacing: 4) {
-            Circle()
-                .fill(availability == .connected ? Color.green : (availability == .notDetected ? Color.orange : Color.secondary))
-                .frame(width: 6, height: 6)
-            Text(statusText)
-                .font(.system(size: 10.5))
-                .foregroundStyle(availability == .connected ? Color.green : (availability == .notDetected ? Color.orange : Color.secondary))
+    private func destinationCell(
+        _ binding: Binding<Bool>?,
+        title: String,
+        unavailable: Bool,
+        help: String?
+    ) -> some View {
+        Group {
+            if let binding {
+                DisplayDestinationCheckbox(
+                    title: "\(entry.title) \(title)",
+                    isOn: binding,
+                    disabled: !isEnabled || unavailable,
+                    disabledHelp: help
+                )
+            } else {
+                Color.clear
+                    .frame(height: 22)
+            }
         }
+        .frame(width: ServiceMatrixColumn.destination)
     }
+}
 
-    private var statusText: String {
-        switch availability {
-        case .connected: tr("Connected", "已连接")
-        case .notDetected: tr("Not detected", "未检测到")
+/// 「其他支持的服务」里的行：只给接入提示和开启开关。
+private struct OtherServiceRow: View {
+    let entry: ServiceEntry
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ServiceNameBlock(entry: entry) {
+                HStack(spacing: 4) {
+                    Text(entry.connectHint)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .help(entry.connectHint)
+                    if let connectAccessory = entry.connectAccessory {
+                        connectAccessory
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.trailing, 8)
+
+            ServiceEnabledToggle(entry: entry)
+                .frame(width: ServiceMatrixColumn.toggle)
         }
+        .padding(.vertical, 10)
+        .padding(.horizontal, 16)
     }
 }
 
@@ -1518,11 +1782,6 @@ private struct DisplayDestinationCheckbox: View {
         if disabled { return Color.primary.opacity(isOn ? 0.12 : 0.06) }
         return Color.primary.opacity(isOn ? 0.28 : 0.12)
     }
-}
-
-private enum AccountAvailability: Equatable {
-    case connected
-    case notDetected
 }
 
 // MARK: - Bilingual display names for existing enums

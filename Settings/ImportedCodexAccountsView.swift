@@ -3,7 +3,7 @@ import SwiftUI
 
 // MARK: - ImportedCodexAccountsView
 //
-// 设置页「Codex 其他账号」管理区域。
+// 设置页「更多 Codex 账号」管理区域，缩进挂在 Codex 服务行下方。
 // 用户在此处粘贴 auth.json → 解析预览 → 填写别名 → 保存。
 // 增删后调 AppState.reloadImportedCodexAccounts() 通知运行时。
 
@@ -114,10 +114,10 @@ struct ImportedCodexAccountsView: View {
         HStack {
             Spacer()
             VStack(spacing: 4) {
-                Text(tr("No additional accounts", "暂无其他账号"))
+                Text(tr("None added", "还没有添加"))
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
-                Text(tr("Paste a Codex auth.json to add one.", "粘贴 Codex auth.json 即可添加"))
+                Text(tr("Paste a Codex auth.json to add one", "粘贴 Codex auth.json 即可添加"))
                     .font(.system(size: 10.5))
                     .foregroundStyle(.tertiary)
             }
@@ -163,7 +163,7 @@ struct ImportedCodexAccountsView: View {
             }
             .buttonStyle(.plain)
             .focusEffectDisabled()
-            .help(tr("Reset credits", "使用限额重置"))
+            .help(tr("Reset credits", "额度重置次数"))
 
             // 显示开关
             Toggle("", isOn: Binding(

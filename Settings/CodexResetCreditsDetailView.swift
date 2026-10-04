@@ -72,7 +72,7 @@ struct CodexResetCreditsSheet: View {
     private var headerView: some View {
         HStack(alignment: .center) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(tr("Reset Credits", "使用限额重置"))
+                Text(tr("Reset Credits", "额度重置次数"))
                     .font(.system(size: 14, weight: .semibold))
                 if !accountTitle.isEmpty {
                     Text(PrivacyDisplay.isEnabled ? PrivacyDisplay.account(privacyAccountKey) : accountTitle)
@@ -101,7 +101,7 @@ struct CodexResetCreditsSheet: View {
         case .loading:
             VStack(spacing: 12) {
                 ProgressView().controlSize(.small)
-                Text(tr("Loading reset credits…", "正在查询使用限额重置…"))
+                Text(tr("Loading reset credits…", "正在查询额度重置次数…"))
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
             }

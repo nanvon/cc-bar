@@ -105,7 +105,7 @@ struct ProviderDisplaySettings: Sendable, Codable, Equatable {
     /// 子开关只在 `enabled` 为真时才生效（见 `effectiveMenuBarVisibility` /
     /// `effectiveFloatingVisibility`），所以关闭状态下两者行为完全一致；差别在用户后来打开
     /// 总开关的那一刻——Command Code 直接出现在菜单栏和悬浮窗，Cursor 还要再开两个子开关。
-    /// 这是有意的：Cursor 额度与它的统计服务是两个独立入口，默认不替用户决定展示位。
+    /// 这是有意的：Cursor 默认不替用户决定菜单栏和悬浮窗展示位。
     /// 改这两个值会改变已装机用户开启 Provider 后的首屏，不要当成笔误「对齐」掉。
     static func defaults(for app: QuotaApp) -> ProviderDisplaySettings {
         switch app {
@@ -288,11 +288,40 @@ final class SettingsStore {
         didCompleteOnboarding = defaults.object(forKey: Keys.didCompleteOnboarding) as? Bool ?? false
         let ccpRaw = defaults.string(forKey: Keys.commandCodeCredentialPreference) ?? CommandCodeCredentialPreference.automatic.rawValue
         commandCodeCredentialPreference = CommandCodeCredentialPreference(rawValue: ccpRaw) ?? .automatic
+        Self.mergeServiceSwitches(providers: &providerDisplaySettings, usage: &usageServiceVisibility)
         saveProviderDisplaySettings()
+        saveUsageServiceVisibility()
     }
 
     func isProviderEnabled(_ app: QuotaApp) -> Bool {
         providerDisplaySettings[app, default: .defaults(for: app)].enabled
+    }
+
+    /// 设置页「开启」开关：一个服务一个开关，同时管额度（Provider）和用量（统计服务）。
+    /// 额度相关调用方仍读 `isProviderEnabled`，统计页仍读 `isUsageServiceVisible`，两边由这里保持一致。
+    func setServiceEnabled(_ enabled: Bool, for app: QuotaApp) {
+        setProviderEnabled(enabled, for: app)
+        if let usageApp = app.usageApp {
+            setUsageServiceVisible(enabled, for: usageApp)
+        }
+    }
+
+    /// 旧版额度开关和统计开关可以分开设置。合并成一个开关后，两者不一致时按
+    /// 「任一项开着就算开启」处理，避免用户已有的额度卡片或统计数据突然看不到。
+    /// 每次启动都跑一遍；两项一致时不改动，结果幂等。
+    private static func mergeServiceSwitches(
+        providers: inout [QuotaApp: ProviderDisplaySettings],
+        usage: inout [UsageApp: Bool]
+    ) {
+        for app in QuotaApp.allCases {
+            guard let usageApp = app.usageApp else { continue }
+            var settings = providers[app, default: .defaults(for: app)]
+            let visible = usage[usageApp, default: usageApp == .cursor ? false : true]
+            let merged = settings.enabled || visible
+            settings.enabled = merged
+            providers[app] = settings
+            usage[usageApp] = merged
+        }
     }
 
     func setProviderEnabled(_ enabled: Bool, for app: QuotaApp) {
@@ -392,8 +421,8 @@ final class SettingsStore {
         usageServiceVisibility[app] = visible
     }
 
-    /// 按固定顺序返回可见统计服务。Cursor 默认关闭；用户主动开启后才会读取其
-    /// 独立远端缓存并进入统计页，但不要求同时展示 Cursor 额度卡片。
+    /// 按固定顺序返回可见统计服务。Cursor 默认关闭；用户在设置页开启 Cursor 后，
+    /// 才会读取其远端用量缓存并进入统计页。
     var visibleUsageApps: [UsageApp] {
         UsageApp.allCases.filter { isUsageServiceEffectivelyVisible($0) }
     }
