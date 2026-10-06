@@ -3,7 +3,8 @@ import SwiftUI
 
 // MARK: - ImportedCodexAccountsView
 //
-// 设置页「更多 Codex 账号」管理区域，缩进挂在 Codex 服务行下方。
+// 设置页「其他 Codex 账号」：作为缩进子行挂在 Codex 服务行下方，右侧列与服务行对齐
+// （菜单栏 / 悬浮窗两列留空，⋯ 菜单在数据来源列，开关在启用列）。
 // 用户在此处粘贴 auth.json → 解析预览 → 填写别名 → 保存。
 // 增删后调 AppState.reloadImportedCodexAccounts() 通知运行时。
 
@@ -18,60 +19,59 @@ struct ImportedCodexAccountsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // 账号列表
-            if appState.importedCodexAccounts.isEmpty {
-                emptyState
-            } else {
-                ForEach(Array(appState.importedCodexAccounts.enumerated()), id: \.element.id) { idx, account in
-                    if idx > 0 {
-                        Divider().padding(.horizontal, 14)
+            ForEach(appState.importedCodexAccounts) { account in
+                subRowDivider
+                importedAccountRow(account: account)
+                    .opacity(draggingId == account.id ? 0.4 : 1)
+                    .overlay(alignment: .top) {
+                        if dropTargetId == account.id, draggingId != account.id {
+                            Rectangle()
+                                .fill(Color.accentColor)
+                                .frame(height: 2)
+                        }
                     }
-                    importedAccountRow(account: account)
-                        .opacity(draggingId == account.id ? 0.4 : 1)
-                        .overlay(alignment: .top) {
-                            if dropTargetId == account.id, draggingId != account.id {
-                                Rectangle()
-                                    .fill(Color.accentColor)
-                                    .frame(height: 2)
-                            }
+                    .draggable(account.id) {
+                        dragPreview(account: account)
+                            .onAppear { draggingId = account.id }
+                    }
+                    .dropDestination(for: String.self) { items, _ in
+                        defer {
+                            draggingId = nil
+                            dropTargetId = nil
                         }
-                        .draggable(account.id) {
-                            dragPreview(account: account)
-                                .onAppear { draggingId = account.id }
-                        }
-                        .dropDestination(for: String.self) { items, _ in
-                            defer {
-                                draggingId = nil
-                                dropTargetId = nil
-                            }
-                            guard let sourceId = items.first, sourceId != account.id else { return false }
-                            return performReorder(sourceId: sourceId, targetId: account.id)
-                        } isTargeted: { isTargeted in
-                            dropTargetId = isTargeted ? account.id : (dropTargetId == account.id ? nil : dropTargetId)
-                        }
-                }
+                        guard let sourceId = items.first, sourceId != account.id else { return false }
+                        return performReorder(sourceId: sourceId, targetId: account.id)
+                    } isTargeted: { isTargeted in
+                        dropTargetId = isTargeted ? account.id : (dropTargetId == account.id ? nil : dropTargetId)
+                    }
             }
 
-            Divider()
+            subRowDivider
 
-            // 添加按钮
+            // 添加按钮：与子行名称左对齐
             Button {
                 showAddSheet = true
             } label: {
                 HStack(spacing: 6) {
-                    Image(systemName: "plus.circle.fill")
-                        .font(.system(size: 13))
-                        .foregroundStyle(.green)
-                    Text(tr("Add Codex account", "添加 Codex 账号"))
+                    Image(systemName: "plus")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text(tr("Add Codex Account…", "添加 Codex 账号…"))
                         .font(.system(size: 12.5))
-                        .foregroundStyle(.primary)
                     Spacer()
                 }
-                .padding(.vertical, 10)
-                .padding(.horizontal, 14)
+                .foregroundStyle(Color.accentColor)
+                .padding(.vertical, 9)
+                .padding(.leading, ServiceRowMetrics.textLeading)
+                .padding(.trailing, ServiceRowMetrics.trailingPadding)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .focusEffectDisabled()
+            .pointingHandCursor()
+            .help(tr("Paste another account's auth.json to view its quota. Quota only; your Codex CLI sign-in is not changed.",
+                     "粘贴其他账号的 auth.json 查看它的额度。只查看额度，不会切换 Codex CLI 的登录账号"))
         }
+        .background(Color.primary.opacity(0.02))
         .sheet(isPresented: $showAddSheet) {
             AddImportedCodexAccountSheet { appState.reloadImportedCodexAccounts() }
         }
@@ -108,65 +108,80 @@ struct ImportedCodexAccountsView: View {
         }
     }
 
-    // MARK: 空状态
-
-    private var emptyState: some View {
-        HStack {
-            Spacer()
-            VStack(spacing: 4) {
-                Text(tr("None added", "还没有添加"))
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                Text(tr("Paste a Codex auth.json to add one", "粘贴 Codex auth.json 即可添加"))
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.tertiary)
-            }
-            Spacer()
-        }
-        .padding(.vertical, 14)
+    /// 子行分隔线：从名称起点开始，同服务行之间的分隔线。
+    private var subRowDivider: some View {
+        Rectangle()
+            .fill(Color.primary.opacity(0.06))
+            .frame(height: 0.5)
+            .padding(.leading, ServiceRowMetrics.textLeading)
     }
 
     // MARK: 账号行
 
     private func importedAccountRow(account: ImportedCodexAccount) -> some View {
-        HStack(spacing: 10) {
-            // 拖拽手柄
-            Image(systemName: "line.3.horizontal")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.tertiary)
-                .help(tr("Drag to reorder", "拖动以排序"))
+        let error = appState.importedCodexError(for: account)
 
-            // 显示名 + 邮箱/plan
-            VStack(alignment: .leading, spacing: 1) {
+        return HStack(spacing: 0) {
+            ServiceTile(
+                logoName: "codex",
+                fallback: "C",
+                tint: QuotaApp.codex.tintColor,
+                size: 20,
+                logoSize: 13,
+                cornerRadius: 5.5
+            )
+            .padding(.trailing, 10)
+
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(rowTitle(account))
                     .font(.system(size: 12.5))
                     .lineLimit(1)
-
                 let detail = importedAccountDetail(account)
                 if !detail.isEmpty {
                     Text(detail)
-                        .font(.system(size: 10.5))
+                        .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                if let error {
+                    Text("· \(tr("Refresh failed", "刷新失败"))")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.orange)
+                        .lineLimit(1)
+                        .fixedSize()
+                        .help(error)
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.trailing, 8)
+            .help(tr("Drag to reorder", "拖动以排序"))
 
-            Spacer()
+            // 菜单栏 / 悬浮窗两列：导入账号只在 Popover 显示，留空保持对齐。
+            Color.clear
+                .frame(width: ServiceRowMetrics.destination * 2, height: 1)
 
-            // 使用限额重置
-            Button {
-                selectedResetAccount = account
+            Menu {
+                Button(tr("Reset Credits…", "额度重置次数…")) {
+                    selectedResetAccount = account
+                }
+                Divider()
+                Button(tr("Remove…", "删除…"), role: .destructive) {
+                    deleteTarget = account
+                }
             } label: {
-                Image(systemName: "gift")
-                    .font(.system(size: 12))
+                Image(systemName: "ellipsis.circle")
+                    .font(.system(size: 13))
                     .foregroundStyle(.secondary)
             }
-            .buttonStyle(.plain)
-            .focusEffectDisabled()
-            .help(tr("Reset credits", "额度重置次数"))
+            .menuStyle(.button)
+            .buttonStyle(.borderless)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help(tr("More", "更多操作"))
+            .frame(width: ServiceRowMetrics.info)
 
-            // 显示开关
-            Toggle("", isOn: Binding(
+            Toggle(rowTitle(account), isOn: Binding(
                 get: { account.visibleInPopover },
                 set: { newValue in
                     appState.updateImportedCodexMetadata(id: account.id) { $0.visibleInPopover = newValue }
@@ -174,21 +189,15 @@ struct ImportedCodexAccountsView: View {
             ))
             .labelsHidden()
             .toggleStyle(.switch)
+            .controlSize(.small)
             .tint(.green)
-
-            // 删除按钮
-            Button {
-                deleteTarget = account
-            } label: {
-                Image(systemName: "minus.circle")
-                    .font(.system(size: 14))
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-            .focusEffectDisabled()
+            .help(tr("Show this account's quota in the Popover", "在 Popover 显示这个账号的额度"))
+            .frame(width: ServiceRowMetrics.toggle)
         }
-        .padding(.vertical, 10)
-        .padding(.horizontal, 14)
+        .padding(.leading, ServiceRowMetrics.textLeading)
+        .padding(.trailing, ServiceRowMetrics.trailingPadding)
+        .padding(.vertical, 8)
+        .contentShape(Rectangle())
     }
 
     private func rowTitle(_ account: ImportedCodexAccount, respectsPrivacy: Bool = true) -> String {

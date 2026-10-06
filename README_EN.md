@@ -61,7 +61,7 @@
 
 ### 💻 Native Interface and Settings
 
-* **Services & Accounts** — One row per service showing whether it provides quota, usage, or both and their current status, with a single switch for both plus menu bar and floating HUD options. Services not found on this Mac are collapsed below with setup hints. Turning a service off preserves scanning and history so it remains available when turned back on. Codex and Claude Code are on by default, and Antigravity turns on when a sign-in is detected; Cursor, Command Code, and the floating HUD are off until you enable them in Settings.
+* **Services & Accounts** — Every service on one page: detected and not-yet-detected services are listed separately with setup hints, each with a single switch for both quota and usage plus menu bar and floating HUD checkboxes. Refresh failures are flagged inline, and each row's info button shows its data sources. Turning a service off preserves scanning and history so it remains available when turned back on. Codex and Claude Code are on by default, and Antigravity turns on when a sign-in is detected; Cursor, Command Code, and the floating HUD are off until you enable them in Settings.
 * **Screenshot privacy mode** — Anonymize accounts, projects, and conversations; hide paths, branches, and IDs across analytics, the Popover, account settings, and related hints. Real costs, tokens, models, dates, and charts remain visible; original data is unchanged. Off by default; enable it in Settings → Appearance & Display → Privacy mode.
 * **Native macOS experience** — Light / dark appearance, Chinese / English, silent launch at login, keyboard refresh, and manual or startup checks for GitHub Release updates.
 * **Local diagnostics** — Logs rotate automatically and are redacted by default. Export a diagnostic bundle in Settings to inspect and share yourself; the app never uploads it automatically.
@@ -92,7 +92,7 @@
 
 <p align="center">
   <img src="docs/Screenshots/settings.png" width="720" alt="Services & Accounts"><br>
-  <sub><b>Services & Accounts</b>: Quota and usage status per service, menu bar and floating HUD options, plus more Codex accounts</sub>
+  <sub><b>Services & Accounts</b>: Turn services on, choose menu bar and floating HUD, and add more Codex accounts under Codex</sub>
 </p>
 
 ---
