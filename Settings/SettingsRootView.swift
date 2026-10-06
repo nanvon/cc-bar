@@ -51,6 +51,7 @@ struct SettingsRootView: View {
     @State private var showCodexResetCreditsSheet = false
     @State private var showCommandCodeSheet = false
     @State private var showOtherServices = false
+    @State private var showMoreCodexAccounts = false
     @State private var isExportingDiagnostics = false
     @State private var diagnosticsMessage: String?
     @State private var diagnosticsMessageIsError = false
@@ -266,11 +267,36 @@ struct SettingsRootView: View {
     }
 
     /// 更多 Codex 账号：缩进挂在 Codex 行下方，与服务名左对齐（16 行内边距 + 22 tile + 10 间距）。
+    /// 默认折叠，只显示标题和已导入数量；点标题展开说明和账号列表。
     private var moreCodexAccounts: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(tr("More Codex Accounts", "更多 Codex 账号"))
-                    .font(.system(size: 12, weight: .semibold))
+        let count = appState.importedCodexAccounts.count
+        let title = count > 0
+            ? tr("More Codex Accounts (\(count))", "更多 Codex 账号（\(count)）")
+            : tr("More Codex Accounts", "更多 Codex 账号")
+
+        return VStack(alignment: .leading, spacing: 8) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    showMoreCodexAccounts.toggle()
+                }
+            } label: {
+                HStack(spacing: 5) {
+                    Text(title)
+                        .font(.system(size: 12, weight: .semibold))
+                        .monospacedDigit()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                        .rotationEffect(.degrees(showMoreCodexAccounts ? 90 : 0))
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .focusEffectDisabled()
+            .pointingHandCursor()
+            .accessibilityValue(showMoreCodexAccounts ? tr("Expanded", "已展开") : tr("Collapsed", "已收起"))
+
+            if showMoreCodexAccounts {
                 Text(tr(
                     "Paste another account's auth.json to view its quota. Quota only, no usage, and your Codex CLI sign-in is not affected.",
                     "粘贴其他账号的 auth.json，在 CCBar 里查看它们的额度。只看额度、不统计用量，也不影响 Codex CLI 当前登录的账号。"
@@ -278,22 +304,27 @@ struct SettingsRootView: View {
                 .font(.system(size: 10.5))
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
-            }
+                .padding(.top, -6)
 
-            ImportedCodexAccountsView()
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Color.primary.opacity(0.03))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5)
-                )
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                moreCodexAccountsList
+            }
         }
         .padding(.leading, 48)
         .padding(.trailing, 16)
         .padding(.bottom, 12)
+    }
+
+    private var moreCodexAccountsList: some View {
+        ImportedCodexAccountsView()
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.primary.opacity(0.03))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     // MARK: - Section 2: Appearance & Display
