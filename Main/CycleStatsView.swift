@@ -51,11 +51,9 @@ struct QuotaCycleCardsSection: View {
         let kind: QuotaLimitKind
     }
 
-    /// 固定顺序：Codex 5 小时、Codex 周、Claude 5 小时、Claude 周。
+    /// 按传入的 `apps` 顺序展开：每服务 5 小时 → 周。
     private var cards: [CardKey] {
-        [UsageApp.codex, .claude]
-            .filter { apps.contains($0) }
-            .flatMap { app in [CardKey(app: app, kind: .fiveHour), CardKey(app: app, kind: .weekly)] }
+        apps.flatMap { app in [CardKey(app: app, kind: .fiveHour), CardKey(app: app, kind: .weekly)] }
     }
 
     private func currentCycleCard(app: UsageApp, kind: QuotaLimitKind) -> some View {

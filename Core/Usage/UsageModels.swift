@@ -12,6 +12,25 @@ nonisolated enum UsageApp: String, Sendable, Codable, Hashable, CaseIterable {
 
     /// 当前本地扫描器实际支持的数据源。Cursor 虽属于 `UsageApp`，但不在此集合中。
     static let localApps: [UsageApp] = [.codex, .claude, .pi, .opencode, .dsh]
+
+    /// 按 `preferred` 顺序排列 `present` 中的服务；未覆盖的按 `allCases` 默认序追加。
+    static func displayOrdered(
+        _ present: some Sequence<UsageApp>,
+        preferred: [UsageApp]
+    ) -> [UsageApp] {
+        let set = Set(present)
+        var seen = Set<UsageApp>()
+        var result: [UsageApp] = []
+        for app in preferred where set.contains(app) {
+            guard seen.insert(app).inserted else { continue }
+            result.append(app)
+        }
+        for app in allCases where set.contains(app) {
+            guard seen.insert(app).inserted else { continue }
+            result.append(app)
+        }
+        return result
+    }
 }
 
 /// 扫描进度快照，供设置页"重新计算"等耗时操作期间展示。

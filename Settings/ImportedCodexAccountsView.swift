@@ -12,38 +12,24 @@ struct ImportedCodexAccountsView: View {
     @Environment(AppState.self) private var appState
     @State private var showAddSheet = false
     @State private var deleteTarget: ImportedCodexAccount?
-    @State private var draggingId: String?
-    @State private var dropTargetId: String?
 
     @State private var selectedResetAccount: ImportedCodexAccount?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(appState.importedCodexAccounts) { account in
-                subRowDivider
-                importedAccountRow(account: account)
-                    .opacity(draggingId == account.id ? 0.4 : 1)
-                    .overlay(alignment: .top) {
-                        if dropTargetId == account.id, draggingId != account.id {
-                            Rectangle()
-                                .fill(Color.accentColor)
-                                .frame(height: 2)
-                        }
-                    }
-                    .draggable(account.id) {
-                        dragPreview(account: account)
-                            .onAppear { draggingId = account.id }
-                    }
-                    .dropDestination(for: String.self) { items, _ in
-                        defer {
-                            draggingId = nil
-                            dropTargetId = nil
-                        }
-                        guard let sourceId = items.first, sourceId != account.id else { return false }
-                        return performReorder(sourceId: sourceId, targetId: account.id)
-                    } isTargeted: { isTargeted in
-                        dropTargetId = isTargeted ? account.id : (dropTargetId == account.id ? nil : dropTargetId)
-                    }
+            let accounts = appState.importedCodexAccounts
+            let byID = Dictionary(accounts.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            // 子行之间整行拖动排序，只在其他账号内移动；第一行顶部的分隔线把它和 Codex 主行分开。
+            ReorderableStack(
+                ids: accounts.map(\.id),
+                movableCount: accounts.count,
+                dividerLeading: ServiceRowMetrics.textLeading,
+                dividesFirstRow: true,
+                onMove: { _, newOrder in appState.reorderImportedCodexAccounts(orderedIds: newOrder) }
+            ) { id, reorder in
+                if let account = byID[id] {
+                    importedAccountRow(account: account, reorder: reorder)
+                }
             }
 
             subRowDivider
@@ -118,10 +104,16 @@ struct ImportedCodexAccountsView: View {
 
     // MARK: 账号行
 
-    private func importedAccountRow(account: ImportedCodexAccount) -> some View {
+    private func importedAccountRow(account: ImportedCodexAccount, reorder: ReorderRowState) -> some View {
         let error = appState.importedCodexError(for: account)
 
         return HStack(spacing: 0) {
+            ReorderGrip(isLifted: reorder.isLifted)
+                .frame(width: ServiceRowMetrics.handleWidth)
+
+            Color.clear
+                .frame(width: ServiceRowMetrics.textLeading - ServiceRowMetrics.leadingPadding - ServiceRowMetrics.handleWidth)
+
             ServiceTile(
                 logoName: "codex",
                 fallback: "C",
@@ -155,7 +147,6 @@ struct ImportedCodexAccountsView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.trailing, 8)
-            .help(tr("Drag to reorder", "拖动以排序"))
 
             // 菜单栏 / 悬浮窗两列：导入账号只在 Popover 显示，留空保持对齐。
             Color.clear
@@ -194,10 +185,10 @@ struct ImportedCodexAccountsView: View {
             .help(tr("Show this account's quota in the Popover", "在 Popover 显示这个账号的额度"))
             .frame(width: ServiceRowMetrics.toggle)
         }
-        .padding(.leading, ServiceRowMetrics.textLeading)
+        .padding(.leading, ServiceRowMetrics.leadingPadding)
         .padding(.trailing, ServiceRowMetrics.trailingPadding)
         .padding(.vertical, 8)
-        .contentShape(Rectangle())
+        .reorderDragSource(reorder)
     }
 
     private func rowTitle(_ account: ImportedCodexAccount, respectsPrivacy: Bool = true) -> String {
@@ -214,34 +205,6 @@ struct ImportedCodexAccountsView: View {
         if !PrivacyDisplay.isEnabled, let email = account.email, !email.isEmpty { parts.append(email) }
         if let plan = account.planType, !plan.isEmpty { parts.append(plan.capitalized) }
         return parts.joined(separator: " · ")
-    }
-
-    // MARK: 重排序
-
-    private func dragPreview(account: ImportedCodexAccount) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: "line.3.horizontal")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.secondary)
-            Text(rowTitle(account))
-                .font(.system(size: 12.5))
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(.background.secondary)
-        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-    }
-
-    private func performReorder(sourceId: String, targetId: String) -> Bool {
-        var ids = appState.importedCodexAccounts.map(\.id)
-        guard let from = ids.firstIndex(of: sourceId),
-              let to = ids.firstIndex(of: targetId),
-              from != to else { return false }
-        let moved = ids.remove(at: from)
-        let insertAt = ids.firstIndex(of: targetId) ?? to
-        ids.insert(moved, at: insertAt)
-        appState.reorderImportedCodexAccounts(orderedIds: ids)
-        return true
     }
 }
 

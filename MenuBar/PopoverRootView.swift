@@ -142,7 +142,7 @@ struct PopoverRootView: View {
 
     @ViewBuilder
     private var content: some View {
-        let providers = QuotaProviderDescriptor.popoverProviders.filter {
+        let providers = SettingsStore.shared.orderedProviders.filter {
             SettingsStore.shared.isProviderEnabled($0.app)
         }
         let hasImported = appState.importedCodexAccounts.contains(where: \.visibleInPopover)
@@ -349,7 +349,7 @@ struct PopoverRootView: View {
     }
 
     private var enabledPrimaryApps: [QuotaApp] {
-        QuotaProviderDescriptor.popoverProviders.compactMap {
+        SettingsStore.shared.orderedProviders.compactMap {
             SettingsStore.shared.isProviderEnabled($0.app) ? $0.app : nil
         }
     }

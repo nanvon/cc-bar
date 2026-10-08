@@ -85,11 +85,10 @@ nonisolated struct QuotaProviderDescriptor: Sendable, Hashable, Identifiable {
         ),
     ]
 
-    /// 兼容别名，三者当前都等同于 `allProviders`——设置页账号组、Popover 与统计页
-    /// 都展示全部 Provider，没有各自的子集需要过滤。真正做过滤的只有下面两个
-    /// (`menuBarProviders` / `floatingProviders`，按 `supportsMenuBar` / `supportsFloatingHUD`)。
-    /// 保留这三个名字是为了让调用点自我说明它在渲染哪个界面；若将来某个界面要收窄范围，
-    /// 改对应的这一个即可，不必再去找调用点。
+    /// 能力目录别名（默认顺序，不读用户排序）。UI 展示序请用
+    /// `SettingsStore.orderedProviders` / `orderedMenuBarProviders` / `orderedFloatingProviders`。
+    /// 保留这些名字是为了让调用点自我说明它在查哪个界面的能力集合；真正做过滤的只有
+    /// `menuBarProviders` / `floatingProviders`（按 `supportsMenuBar` / `supportsFloatingHUD`）。
     static var primaryProviders: [QuotaProviderDescriptor] { allProviders }
 
     static var accountProviders: [QuotaProviderDescriptor] { allProviders }

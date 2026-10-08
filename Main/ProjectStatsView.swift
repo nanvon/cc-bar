@@ -71,7 +71,7 @@ struct UnattributedBreakdown: Equatable {
                 result.localLastDay = max(result.localLastDay ?? key.day, key.day)
             }
         }
-        result.localApps = UsageApp.allCases.filter { localApps.contains($0) }
+        result.localApps = UsageApp.displayOrdered(localApps, preferred: UsageApp.allCases)
         return result
     }
 }
@@ -495,7 +495,11 @@ private struct ServiceMixBar: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let items = UsageApp.allCases.compactMap { app -> (UsageApp, Double)? in
+            let orderedApps = UsageApp.displayOrdered(
+                totalsByApp.compactMap { $0.value.hasUsage ? $0.key : nil },
+                preferred: SettingsStore.shared.visibleUsageApps
+            )
+            let items = orderedApps.compactMap { app -> (UsageApp, Double)? in
                 guard let totals = totalsByApp[app], totals.hasUsage else { return nil }
                 return (app, weight(totals))
             }
@@ -720,7 +724,10 @@ private struct ProjectDetailView: View {
     }
 
     private var toolsAndModels: some View {
-        let apps = UsageApp.allCases.filter { detail.totalsByApp[$0]?.hasUsage == true }
+        let apps = UsageApp.displayOrdered(
+            detail.totalsByApp.compactMap { $0.value.hasUsage ? $0.key : nil },
+            preferred: SettingsStore.shared.visibleUsageApps
+        )
         // 最多 5 行：超过 5 个模型时列前 4 个，第 5 行为「其余 N 个模型」。
         let limit = detail.models.count > Self.modelSlots ? Self.modelSlots - 1 : Self.modelSlots
         let models = Array(detail.models.prefix(limit))
@@ -744,7 +751,10 @@ private struct ProjectDetailView: View {
             VStack(spacing: 6) {
                 ForEach(models) { model in
                     HStack(spacing: 6) {
-                        ForEach(UsageApp.allCases.filter { model.apps.contains($0) }, id: \.self) { app in
+                        ForEach(
+                            UsageApp.displayOrdered(model.apps, preferred: SettingsStore.shared.visibleUsageApps),
+                            id: \.self
+                        ) { app in
                             ServiceTile(app: app, size: 12)
                         }
                         Text(model.model)
@@ -1153,7 +1163,10 @@ private struct ProjectDailyChart: View {
     var body: some View {
         let points = self.points
         let keys = Array(Set(points.map(\.key))).sorted()
-        let apps = UsageApp.allCases.filter { app in points.contains { $0.app == app } }
+        let apps = UsageApp.displayOrdered(
+            points.map(\.app),
+            preferred: SettingsStore.shared.visibleUsageApps
+        )
         if points.isEmpty {
             Text(tr("No data", "无数据"))
                 .font(.system(size: 12))

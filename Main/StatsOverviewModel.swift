@@ -29,7 +29,7 @@ struct StatsOverviewInput: Equatable {
     let granularity: StatsGranularity
     /// 侧栏服务过滤；nil = 全部。
     let serviceApp: UsageApp?
-    /// 设置里开启且当前可用的统计服务，按固定顺序。
+    /// 设置里开启且当前可用的统计服务，按 Provider 自定义顺序。
     let visibleApps: [UsageApp]
     /// 上下文窗口模式下唯一全彩的那根柱子的周期起点；非上下文模式为 nil。
     let highlightedPeriodStart: Date?
@@ -204,9 +204,13 @@ struct StatsOverviewModel {
         let serviceApps = input.visibleApps.filter { serviceApp == nil || $0 == serviceApp }
         let composition: [CompositionDimension: [CompositionRow]] = [
             .service: CompositionBuilder.serviceRows(apps: serviceApps, totals: totalsByApp, speed: speedByApp, metric: metric),
-            .provider: CompositionBuilder.providerRows(providerGroups, metric: metric),
-            .model: CompositionBuilder.modelRows(modelsByApp, metric: metric),
-            .project: CompositionBuilder.projectRows(conversationOverview.projects, unattributed: unattributed)
+            .provider: CompositionBuilder.providerRows(providerGroups, metric: metric, preferredApps: input.visibleApps),
+            .model: CompositionBuilder.modelRows(modelsByApp, metric: metric, preferredApps: input.visibleApps),
+            .project: CompositionBuilder.projectRows(
+                conversationOverview.projects,
+                unattributed: unattributed,
+                preferredApps: input.visibleApps
+            )
         ]
 
         return StatsOverviewModel(
@@ -390,29 +394,35 @@ enum CompositionBuilder {
             }
     }
 
-    static func providerRows(_ groups: [ProviderGroup], metric: StatsRankMetric = .cost) -> [CompositionRow] {
+    static func providerRows(
+        _ groups: [ProviderGroup],
+        metric: StatsRankMetric = .cost,
+        preferredApps: [UsageApp] = UsageApp.allCases
+    ) -> [CompositionRow] {
         let sorted = ProviderGroup.sorted(groups, by: metric == .tokens ? .tokens : .cost)
         let ranked = sorted.filter { $0.provider != .other }
         let ordered = ranked + sorted.filter { $0.provider == .other }
         return ordered.enumerated().map { index, group in
-            CompositionRow(
+            let apps = UsageApp.displayOrdered(group.sources, preferred: preferredApps)
+            return CompositionRow(
                 id: "provider:\(group.provider.rawValue)",
                 kind: .item,
                 title: group.provider.displayName,
-                subtitle: UsageApp.allCases.filter { group.sources.contains($0) }.map(\.displayName).joined(separator: " · "),
+                subtitle: apps.map(\.displayName).joined(separator: " · "),
                 color: group.provider == .other ? .rest : .rank(index),
                 totals: group.totals,
                 speed: group.speed,
                 action: .expandProvider(group.provider),
                 providerModels: group.models,
-                apps: UsageApp.allCases.filter { group.sources.contains($0) }
+                apps: apps
             )
         }
     }
 
     static func modelRows(
         _ modelsByApp: [UsageApp: [String: (totals: UsageTotals, speed: UsageSpeedBreakdown)]],
-        metric: StatsRankMetric = .cost
+        metric: StatsRankMetric = .cost,
+        preferredApps: [UsageApp] = UsageApp.allCases
     ) -> [CompositionRow] {
         struct Merged {
             var totals = UsageTotals.zero
@@ -437,7 +447,7 @@ enum CompositionBuilder {
             return l == r ? lhs.key < rhs.key : l > r
         }
         return sorted.enumerated().map { index, element in
-            let apps = UsageApp.allCases.filter { element.value.apps.contains($0) }
+            let apps = UsageApp.displayOrdered(element.value.apps, preferred: preferredApps)
             let providers = ModelProvider.allCases.filter { element.value.providers.contains($0) }
             return CompositionRow(
                 id: "model:\(element.key)",
@@ -454,9 +464,17 @@ enum CompositionBuilder {
     }
 
     /// `projects` 需已按 `ConversationAggregator.projectOrder` 以同一口径排好（特殊项目在最后）。
-    static func projectRows(_ projects: [ProjectUsageRow], unattributed: UsageTotals) -> [CompositionRow] {
+    static func projectRows(
+        _ projects: [ProjectUsageRow],
+        unattributed: UsageTotals,
+        preferredApps: [UsageApp] = UsageApp.allCases
+    ) -> [CompositionRow] {
         var rows = projects.enumerated().map { index, project in
-            CompositionRow(
+            let apps = UsageApp.displayOrdered(
+                project.totalsByApp.compactMap { $0.value.hasUsage ? $0.key : nil },
+                preferred: preferredApps
+            )
+            return CompositionRow(
                 id: "project:\(project.key)",
                 kind: .item,
                 title: project.name,
@@ -465,7 +483,7 @@ enum CompositionBuilder {
                 totals: project.totals,
                 speed: project.speed,
                 action: .openProject(project.key),
-                apps: UsageApp.allCases.filter { project.totalsByApp[$0]?.hasUsage == true },
+                apps: apps,
                 projectStatus: project.status
             )
         }

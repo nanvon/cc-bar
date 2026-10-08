@@ -119,6 +119,45 @@ struct ProviderDisplaySettings: Sendable, Codable, Equatable {
     }
 }
 
+/// 服务顺序里的一项：额度服务，或只有用量的服务（Pi / OpenCode / DSH）。
+/// Codex / Claude Code / Cursor 在额度和用量里是同一个服务，只记 `.quota` 一项。
+/// 持久化用 rawValue，与 `QuotaApp` / `UsageApp` 的 rawValue 相同。
+nonisolated enum ServiceOrderItem: Hashable, Sendable {
+    case quota(QuotaApp)
+    case usage(UsageApp)
+
+    /// 没有对应额度服务的用量数据源，按 `UsageApp` 声明顺序。
+    static var usageOnlyApps: [UsageApp] {
+        let mapped = Set(QuotaApp.allCases.compactMap(\.usageApp))
+        return UsageApp.allCases.filter { !mapped.contains($0) }
+    }
+
+    init?(rawValue: String) {
+        if let app = QuotaApp(rawValue: rawValue) {
+            self = .quota(app)
+        } else if let app = UsageApp(rawValue: rawValue), Self.usageOnlyApps.contains(app) {
+            self = .usage(app)
+        } else {
+            return nil
+        }
+    }
+
+    var rawValue: String {
+        switch self {
+        case .quota(let app): return app.rawValue
+        case .usage(let app): return app.rawValue
+        }
+    }
+
+    /// 主窗口统计用的数据源；没有用量的额度服务为 nil。
+    var usageApp: UsageApp? {
+        switch self {
+        case .quota(let app): return app.usageApp
+        case .usage(let app): return app
+        }
+    }
+}
+
 enum CommandCodeCredentialPreference: String, CaseIterable, Identifiable, Codable {
     case automatic
     case manual
@@ -144,6 +183,13 @@ final class SettingsStore {
     // 统一按 QuotaApp 索引，新增 Provider 时不再扩三组平行字段。
     var providerDisplaySettings: [QuotaApp: ProviderDisplaySettings] {
         didSet { saveProviderDisplaySettings() }
+    }
+
+    /// 全部服务的展示顺序（设置页拖拽写入）：额度服务与只有用量的 Pi / OpenCode / DSH 混排。
+    /// 默认额度服务按 `QuotaProviderDescriptor.allProviders`，再接 Pi / OpenCode / DSH。
+    /// 设置列表读全部；菜单栏 / Popover / 悬浮窗只取额度服务，主窗口统计只取有用量的服务。
+    var serviceOrder: [ServiceOrderItem] {
+        didSet { saveServiceOrder() }
     }
 
     // 统计页按服务统计的显示配置；本地服务默认全开，Cursor 远端服务默认关闭。
@@ -256,6 +302,7 @@ final class SettingsStore {
         isFreshInstall = defaults.data(forKey: Keys.providerDisplaySettings) == nil
             && defaults.object(forKey: Keys.showCodex) == nil
         providerDisplaySettings = Self.loadProviderDisplaySettings(defaults: defaults)
+        serviceOrder = Self.loadServiceOrder(defaults: defaults)
         usageServiceVisibility = Self.loadUsageServiceVisibility(defaults: defaults)
         // 菜单栏
         let mbWindowRaw = defaults.string(forKey: Keys.menuBarWindow) ?? MenuBarWindowChoice.primary.rawValue
@@ -290,7 +337,90 @@ final class SettingsStore {
         commandCodeCredentialPreference = CommandCodeCredentialPreference(rawValue: ccpRaw) ?? .automatic
         Self.mergeServiceSwitches(providers: &providerDisplaySettings, usage: &usageServiceVisibility)
         saveProviderDisplaySettings()
+        saveServiceOrder()
         saveUsageServiceVisibility()
+    }
+
+    /// 默认顺序：额度服务与 `QuotaProviderDescriptor.allProviders` 一致，再接只有用量的服务。
+    static var defaultServiceOrder: [ServiceOrderItem] {
+        QuotaProviderDescriptor.allProviders.map { .quota($0.app) }
+            + ServiceOrderItem.usageOnlyApps.map { .usage($0) }
+    }
+
+    /// 补齐后的全部服务顺序；设置页服务列表按这里排。
+    var orderedServices: [ServiceOrderItem] {
+        Self.normalizedServiceOrder(serviceOrder)
+    }
+
+    /// 按 `serviceOrder` 返回额度 Provider 描述符；未知 / 缺失项按默认序补齐。
+    var orderedProviders: [QuotaProviderDescriptor] {
+        let byApp = Dictionary(uniqueKeysWithValues: QuotaProviderDescriptor.allProviders.map { ($0.app, $0) })
+        return orderedServices.compactMap { item in
+            if case .quota(let app) = item { return byApp[app] }
+            return nil
+        }
+    }
+
+    var orderedMenuBarProviders: [QuotaProviderDescriptor] {
+        orderedProviders.filter(\.supportsMenuBar)
+    }
+
+    var orderedFloatingProviders: [QuotaProviderDescriptor] {
+        orderedProviders.filter(\.supportsFloatingHUD)
+    }
+
+    /// 按给定顺序重排；忽略非法值，缺省服务追加到末尾。
+    func reorderServices(_ ordered: [ServiceOrderItem]) {
+        let next = Self.normalizedServiceOrder(ordered)
+        guard next != serviceOrder else { return }
+        serviceOrder = next
+    }
+
+    /// 将 `source` 挪到 `target` 之前。
+    func moveService(_ source: ServiceOrderItem, before target: ServiceOrderItem) {
+        moveService(source, target: target, after: false)
+    }
+
+    /// 将 `source` 挪到 `target` 之后。
+    func moveService(_ source: ServiceOrderItem, after target: ServiceOrderItem) {
+        moveService(source, target: target, after: true)
+    }
+
+    private func moveService(_ source: ServiceOrderItem, target: ServiceOrderItem, after: Bool) {
+        var order = orderedServices
+        guard let from = order.firstIndex(of: source),
+              let to = order.firstIndex(of: target),
+              from != to else { return }
+        order.remove(at: from)
+        let targetIndex = order.firstIndex(of: target) ?? min(to, order.count)
+        let insertAt = min(targetIndex + (after ? 1 : 0), order.count)
+        order.insert(source, at: insertAt)
+        reorderServices(order)
+    }
+
+    static func normalizedServiceOrder(_ preferred: [ServiceOrderItem]) -> [ServiceOrderItem] {
+        let defaults = defaultServiceOrder
+        var seen = Set<ServiceOrderItem>()
+        var result: [ServiceOrderItem] = []
+        for item in preferred where defaults.contains(item) && !seen.contains(item) {
+            result.append(item)
+            seen.insert(item)
+        }
+        for item in defaults where !seen.contains(item) {
+            result.append(item)
+        }
+        return result
+    }
+
+    private static func loadServiceOrder(defaults: UserDefaults) -> [ServiceOrderItem] {
+        if let raw = defaults.array(forKey: Keys.serviceOrder) as? [String] {
+            return normalizedServiceOrder(raw.compactMap(ServiceOrderItem.init(rawValue:)))
+        }
+        return defaultServiceOrder
+    }
+
+    private func saveServiceOrder() {
+        defaults.set(serviceOrder.map(\.rawValue), forKey: Keys.serviceOrder)
     }
 
     func isProviderEnabled(_ app: QuotaApp) -> Bool {
@@ -421,10 +551,10 @@ final class SettingsStore {
         usageServiceVisibility[app] = visible
     }
 
-    /// 按固定顺序返回可见统计服务。Cursor 默认关闭；用户在设置页开启 Cursor 后，
-    /// 才会读取其远端用量缓存并进入统计页。
+    /// 按全部服务的顺序返回可见统计服务；没有用量的额度服务（Antigravity / Command Code）跳过。
+    /// Cursor 默认关闭；用户在设置页开启 Cursor 后，才会读取其远端用量缓存并进入统计页。
     var visibleUsageApps: [UsageApp] {
-        UsageApp.allCases.filter { isUsageServiceEffectivelyVisible($0) }
+        orderedServices.compactMap(\.usageApp).filter { isUsageServiceEffectivelyVisible($0) }
     }
 
     private static func loadUsageServiceVisibility(
@@ -542,6 +672,7 @@ final class SettingsStore {
 
     private enum Keys {
         static let providerDisplaySettings = "ccbar.settings.providerDisplaySettings.v1"
+        static let serviceOrder = "ccbar.settings.serviceOrder.v1"
         static let usageServiceVisibility = "ccbar.settings.usageServiceVisibility.v1"
         // 旧 key 仅用于首次迁移，后续不再写入。
         static let showCodex = "ccbar.settings.showCodex"

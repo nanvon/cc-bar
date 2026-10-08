@@ -466,6 +466,9 @@ struct StatsView: View {
         .onChange(of: SettingsStore.shared.usageServiceVisibility) { _, _ in
             reconcileServiceFilter()
         }
+        .onChange(of: SettingsStore.shared.serviceOrder) { _, _ in
+            reconcileServiceFilter()
+        }
         .onChange(of: viewMode) { _, mode in
             reconcileServiceFilter()
             // 离开滚动画布后清掉滚动状态，回到概览 / 额度时新画布从顶部开始。
@@ -575,13 +578,20 @@ struct StatsView: View {
 
     // MARK: Quota
 
-    /// 额度页随侧栏服务筛选：全部 → Codex + Claude；单选 Codex / Claude 只看该服务；
-    /// 其他服务没有额度周期与额度历史，整页显示空态。
+    /// 额度页随侧栏服务筛选：全部 → 按 Provider 自定义顺序的 Codex / Claude；
+    /// 单选只看该服务；其他服务没有额度周期与额度历史，整页显示空态。
     private var quotaApps: [UsageApp] {
+        let ordered: [UsageApp] = SettingsStore.shared.orderedProviders.compactMap { provider in
+            switch provider.app {
+            case .codex: return .codex
+            case .claude: return .claude
+            case .antigravity, .cursor, .commandCode: return nil
+            }
+        }
         switch serviceFilter {
-        case .all: return [.codex, .claude]
-        case .codex: return [.codex]
-        case .claude: return [.claude]
+        case .all: return ordered
+        case .codex: return ordered.contains(.codex) ? [.codex] : []
+        case .claude: return ordered.contains(.claude) ? [.claude] : []
         case .cursor, .pi, .opencode, .dsh: return []
         }
     }
@@ -911,44 +921,48 @@ struct StatsView: View {
         let apps = Set(quotaApps)
         var sections: [QuotaTimelineSection] = []
 
-        if apps.contains(.codex) {
-            let key = QuotaHistoryAccountKey.codexPrimary(accountId: appState.codexAccount?.accountId)
-            var addedPrimaryCodex = false
-            if shouldShowTimelineSection(accountKey: key, snapshot: appState.codexQuota, accountExists: appState.codexAccount != nil) {
-                sections.append(timelineSection(
-                    accountKey: key,
-                    title: "Codex",
-                    app: .codex,
-                    snapshot: appState.codexQuota,
-                    isLoading: appState.refreshState(for: .codex).inFlight
-                ))
-                addedPrimaryCodex = true
-            }
+        // 账号分区顺序跟 Provider 自定义序；Codex 副账号始终紧跟 Codex 主账号。
+        for app in quotaApps where apps.contains(app) {
+            switch app {
+            case .codex:
+                let key = QuotaHistoryAccountKey.codexPrimary(accountId: appState.codexAccount?.accountId)
+                var addedPrimaryCodex = false
+                if shouldShowTimelineSection(accountKey: key, snapshot: appState.codexQuota, accountExists: appState.codexAccount != nil) {
+                    sections.append(timelineSection(
+                        accountKey: key,
+                        title: "Codex",
+                        app: .codex,
+                        snapshot: appState.codexQuota,
+                        isLoading: appState.refreshState(for: .codex).inFlight
+                    ))
+                    addedPrimaryCodex = true
+                }
 
-            for account in appState.importedCodexAccounts {
-                // 展示层去重:主账号段已展示时,跳过与它同身份的镜像导入项(历史 key 不变,仍在盘上)。
-                if addedPrimaryCodex && appState.importedCodexAccountMirrorsPrimary(account) { continue }
-                let key = QuotaHistoryAccountKey.codexImported(id: account.id)
-                sections.append(timelineSection(
-                    accountKey: key,
-                    title: importedCodexTimelineTitle(account),
-                    app: .codex,
-                    snapshot: appState.importedCodexQuota(for: account),
-                    isLoading: appState.importedCodexRefreshState(for: account).inFlight
-                ))
-            }
-        }
-
-        if apps.contains(.claude) {
-            let key = QuotaHistoryAccountKey.claudePrimary(email: appState.claudeAccount?.email)
-            if shouldShowTimelineSection(accountKey: key, snapshot: appState.claudeQuota, accountExists: appState.claudeAccount != nil) {
-                sections.append(timelineSection(
-                    accountKey: key,
-                    title: "Claude Code",
-                    app: .claude,
-                    snapshot: appState.claudeQuota,
-                    isLoading: appState.refreshState(for: .claude).inFlight
-                ))
+                for account in appState.importedCodexAccounts {
+                    // 展示层去重:主账号段已展示时,跳过与它同身份的镜像导入项(历史 key 不变,仍在盘上)。
+                    if addedPrimaryCodex && appState.importedCodexAccountMirrorsPrimary(account) { continue }
+                    let importedKey = QuotaHistoryAccountKey.codexImported(id: account.id)
+                    sections.append(timelineSection(
+                        accountKey: importedKey,
+                        title: importedCodexTimelineTitle(account),
+                        app: .codex,
+                        snapshot: appState.importedCodexQuota(for: account),
+                        isLoading: appState.importedCodexRefreshState(for: account).inFlight
+                    ))
+                }
+            case .claude:
+                let key = QuotaHistoryAccountKey.claudePrimary(email: appState.claudeAccount?.email)
+                if shouldShowTimelineSection(accountKey: key, snapshot: appState.claudeQuota, accountExists: appState.claudeAccount != nil) {
+                    sections.append(timelineSection(
+                        accountKey: key,
+                        title: "Claude Code",
+                        app: .claude,
+                        snapshot: appState.claudeQuota,
+                        isLoading: appState.refreshState(for: .claude).inFlight
+                    ))
+                }
+            case .cursor, .pi, .opencode, .dsh:
+                break
             }
         }
 

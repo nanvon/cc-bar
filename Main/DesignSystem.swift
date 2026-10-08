@@ -254,7 +254,7 @@ struct ResetTimeText: View {
 // 见 docs/设计风格.md §12.3。
 // Stats KPI 卡、Daily usage panel、Settings PrefsGroup body、Onboarding DetectedAccount 全部用这一对。
 
-private struct PanelBackground: View {
+struct PanelBackground: View {
     @Environment(\.colorScheme) private var colorScheme
     var body: some View {
         Group {

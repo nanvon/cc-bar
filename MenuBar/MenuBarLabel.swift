@@ -19,7 +19,7 @@ struct MenuBarLabel: View {
     }
 
     private var visibleProviders: [QuotaProviderDescriptor] {
-        QuotaProviderDescriptor.menuBarProviders.filter {
+        SettingsStore.shared.orderedMenuBarProviders.filter {
             SettingsStore.shared.effectiveMenuBarVisibility(for: $0.app)
         }
     }
