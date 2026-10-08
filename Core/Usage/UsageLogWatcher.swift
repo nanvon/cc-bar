@@ -55,6 +55,7 @@ final class UsageLogWatcher {
     /// 已成功纳入监听的路径；用于判断是否有新出现的日志根需要重建 stream。
     private var watchedRoots: Set<String> = []
     private var lastScanStartedAt: Date?
+    private var suspendedForTermination = false
 
     private init() {}
 
@@ -76,12 +77,24 @@ final class UsageLogWatcher {
     /// 周期扫描的门控：返回 true 表示这一轮应该真的扫。
     /// 标记在扫描**开始前**清零，扫描期间产生的新事件会重新置位、由下一轮接手。
     func shouldScan(now: Date = Date()) -> Bool {
+        guard !suspendedForTermination else { return false }
         startIfNeeded()
         let forced = lastScanStartedAt.map { now.timeIntervalSince($0) >= Self.maxSkipInterval } ?? true
         let changed = changeFlag.consume()
         guard changed || forced else { return false }
         lastScanStartedAt = now
         return true
+    }
+
+    func suspendForTermination() {
+        suspendedForTermination = true
+        stopStream()
+    }
+
+    func resumeAfterCancelledTermination() {
+        suspendedForTermination = false
+        changeFlag.raise()
+        startIfNeeded()
     }
 
     // MARK: - FSEvents

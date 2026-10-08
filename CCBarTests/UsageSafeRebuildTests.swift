@@ -1096,6 +1096,60 @@ final class UsageSafeRebuildTests: XCTestCase {
         try assertSameDayVector(before.day, result(service).day, env: env)
     }
 
+    func testTerminationPersistsPendingUsageWithoutScanningNewLogEntries() async throws {
+        let env = environment!
+        let service = try await seed(env)
+        let before = try committed(env)
+        let initialTokens = env.totals(before.usageRollup.buckets, app: .claude).inputTokens
+        let url = env.claudeRoot.appendingPathComponent("fixture-project/safe-session.jsonl")
+        try env.append(
+            env.claudeLine(id: "quit-read", session: "safe-session", model: model,
+                           timestamp: timestamp(-0.1, from: Date()), input: 1_111, output: 111),
+            to: url
+        )
+        await service.scanNow()
+        XCTAssertEqual(try committed(env).snapshotID, before.snapshotID)
+        try env.append(
+            env.claudeLine(id: "quit-unread", session: "safe-session", model: model,
+                           timestamp: timestamp(-0.05, from: Date()), input: 2_222, output: 222),
+            to: url
+        )
+        service.suspendForTermination()
+        try await service.persistPendingForTermination()
+        let saved = try committed(env)
+        XCTAssertEqual(env.totals(saved.usageRollup.buckets, app: .claude).inputTokens, initialTokens + 1_111,
+                       "退出只保存已经读取的状态，不能额外扫描后追加的日志")
+        let restarted = env.makeService()
+        await env.bootstrap(restarted)
+        await restarted.scanNow()
+        XCTAssertEqual(env.totals(result(restarted).day, app: .claude).inputTokens, initialTokens + 3_333,
+                       "退出时保存的 watermark 必须与汇总一致，重启可补齐未读取的日志")
+    }
+
+    func testFailedTerminationSavePreservesPendingUsageForRetry() async throws {
+        let env = environment!
+        let service = try await seed(env)
+        let before = try committed(env)
+        let initialTokens = env.totals(before.usageRollup.buckets, app: .claude).inputTokens
+        try env.append(
+            env.claudeLine(id: "quit-retry", session: "safe-session", model: model,
+                           timestamp: timestamp(-0.1, from: Date()), input: 1_111, output: 111),
+            to: env.claudeRoot.appendingPathComponent("fixture-project/safe-session.jsonl")
+        )
+        await service.scanNow()
+        service.suspendForTermination()
+        env.faults.fail(at: .beforeCurrentReplace)
+        do {
+            try await service.persistPendingForTermination()
+            XCTFail("保存失败必须取消退出")
+        } catch {}
+        XCTAssertEqual(try committed(env).snapshotID, before.snapshotID)
+        XCTAssertEqual(env.totals(result(service).day, app: .claude).inputTokens, initialTokens + 1_111)
+        try await service.persistPendingForTermination()
+        XCTAssertEqual(env.totals(try committed(env).usageRollup.buckets, app: .claude).inputTokens,
+                       initialTokens + 1_111, "取消退出后的重试必须保留并保存 pending 用量")
+    }
+
     // MARK: - A23 写盘窗口内不重复写大快照
 
     func testUnchangedScanDoesNotRewriteSnapshotAndDeferredChangesSurviveRestart() async throws {

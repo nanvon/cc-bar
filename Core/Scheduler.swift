@@ -59,8 +59,11 @@ final class Scheduler {
     }
 
     private var nextDue: [Job: Date] = [:]
+    private var suspendedForTermination = false
+    private var didStart = false
 
     func start(appState: AppState, quotaInterval: TimeInterval?, usageInterval: TimeInterval?) {
+        didStart = true
         self.appState = appState
         self.quotaInterval = quotaInterval
         self.usageInterval = usageInterval
@@ -78,8 +81,21 @@ final class Scheduler {
         loopTask = nil
     }
 
+    func suspendForTermination() {
+        suspendedForTermination = true
+        stop()
+    }
+
+    func resumeAfterCancelledTermination() {
+        suspendedForTermination = false
+        guard didStart else { return }
+        rescheduleAll(from: Date())
+        restartLoop()
+    }
+
     /// 立即触发一次刷新（不打断现有周期）
     func refreshNow() {
+        guard !suspendedForTermination else { return }
         guard let appState else { return }
         Task { await appState.refreshQuotas(reason: .userInitiated) }
     }
@@ -180,6 +196,7 @@ final class Scheduler {
 
     /// 立即跑一遍全部任务并以此刻为新起点重排。用于系统唤醒 / 恢复可见。
     private func fireAllNow() {
+        guard !suspendedForTermination else { return }
         let now = Date()
         rescheduleAll(from: now)
         restartLoop()
@@ -190,7 +207,7 @@ final class Scheduler {
 
     private func restartLoop() {
         loopTask?.cancel()
-        guard !nextDue.isEmpty else {
+        guard !suspendedForTermination, !nextDue.isEmpty else {
             loopTask = nil
             return
         }
@@ -229,7 +246,7 @@ final class Scheduler {
         guard let appState else { return }
         // 顺序执行：三者都会碰 @MainActor 状态，并发只会互相排队，还会让唤醒期变长。
         for job in jobs {
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, !suspendedForTermination else { return }
             switch job {
             case .quota:
                 await appState.refreshQuotas(reason: .periodic)

@@ -2,17 +2,21 @@ import AppKit
 import Foundation
 import Observation
 
-// MARK: - UpdateStatus
+nonisolated struct AppTerminationError: Error, LocalizedError {
+    private let message: String
+    var errorDescription: String? { message }
 
-/// 设置页「检查更新」的展示状态。`checking` 时不再重复发起请求(去重)。
-enum UpdateStatus: Equatable {
-    case idle
-    case checking
-    case upToDate(latest: String)
-    case updateAvailable(version: String)
-    case failed
-    /// GitHub 匿名 API 额度被当前出口 IP 用尽,与普通失败区分展示,提示用户稍后重试。
-    case rateLimited
+    @MainActor static var busy: Self {
+        Self(message: tr("Data is still being saved. Try quitting again shortly.", "数据仍在保存，请稍后重新退出。"))
+    }
+
+    @MainActor static var timedOut: Self {
+        Self(message: tr("Saving took too long. CCBar will keep running; try quitting again shortly.", "等待保存超时。CCBar 将继续运行，请稍后重新退出。"))
+    }
+
+    @MainActor static func saveFailed(_ detail: String) -> Self {
+        Self(message: tr("Your data could not be saved. CCBar will keep running. \(detail)", "数据保存失败，CCBar 将继续运行。\(detail)"))
+    }
 }
 
 @Observable
@@ -158,6 +162,8 @@ final class AppState {
     private var claudeFallbackBackoffUntil: Date?
     /// 批次 C：本轮标脏的额度持久化文件，刷新 / bootstrap / 设置操作末尾统一落盘。
     private var dirtyQuotaFiles: Set<QuotaFile> = []
+    /// 已提交过的文件在正常退出时再确认一次，覆盖后台写入失败和晚到的旧提交。
+    private var quotaFilesForTermination: Set<QuotaFile> = []
     /// load 时被超长自检修复的周期 ID；在启动扫描后触发受限重建。
     private var pendingCycleRepairs: Set<String> = []
     /// 批次 C：额度持久化 coordinator，编码与原子写移出 MainActor。
@@ -183,13 +189,20 @@ final class AppState {
     /// 周期性后台刷新(Scheduler 的 quotaLoop/usageLoop)不走 `refreshNow()`,不会触发这个信号。
     var isRefreshing: Bool { refreshInFlight != nil }
 
-    /// 设置页「检查更新」状态;初始 idle,首次检查前不显示任何文案。
-    var updateStatus: UpdateStatus = .idle
+    private var terminationRequested = false
+    private var activeStateOperations = 0
+    private var terminationSaveTask: Task<Void, Never>?
+    private var terminationSaveResult: Result<Void, Error>?
+
+    /// 超时后已经开始的原子写入仍会完成，完成前继续阻止新的业务状态修改。
+    var isPreparingForTermination: Bool { terminationRequested || terminationSaveTask != nil }
 
     private let minSuccessInterval: TimeInterval = 60
     private let rateLimitBackoff: TimeInterval = 10 * 60
 
     func bootstrap() async {
+        guard beginStateOperation() else { return }
+        defer { activeStateOperations -= 1 }
         guard !didBootstrap else { return }
         didBootstrap = true
 
@@ -209,7 +222,7 @@ final class AppState {
         // Cursor 只读本机 SQLite，用于账号页和 Onboarding 的登录态检测；
         // 是否请求其远端额度仍由 Provider / Stats 开关控制。
         await loadCursor()
-        await loadCommandCode()
+        await loadCommandCode(allowDuringTermination: true)
         recordCachedQuotaCycleObservations()
         logCredentialSummary()
 
@@ -239,14 +252,6 @@ final class AppState {
         }
         // 启动后异步拉一次服务状态;后续由 Scheduler 5 分钟刷新一次
         Task { await refreshServiceStatus() }
-        // 启动时自动检查更新(可在设置中关闭)。延迟几秒避开启动高峰,不阻塞 bootstrap;
-        // 检查结果由设置页「检查更新」行展示。
-        if settings.autoCheckForUpdates {
-            Task {
-                try? await Task.sleep(nanoseconds: 5_000_000_000)
-                await checkForUpdates()
-            }
-        }
         // 启动 7 秒后打一次官方额度请求,让 Popover 尽快有最新额度(不阻塞 bootstrap)。
         // 走 .periodic:与定时刷新同规则,60s 最小间隔与 429 退避照常生效,不绕过限流;
         // 延迟期内的手动刷新会先置 inFlight,本任务到点后自动跳过。
@@ -266,6 +271,8 @@ final class AppState {
     }
 
     func refreshNow() async {
+        guard beginStateOperation() else { return }
+        defer { activeStateOperations -= 1 }
         // 去重:已有刷新在跑就直接返回,避免用户连点导致多份并发请求。
         // UI 端不依赖这里的 await 时长,按钮立刻就响应了。
         if refreshInFlight != nil { return }
@@ -285,6 +292,8 @@ final class AppState {
     /// loadCodex / loadClaude 内部会比较 accountId / email,若身份变化则清掉
     /// 旧的额度缓存,避免出现"新账号 + 旧额度"的错配。
     func refreshQuotas(reason: QuotaRefreshReason = .periodic) async {
+        guard beginStateOperation() else { return }
+        defer { activeStateOperations -= 1 }
         let plan = QuotaRefreshPlan.make(
             showCodex: SettingsStore.shared.showCodex,
             showClaude: SettingsStore.shared.showClaude,
@@ -341,6 +350,8 @@ final class AppState {
     /// 三个请求并发,任意一个失败不影响其他;三个全失败则置 `serviceStatusUnreachable`,
     /// 让 UI 把保留下来的旧状态点降级成"未知"而不是继续显示"服务正常"。
     func refreshServiceStatus() async {
+        guard beginStateOperation() else { return }
+        defer { activeStateOperations -= 1 }
         async let codex = Self.fetchServiceStatus(url: ServiceStatusClient.openAIStatusURL, tag: "openai")
         async let claude = Self.fetchServiceStatus(url: ServiceStatusClient.anthropicStatusURL, tag: "anthropic")
         async let cursor = Self.fetchServiceStatus(url: ServiceStatusClient.cursorStatusURL, tag: "cursor")
@@ -363,33 +374,78 @@ final class AppState {
         }
     }
 
-    // MARK: - Update check
+    // MARK: - 正常退出与更新重启
 
-    /// 检查 GitHub 是否有新版本。`checking` 期间重复调用直接返回(与 refreshNow 同款去重);
-    /// 失败置 `failed`,用户可再次点击重试。
-    func checkForUpdates() async {
-        guard updateStatus != .checking else { return }
-        updateStatus = .checking
+    private func beginStateOperation(allowDuringTermination: Bool = false) -> Bool {
+        guard terminationSaveTask == nil else { return false }
+        guard !terminationRequested || allowDuringTermination else { return false }
+        activeStateOperations += 1
+        return true
+    }
+
+    /// 只保存已读取的内存状态；不为退出发请求、扫描日志或重新计算历史。
+    func prepareForTermination() async throws {
+        guard !isPreparingForTermination else { throw AppTerminationError.busy }
+        terminationRequested = true
+        scheduler.suspendForTermination()
+        UsageLogWatcher.shared.suspendForTermination()
+        usageService.suspendForTermination()
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(30))
         do {
-            let info = try await UpdateChecker.fetchLatestRelease()
-            let current = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0"
-            if UpdateChecker.isNewer(tag: info.tag, than: current) {
-                updateStatus = .updateAvailable(version: info.tag)
-            } else {
-                updateStatus = .upToDate(latest: info.tag)
+            while activeStateOperations > 0 || usageService.hasActiveOperationsForTermination {
+                guard clock.now < deadline else { throw AppTerminationError.timedOut }
+                try await Task.sleep(nanoseconds: 100_000_000)
             }
-        } catch UpdateChecker.CheckError.rateLimited {
-            AppLog.warn(.app, "update check rate limited by GitHub")
-            updateStatus = .rateLimited
+            persistenceSequence &+= 1
+            let files = dirtyQuotaFiles.union(quotaFilesForTermination)
+            let snapshot = QuotaPersistenceCoordinator.Snapshot(
+                sequence: persistenceSequence,
+                cache: files.contains(.cache) ? quotaCache : nil,
+                history: files.contains(.history) ? quotaHistory : nil,
+                cycles: files.contains(.cycles) ? quotaCycles : nil
+            )
+            let coordinator = quotaPersistenceCoordinator
+            terminationSaveResult = nil
+            terminationSaveTask = Task {
+                defer {
+                    terminationSaveTask = nil
+                    if !terminationRequested { resumeAfterCancelledTermination() }
+                }
+                do {
+                    if didBootstrap {
+                        try await coordinator.persistForTermination(snapshot)
+                        dirtyQuotaFiles.removeAll()
+                        quotaFilesForTermination.removeAll()
+                        lastQuotaHistoryWriteAt = Date()
+                    }
+                    try await usageService.persistPendingForTermination()
+                    terminationSaveResult = .success(())
+                } catch {
+                    terminationSaveResult = .failure(error)
+                }
+            }
+            while terminationSaveResult == nil {
+                guard clock.now < deadline else { throw AppTerminationError.timedOut }
+                try await Task.sleep(nanoseconds: 100_000_000)
+            }
+            if case .some(.failure(let error)) = terminationSaveResult {
+                if let preparationError = error as? AppTerminationError { throw preparationError }
+                throw AppTerminationError.saveFailed(Redact.error(error))
+            }
         } catch {
-            AppLog.warn(.app, "update check failed: \(Redact.error(error))")
-            updateStatus = .failed
+            terminationRequested = false
+            resumeAfterCancelledTermination()
+            throw error
         }
     }
 
-    /// 打开 GitHub Releases 下载页。
-    func openReleasePage() {
-        NSWorkspace.shared.open(UpdateChecker.releasePageURL)
+    private func resumeAfterCancelledTermination() {
+        // 已经开始的同步原子写入不能强杀；完成前继续暂停业务，避免与旧快照竞争。
+        guard terminationSaveTask == nil else { return }
+        usageService.resumeAfterCancelledTermination()
+        UsageLogWatcher.shared.resumeAfterCancelledTermination()
+        scheduler.resumeAfterCancelledTermination()
     }
 
     func quotaStatusLine(for app: QuotaApp) -> String? {
@@ -533,6 +589,7 @@ final class AppState {
         alias: String,
         visibleInPopover: Bool
     ) throws {
+        guard !isPreparingForTermination else { throw AppTerminationError.busy }
         let tokens = ImportedCodexTokens(
             accessToken: parsed.accessToken,
             refreshToken: parsed.refreshToken,
@@ -566,6 +623,8 @@ final class AppState {
     /// PAT 不透明、本地拿不到 account_id，先联网发一次 usage 拿身份，再组复合 id 落库。
     /// 失败（令牌无效 / 无网络 / 缺 account_id）时抛错，由调用方展示。
     func importCodexPersonalAccessToken(token: String, visibleInPopover: Bool) async throws {
+        guard beginStateOperation() else { throw AppTerminationError.busy }
+        defer { activeStateOperations -= 1 }
         let result = await CodexQuotaClient.fetch(accessToken: token, accountId: nil)
         let fetched: CodexQuotaClient.Fetched
         switch result {
@@ -625,6 +684,7 @@ final class AppState {
 
     /// 仅更新元数据(别名、颜色、显示开关),不动 token。
     func updateImportedCodexMetadata(id: String, mutate: (inout ImportedCodexAccount) -> Void) {
+        guard !isPreparingForTermination else { return }
         var list = ImportedCodexStore.loadAll()
         guard let idx = list.firstIndex(where: { $0.id == id }) else { return }
         mutate(&list[idx])
@@ -637,6 +697,7 @@ final class AppState {
 
     /// 按给定 id 顺序重排导入账号(忽略不存在的 id,缺失的追加到末尾)。
     func reorderImportedCodexAccounts(orderedIds: [String]) {
+        guard !isPreparingForTermination else { return }
         let list = ImportedCodexStore.loadAll()
         let byId = Dictionary(uniqueKeysWithValues: list.map { ($0.id, $0) })
         var seen = Set<String>()
@@ -659,6 +720,7 @@ final class AppState {
 
     /// 删除:同步清 Keychain、元数据、运行时状态与缓存。
     func removeImportedCodexAccount(id: String) {
+        guard !isPreparingForTermination else { return }
         ImportedCodexStore.deleteTokens(accountId: id)
         let list = ImportedCodexStore.loadAll().filter { $0.id != id }
         do { try ImportedCodexStore.saveAll(list) } catch {
@@ -761,6 +823,8 @@ final class AppState {
     /// 按需拉取指定导入账号的额外「Full reset」credit(wham/rate-limit-reset-credits)。
     /// 懒加载:仅供设置页展开时调用一次,不接入 Scheduler 定时刷新,也不写入持久化快照。
     func fetchImportedCodexResetCredits(account: ImportedCodexAccount) async -> Result<CodexResetCreditsClient.Fetched, QuotaError> {
+        guard beginStateOperation() else { return .failure(.transport("CCBar is preparing to quit")) }
+        defer { activeStateOperations -= 1 }
         guard let tokens = ImportedCodexStore.loadTokens(accountId: account.id) else {
             return .failure(.missingToken)
         }
@@ -791,6 +855,8 @@ final class AppState {
     /// 与 `fetchImportedCodexResetCredits` 对称:懒加载,仅供设置页展开时调用一次,
     /// 不接入 Scheduler 定时刷新,也不写入持久化快照。
     func fetchCodexResetCredits() async -> Result<CodexResetCreditsClient.Fetched, QuotaError> {
+        guard beginStateOperation() else { return .failure(.transport("CCBar is preparing to quit")) }
+        defer { activeStateOperations -= 1 }
         guard let account = codexAccount, let token = account.accessToken else {
             return .failure(.missingToken)
         }
@@ -890,6 +956,7 @@ final class AppState {
     }
 
     private func beginImportedCodexRefresh(id: String, reason: QuotaRefreshReason) -> Bool {
+        guard !isPreparingForTermination else { return false }
         let now = Date()
         var state = importedCodexRefreshStates[id] ?? QuotaRefreshState()
         guard !state.inFlight else { return false }
@@ -984,6 +1051,9 @@ final class AppState {
             dirtyQuotaFiles.remove(.history)
             lastQuotaHistoryWriteAt = now
         }
+        if writesCache { quotaFilesForTermination.insert(.cache) }
+        if writesHistory { quotaFilesForTermination.insert(.history) }
+        if writesCycles { quotaFilesForTermination.insert(.cycles) }
         let coordinator = quotaPersistenceCoordinator
         Task.detached(priority: .utility) {
             await coordinator.submit(snapshot)
@@ -1105,6 +1175,8 @@ final class AppState {
     }
 
     private func loadCodex() async {
+        guard beginStateOperation(allowDuringTermination: true) else { return }
+        defer { activeStateOperations -= 1 }
         do {
             var next = try await Task.detached(priority: .utility) {
                 try CodexAuth.load()
@@ -1176,6 +1248,8 @@ final class AppState {
     /// 有 CLI 凭据就用它（邮箱等身份信息更全），完全没有时改从 Claude Desktop 认
     /// 账号——只用 Desktop、从没跑过 `claude` 的用户不该被判成"未配置 Claude"。
     private func loadClaude() async {
+        guard beginStateOperation(allowDuringTermination: true) else { return }
+        defer { activeStateOperations -= 1 }
         do {
             let next = try await Task.detached(priority: .utility) {
                 try ClaudeAuth.load()
@@ -1253,6 +1327,8 @@ final class AppState {
     }
 
     private func loadAntigravity() async {
+        guard beginStateOperation(allowDuringTermination: true) else { return }
+        defer { activeStateOperations -= 1 }
         do {
             var next = try await Task.detached(priority: .utility) {
                 try AntigravityCredentials.load()
@@ -1300,6 +1376,8 @@ final class AppState {
     }
 
     private func loadCursor() async {
+        guard beginStateOperation(allowDuringTermination: true) else { return }
+        defer { activeStateOperations -= 1 }
         do {
             let next = try await Task.detached(priority: .utility) {
                 try CursorAuth.load()
@@ -1344,7 +1422,9 @@ final class AppState {
         saveQuotaCache()
     }
 
-    func loadCommandCode() async {
+    func loadCommandCode(allowDuringTermination: Bool = false) async {
+        guard beginStateOperation(allowDuringTermination: allowDuringTermination) else { return }
+        defer { activeStateOperations -= 1 }
         let pref = SettingsStore.shared.commandCodeCredentialPreference
         let next = await Task.detached(priority: .utility) {
             CommandCodeAuth.load(preference: pref)
@@ -1537,6 +1617,7 @@ final class AppState {
     }
 
     private func beginAntigravityRefresh(reason: QuotaRefreshReason) -> Bool {
+        guard !isPreparingForTermination else { return false }
         let now = Date()
         guard !antigravityRefreshState.inFlight else { return false }
         if let backoffUntil = antigravityRefreshState.backoffUntil, backoffUntil > now {
@@ -1620,6 +1701,7 @@ final class AppState {
     }
 
     private func beginCommandCodeRefresh(reason: QuotaRefreshReason) -> Bool {
+        guard !isPreparingForTermination else { return false }
         let now = Date()
         guard !commandCodeRefreshState.inFlight else { return false }
         if let backoffUntil = commandCodeRefreshState.backoffUntil, backoffUntil > now {
@@ -1728,6 +1810,8 @@ final class AppState {
     /// 统计页选中 Cursor 尚未缓存的有限日期范围时按月补拉。仅重读当前 Cursor.app
     /// 登录态来处理 401，不触发 OAuth 刷新，也不影响已成功的额度快照。
     func loadCursorUsageHistory(for range: Range<Date>) async {
+        guard beginStateOperation() else { return }
+        defer { activeStateOperations -= 1 }
         guard let session = cursorAccount else { return }
         let initial = await usageService.loadCursorRemoteUsageHistory(session: session, range: range)
         guard initial?.httpStatusCode == 401 else { return }
@@ -1759,6 +1843,7 @@ final class AppState {
     }
 
     private func beginCodexRefresh(reason: QuotaRefreshReason) -> Bool {
+        guard !isPreparingForTermination else { return false }
         let now = Date()
         guard !codexRefreshState.inFlight else { return false }
         if let backoffUntil = codexRefreshState.backoffUntil, backoffUntil > now {
@@ -1777,6 +1862,7 @@ final class AppState {
     }
 
     private func beginClaudeRefresh(reason: QuotaRefreshReason) -> Bool {
+        guard !isPreparingForTermination else { return false }
         let now = Date()
         guard !claudeRefreshState.inFlight else { return false }
         if let backoffUntil = claudeRefreshState.backoffUntil, backoffUntil > now {
@@ -1795,6 +1881,7 @@ final class AppState {
     }
 
     private func beginCursorRefresh(reason: QuotaRefreshReason) -> Bool {
+        guard !isPreparingForTermination else { return false }
         let now = Date()
         guard !cursorRefreshState.inFlight else { return false }
         if let backoffUntil = cursorRefreshState.backoffUntil, backoffUntil > now {

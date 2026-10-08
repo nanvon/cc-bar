@@ -4,5 +4,8 @@
 <dict>
     <key>com.apple.security.app-sandbox</key>
     <false/>
+    <!-- 免费 ad-hoc 分发没有 Team ID，允许加载 Sparkle 框架；更新包独立验签。 -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
 </dict>
 </plist>

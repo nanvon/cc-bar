@@ -145,6 +145,28 @@ final class QuotaPersistenceCoordinatorTests: XCTestCase {
         XCTAssertFalse(fileExists("history.json"))
         XCTAssertFalse(fileExists("cycles.json"))
     }
+
+    func testTerminationSaveReportsFailureAndCanRetrySameSequence() async throws {
+        let counter = Counter()
+        let coordinator = QuotaPersistenceCoordinator { snapshot in
+            if counter.increment() == 1 { throw CocoaError(.fileWriteUnknown) }
+            try Self.write(snapshot, to: self.tempDir)
+        }
+        let final = snapshot(sequence: 2, cache: true, history: true, cycles: true)
+        do {
+            try await coordinator.persistForTermination(final)
+            XCTFail("退出保存失败必须返回错误，不能允许退出")
+        } catch {
+            XCTAssertEqual((error as? CocoaError)?.code, .fileWriteUnknown)
+        }
+        try await coordinator.persistForTermination(final)
+        await coordinator.submit(snapshot(sequence: 1, cache: true))
+        XCTAssertEqual(lastWrittenSequence(), 2)
+        XCTAssertTrue(fileExists("cache.json"))
+        XCTAssertTrue(fileExists("history.json"))
+        XCTAssertTrue(fileExists("cycles.json"))
+        XCTAssertEqual(counter.value, 2, "保存成功后较旧的排队写入不能再覆盖最终状态")
+    }
 }
 
 /// 线程安全的调用计数器（测试辅助）。

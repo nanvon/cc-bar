@@ -1,8 +1,12 @@
 import AppKit
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var openStatisticsWindow: (() -> Void)?
     private var shouldOpenStatisticsWhenReady = false
+    private var terminationHandler: (@MainActor () async throws -> Void)?
+    private var terminationFailureHandler: (@MainActor (Error) -> Bool)?
+    private var terminationTask: Task<Void, Never>?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -20,6 +24,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         AppLog.info(.app, "terminating")
         AppLog.shared.flushNow()
+    }
+
+    /// 普通退出和更新重启都等业务数据保存成功后再退出。
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let terminationHandler else { return .terminateNow }
+        guard terminationTask == nil else { return .terminateLater }
+        terminationTask = Task {
+            do {
+                try await terminationHandler()
+                sender.reply(toApplicationShouldTerminate: true)
+            } catch {
+                AppLog.error(.persistence, "termination cancelled: \(Redact.error(error))")
+                sender.reply(toApplicationShouldTerminate: false)
+                terminationTask = nil
+                if terminationFailureHandler?(error) == true { return }
+                let alert = NSAlert()
+                alert.messageText = tr("CCBar could not quit", "CCBar 未能退出")
+                alert.informativeText = error.localizedDescription
+                alert.alertStyle = .warning
+                alert.addButton(withTitle: tr("OK", "好"))
+                NSApp.activate(ignoringOtherApps: true)
+                alert.runModal()
+            }
+        }
+        return .terminateLater
+    }
+
+    func installTerminationHandler(_ handler: @escaping @MainActor () async throws -> Void) {
+        terminationHandler = handler
+    }
+
+    func installTerminationFailureHandler(_ handler: @escaping @MainActor (Error) -> Bool) {
+        terminationFailureHandler = handler
     }
 
     func applicationShouldHandleReopen(

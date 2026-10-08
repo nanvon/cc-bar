@@ -1,6 +1,6 @@
 import Foundation
 
-// MARK: - UpdateChecker（GitHub 发布检查）
+// MARK: - UpdateChecker（旧客户端清单与版本解析）
 //
 // 数据源(两级降级,均为公开仓库匿名访问):
 //   1. 版本清单 `https://github.com/{owner}/{repo}/releases/latest/download/version.json`
@@ -10,14 +10,12 @@ import Foundation
 //      所以只作为清单不可用(如清单尚未随该 release 发布)时的备选,不作为主路。
 //
 // 版本号来自 release tag(`vX.Y.Z`),与 project.pbxproj 的 MARKETING_VERSION / Info.plist 的
-// CFBundleShortVersionString 对应。只做按需检查,不做轮询。
-//
-// 只负责告知与跳转下载页(Release page),不做自动下载/安装——工程是 ad-hoc 签名、
-// 未公证,自动替换会被 Gatekeeper 拦截,且覆盖 /Applications 中的安装有风险。
+// CFBundleShortVersionString 对应。新客户端由 AppUpdater / Sparkle 管理检查与安装；
+// 保留这些辅助函数供版本日志过滤、历史客户端协议和现有隔离测试使用。
 //
 // 见 docs/技术实现.md "更新检查" 一节。
 
-enum UpdateChecker {
+nonisolated enum UpdateChecker {
     /// 仓库大小写与 README 中徽章一致;如日后换仓库只需改这两处。
     static let repoOwner = "nanvon"
     static let repoName = "cc-bar"

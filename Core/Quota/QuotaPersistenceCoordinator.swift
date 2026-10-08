@@ -68,6 +68,14 @@ actor QuotaPersistenceCoordinator {
         }
     }
 
+    /// 退出时提交完整快照并向调用方报告失败。actor 保证之前的写入先完成；
+    /// 成功后序列号较旧的 detached 提交即使晚到，也不能覆盖这份最终状态。
+    func persistForTermination(_ snapshot: Snapshot) throws {
+        guard snapshot.sequence > lastWrittenSequence else { return }
+        try writer(snapshot)
+        lastWrittenSequence = snapshot.sequence
+    }
+
     private func merged(_ current: Snapshot?, with incoming: Snapshot) -> Snapshot {
         Snapshot(
             sequence: incoming.sequence,

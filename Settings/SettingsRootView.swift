@@ -43,6 +43,7 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
 
 struct SettingsRootView: View {
     @Environment(AppState.self) private var appState
+    private let updater = AppUpdater.shared
     @State private var selectedCategory: SettingsCategory = .services
     @State private var launchAtLoginMessage: String?
     @State private var launchAtLoginMessageIsError = false
@@ -661,11 +662,7 @@ struct SettingsRootView: View {
                             .multilineTextAlignment(.trailing)
                     }
                     Button {
-                        if updateStatusHasNewVersion {
-                            appState.openReleasePage()
-                        } else {
-                            Task { await appState.checkForUpdates() }
-                        }
+                        updater.checkForUpdates()
                     } label: {
                         if isUpdateCheckInProgress {
                             ProgressView()
@@ -680,10 +677,21 @@ struct SettingsRootView: View {
                 }
             }
             InsetDivider()
-            PrefsRow(label: "Check at launch", chinese: "启动时自动检查") {
+            PrefsRow(label: "Last checked", chinese: "上次检查") {
+                if let date = updater.lastCheckedAt {
+                    Text(date, format: .dateTime.month().day().hour().minute())
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                } else {
+                    Text("—").foregroundStyle(.secondary)
+                }
+            }
+            InsetDivider()
+            PrefsRow(label: "Automatically check for updates", chinese: "自动检查更新") {
                 Toggle("", isOn: Binding(
-                    get: { settings.autoCheckForUpdates },
-                    set: { settings.autoCheckForUpdates = $0 }
+                    get: { updater.automaticChecks },
+                    set: { updater.setAutomaticChecks($0) }
                 ))
                 .labelsHidden()
                 .toggleStyle(.switch)
@@ -1110,36 +1118,24 @@ struct SettingsRootView: View {
     // MARK: Update check helpers
 
     private var isUpdateCheckInProgress: Bool {
-        appState.updateStatus == .checking
+        updater.phase == .checking
     }
 
     private var updateStatusHasNewVersion: Bool {
-        if case .updateAvailable = appState.updateStatus { return true }
-        return false
+        updater.hasUpdate
     }
 
     private var updateStatusIsError: Bool {
-        appState.updateStatus == .failed || appState.updateStatus == .rateLimited
+        updater.phase == .failed
     }
 
     private var updateStatusText: String? {
-        switch appState.updateStatus {
-        case .idle, .checking:
-            return nil
-        case .upToDate(let latest):
-            return tr("Up to date (\(latest))", "已是最新（\(latest)）")
-        case .updateAvailable(let version):
-            return tr("Version \(version) is available", "发现新版本 \(version)")
-        case .failed:
-            return tr("Check failed", "检查失败")
-        case .rateLimited:
-            return tr("GitHub rate limit reached, try again later", "GitHub 暂时限流，请稍后再试")
-        }
+        updater.statusText
     }
 
     private var updateButtonTitle: String {
-        updateStatusHasNewVersion
-            ? tr("Download", "前往下载")
+        updateStatusHasNewVersion || updater.isWorking
+            ? tr("View update", "查看更新")
             : tr("Check", "检查")
     }
 

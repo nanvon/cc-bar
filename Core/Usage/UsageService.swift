@@ -145,6 +145,8 @@ final class UsageService {
 
     private weak var appState: AppState?
     private var scanQueued = false
+    private var suspendedForTermination = false
+    private var isPersistingForTermination = false
     private var requiresFullRebuild = false
     private var loadedRollupGeneration: String?
     private var loadedCycleGeneration: String?
@@ -158,6 +160,7 @@ final class UsageService {
     private(set) var cycleUsageNeedsManualRecalculation = false
     /// Cursor 远端日桶独立于本地 scan-state / usage-rollup 的持久化状态。
     private var cursorUsageCache = CursorUsageCachePayload()
+    private var cursorCacheNeedsPersistence = false
     private var cursorRemoteAccountID: String?
     private var cursorRemoteBackoffUntil: Date?
     private(set) var isRefreshingCursorRemoteUsage = false
@@ -237,6 +240,78 @@ final class UsageService {
     /// 上一轮成功提交的 ScanState 常驻内存，避免每轮扫描都从磁盘重读重解码。
     /// 冷启动首轮才从快照恢复；快照没有可信进度时为 nil，此时不允许续扫。
     private var cachedScanState: ScanState?
+
+    var hasActiveOperationsForTermination: Bool {
+        isScanning || isCycleRebuilding || isRefreshingPricingCatalog
+            || isRefreshingCursorRemoteUsage || isPersistingForTermination
+    }
+
+    func suspendForTermination() {
+        suspendedForTermination = true
+        scanQueued = false
+    }
+
+    func resumeAfterCancelledTermination() {
+        suspendedForTermination = false
+    }
+
+    /// 提交已经聚合的用量与对应 watermark，不重新读取日志、不改变计价口径。
+    /// 保存失败保留内存中的 pending，用户可在取消退出后重试。
+    func persistPendingForTermination() async throws {
+        guard !hasActiveOperationsForTermination else { throw AppTerminationError.busy }
+        isPersistingForTermination = true
+        defer { isPersistingForTermination = false }
+        if cursorCacheNeedsPersistence {
+            let cache = cursorUsageCache
+            let directory = cursorCacheDirectory
+            try await Task.detached(priority: .utility) {
+                try CursorUsageCache.save(cache, in: directory)
+            }.value
+            cursorCacheNeedsPersistence = false
+        }
+        guard !storeWriteDisabled else { return }
+        let hasUnwrittenProgress = cachedScanState != nil && cachedScanState != committedSnapshot?.scanState
+        guard hasUnwrittenRollupChanges || hasUnwrittenProgress else { return }
+        guard let previousState = cachedScanState ?? committedSnapshot?.scanState else { return }
+
+        // 没有可信进度的迁移历史按原 snapshot 保存，不能在退出时标成完整历史。
+        if cachedScanState == nil, let snapshot = committedSnapshot {
+            if let error = await persistExistingSnapshot(snapshot) {
+                throw AppTerminationError.saveFailed(Redact.message(error))
+            }
+            hasUnwrittenRollupChanges = false
+            lastRollupWriteAt = Date()
+            return
+        }
+        var scanState = previousState
+        let snapshotID = UUID().uuidString
+        scanState.generationID = snapshotID
+        let conversation = conversationAggregator.snapshot()
+        let error = await persistSnapshot(
+            snapshotID: snapshotID,
+            fingerprint: scanState.pricingFingerprint,
+            hasScanProgress: true,
+            // 退出只保存现状，不能把尚未核对的降级原因当成已经修复。
+            integrity: committedSnapshot?.integrity ?? .complete,
+            degradeReasons: committedSnapshot?.degradeReasons ?? historyDegradeReasons,
+            dshHistoryFrozen: isDshHistoryFrozen,
+            scanState: scanState,
+            buckets: aggregator.snapshotLocal(),
+            conversationInfos: conversation.infos,
+            conversationBuckets: conversation.buckets,
+            cycleBuckets: cycleAggregator.snapshot(),
+            cycleInitialRebuildCompletedAt: cycleInitialRebuildCompletedAt,
+            cycleInitialRebuildCompletedApps: cycleInitialRebuildCompletedApps,
+            dshContributions: dshContributions,
+            dshRequiresRebuild: dshNeedsFullRescan
+        )
+        if let error { throw AppTerminationError.saveFailed(Redact.message(error)) }
+        cachedScanState = scanState
+        loadedRollupGeneration = snapshotID
+        loadedCycleGeneration = snapshotID
+        hasUnwrittenRollupChanges = false
+        lastRollupWriteAt = Date()
+    }
 
     /// DSH 逐会话贡献缓存（常驻内存副本）。它是 DSH 日 / 对话分区的唯一来源：
     /// 每轮从全部贡献重新归并并**整体替换** DSH 分区，避免 generation 切换或父链变化把历史加两遍。
@@ -448,6 +523,7 @@ final class UsageService {
         } else {
             aggregator.loadRemote(from: [])
             cursorUsageCache = CursorUsageCachePayload(accountID: normalizedID)
+            cursorCacheNeedsPersistence = false
         }
         cursorRemoteUsageError = nil
         cursorRemoteBackoffUntil = nil
@@ -466,6 +542,7 @@ final class UsageService {
         now: Date = Date(),
         calendar: Calendar = .current
     ) async -> CursorUsageError? {
+        guard !suspendedForTermination, !isPersistingForTermination else { return nil }
         activateCursorRemoteUsage(accountID: session.userID)
         guard !isRefreshingCursorRemoteUsage else { return nil }
         if let backoffUntil = cursorRemoteBackoffUntil, backoffUntil > now {
@@ -484,6 +561,7 @@ final class UsageService {
         isRefreshingCursorRemoteUsage = true
         defer { isRefreshingCursorRemoteUsage = false }
         for range in ranges {
+            guard !suspendedForTermination else { return nil }
             let result = await CursorUsageFetcher.fetch(
                 cookieHeader: session.cookieHeader,
                 from: range.lowerBound,
@@ -561,6 +639,7 @@ final class UsageService {
         now: Date = Date(),
         calendar: Calendar = .current
     ) async -> CursorUsageError? {
+        guard !suspendedForTermination, !isPersistingForTermination else { return nil }
         activateCursorRemoteUsage(accountID: session.userID)
         guard let requestedRange = normalizedCursorHistoryRange(range, now: now, calendar: calendar) else {
             return nil
@@ -569,7 +648,7 @@ final class UsageService {
         // 与周期刷新共用一个远端槽，避免相同日桶并发覆盖。这里等待正在进行的短刷新，
         // 让用户切换历史范围时的请求不会被悄悄丢弃。
         while isRefreshingCursorRemoteUsage {
-            guard !Task.isCancelled else { return nil }
+            guard !Task.isCancelled, !suspendedForTermination, !isPersistingForTermination else { return nil }
             try? await Task.sleep(nanoseconds: 200_000_000)
         }
 
@@ -585,7 +664,7 @@ final class UsageService {
         defer { isRefreshingCursorRemoteUsage = false }
 
         for chunk in missing.flatMap({ cursorHistoryMonthChunks(for: $0, calendar: calendar) }) {
-            guard !Task.isCancelled else { return nil }
+            guard !Task.isCancelled, !suspendedForTermination else { return nil }
             let fetchEnd = min(chunk.upperBound, now)
             guard chunk.lowerBound < fetchEnd else { continue }
 
@@ -639,12 +718,14 @@ final class UsageService {
         cursorRemoteBackoffUntil = nil
         publishTotals()
 
+        cursorCacheNeedsPersistence = true
         let cacheSnapshot = cursorUsageCache
         let cursorCacheDirectory = self.cursorCacheDirectory
         do {
             try await Task.detached(priority: .utility) {
                 try CursorUsageCache.save(cacheSnapshot, in: cursorCacheDirectory)
             }.value
+            cursorCacheNeedsPersistence = false
         } catch {
             // 远端内存快照仍可展示；下一轮成功刷新会再次尝试原子写缓存。
             cursorRemoteUsageError = "Cursor usage cache save failed: \(error)"
@@ -701,6 +782,7 @@ final class UsageService {
     /// 手动刷新（`refreshNow`）与强制重算（`forceRescan`）直接走 `scanNow` / 全量路径，
     /// 不受门控影响，用户点了就一定扫。
     func scanPeriodically() async {
+        guard !suspendedForTermination, !isPersistingForTermination else { return }
         guard UsageLogWatcher.shared.shouldScan() else {
             AppLog.debug(.usage, "usage scan skipped; no log changes since last scan")
             return
@@ -710,6 +792,7 @@ final class UsageService {
 
     /// 由 Scheduler / 手动触发；防重入。
     func scanNow() async {
+        guard !suspendedForTermination, !isPersistingForTermination else { return }
         if isScanning {
             scanQueued = true
             return
@@ -734,7 +817,7 @@ final class UsageService {
             if await runScan(prev: cacheResult.state, allowDeferredWrite: true) {
                 requiresFullRebuild = false
             }
-        } while scanQueued
+        } while scanQueued && !suspendedForTermination
     }
 
     /// 受限恢复：历史可用但进度不可信。
@@ -785,9 +868,11 @@ final class UsageService {
     /// 触发频率高（5h / weekly 滚动，每天数次），必须保持轻量；
     /// 全量重建只在冷启动且 cycle rollup 无效时发生一次（见 `rebuildCycleUsageIfNeeded`）。
     func rebuildCycleUsageForRecentChanges() async {
+        guard !suspendedForTermination, !isPersistingForTermination else { return }
         guard let appState, !appState.quotaCycles.records.isEmpty else { return }
         while isScanning || isCycleRebuilding {
             try? await Task.sleep(nanoseconds: 150_000_000)
+            guard !suspendedForTermination, !isPersistingForTermination else { return }
         }
 
         isCycleRebuilding = true
@@ -1100,6 +1185,7 @@ final class UsageService {
     }
 
     func rebuildCycleUsageIfNeeded() async {
+        guard !suspendedForTermination, !isPersistingForTermination else { return }
         guard let appState, !appState.quotaCycles.records.isEmpty else { return }
         guard !storeWriteDisabled, historyRecoveryState == .complete else { return }
         guard !Self.pendingInitialCycleRebuildApps(
@@ -1108,6 +1194,7 @@ final class UsageService {
         ).isEmpty else { return }
         while isScanning || isCycleRebuilding {
             try? await Task.sleep(nanoseconds: 150_000_000)
+            guard !suspendedForTermination, !isPersistingForTermination else { return }
             if Self.pendingInitialCycleRebuildApps(
                 cycles: appState.quotaCycles.records,
                 completedApps: cycleInitialRebuildCompletedApps
@@ -1204,11 +1291,13 @@ final class UsageService {
     /// 用户在设置页手动触发的强制重算。候选在独立的聚合器上生成，
     /// 通过完整用量向量对账并成功持久化后才替换当前结果；失败一律保留原历史。
     func forceRescan() async {
+        guard !suspendedForTermination, !isPersistingForTermination else { return }
         // 撞上另一次进行中的扫描(常见于 App 冷启动自动扫描、或 Scheduler 定时扫描)时,
         // 不再静默丢弃这次操作:等它跑完再真正强制重算,保证用户点的这次一定生效。
         // 设置页按钮的 spinner 在等待期间会一直转,用户感知不到差异,只是变"诚实"了。
         while isScanning {
             try? await Task.sleep(nanoseconds: 150_000_000)
+            guard !suspendedForTermination, !isPersistingForTermination else { return }
         }
         isScanning = true
         defer {
@@ -1565,6 +1654,7 @@ final class UsageService {
     /// 需要对齐历史时用「重新计算用量」（forceRescan）。
     @discardableResult
     func refreshPricingCatalog() async -> Bool {
+        guard !suspendedForTermination, !isPersistingForTermination else { return false }
         guard !isRefreshingPricingCatalog else { return false }
         isRefreshingPricingCatalog = true
         defer { isRefreshingPricingCatalog = false }

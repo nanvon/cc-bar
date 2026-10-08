@@ -44,6 +44,12 @@ private struct MenuBarLabelRoot: View {
     var body: some View {
         MenuBarLabel()
             .onAppear {
+                appDelegate.installTerminationHandler {
+                    try await appState.prepareForTermination()
+                }
+                appDelegate.installTerminationFailureHandler { error in
+                    AppUpdater.shared.terminationPreparationFailed(error)
+                }
                 appDelegate.installOpenStatisticsHandler {
                     // 首次启动仍由 Onboarding 接管，不同时打开主窗口。
                     guard SettingsStore.shared.didCompleteOnboarding else { return }
@@ -57,6 +63,7 @@ private struct MenuBarLabelRoot: View {
                 // 它会读真实日志、写真实 rollup / 缓存。测试自己注入临时目录驱动 UsageService。
                 guard !AppRuntime.isRunningUnitTests else { return }
                 await appState.bootstrap()
+                AppUpdater.shared.start()
                 FloatingPanelController.shared.attach(appState: appState)
                 FloatingPanelController.shared.openSettingsHandler = {
                     appState.mainTab = .settings
@@ -98,6 +105,11 @@ private struct AppCommands: Commands {
     @Environment(\.openWindow) private var openWindow
 
     var body: some Commands {
+        CommandGroup(after: .appInfo) {
+            Button(tr("Check for Updates…", "检查更新…")) {
+                AppUpdater.shared.checkForUpdates()
+            }
+        }
         CommandGroup(replacing: .appSettings) {
             Button(tr("Preferences…", "设置")) {
                 appState.mainTab = .settings

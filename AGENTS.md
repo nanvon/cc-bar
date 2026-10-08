@@ -96,8 +96,9 @@ xcodebuild -project ccbar.xcodeproj -scheme ccbar -configuration Debug -destinat
 ./scripts/build.sh
 ```
 
+- 更新签名需按 `docs/打包发布.md` 一次性配置公钥和 CI 私钥；本地打包传入 `SPARKLE_PUBLIC_ED_KEY`。缺失时正式打包 / 发布会停止，避免分发无法验证更新的 App。
 - 首次需要把命令行工具指向完整 Xcode（一次性）：`sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`。
-- 脚本用 `CODE_SIGN_IDENTITY="" CODE_SIGNING_ALLOWED=NO` 做 Release 构建，工具链自动 ad-hoc 签名，可在任意 Mac 运行，不需要付费 Developer ID 证书或公证。
+- 脚本用 `CODE_SIGN_IDENTITY="" CODE_SIGNING_ALLOWED=NO` 做 Release 构建，再为 Sparkle 嵌套组件和主 App 逐层 ad-hoc 签名，不需要付费 Developer ID 证书或公证。支持的 CPU 架构以实际构建产物为准。
 - **产物固定输出到 `dist/CCBar.dmg` 和 `dist/CCBar.app.zip`**（`dist/` 已在 `.gitignore` 里，不进版本库）。脚本会先清空 `build/` 目录再重新构建。
 - 打包好的 DMG 和 zip 上传到 GitHub Release 即可分发；不要直接替换用户本机 `/Applications/CCBar.app`——那是覆盖用户正在使用的安装，属于有风险操作，要打包验证就在 `dist/` 或临时目录里查看，不要动 `/Applications`。
 - 完整背景说明见 [README.md](README.md#从源码构建) 和 [docs/打包发布.md](docs/打包发布.md)（该文档里的 Archive / Developer ID 流程只是给需要公证发布给别人用的场景保留的可选项，日常打包不要用）。
@@ -109,7 +110,7 @@ xcodebuild -project ccbar.xcodeproj -scheme ccbar -configuration Debug -destinat
 1. **提交代码**：把当前工作区未提交的改动按仓库惯例的 commit message 风格提交（可用 `git-commit-messages` skill；无关改动分开提交，不要混在一起）。
 2. **编写用户更新说明**：对比上一个 `v*` tag 与当前代码、提交和文档，只提炼真实、用户可感知的新增功能、问题修复、体验优化和必要注意事项；不要罗列 commit、文件、重构、CI 或版本号。创建 `release-notes/vX.Y.Z.md`，格式和正文规则见 [release-notes/README.md](release-notes/README.md)：只写更新内容本身：按「注意 / 新增 / 修复 / 优化」分组，组头用加粗（不用 `#` 标题，Release 页字号过大），组内每条一行列出；不加安装说明等每版重复的固定段落。文件全文原样作为 Release 正文，Release 标题沿用默认的 tag 名。
 3. **版本号 +1**：修改 `ccbar.xcodeproj/project.pbxproj` 里两处 `MARKETING_VERSION`（Debug/Release 配置各一处，要同时改），patch 位 +1（如 `1.0.0` → `1.0.1`），除非用户明确要求升 minor/major。把版本号和 `release-notes/vX.Y.Z.md` 一起单独提交，message 形如 `chore: 发布 vX.Y.Z`。
-4. **触发远程构建发布**：推送分支 + 打带 `v` 前缀的 tag 触发 [.github/workflows/release.yml](.github/workflows/release.yml)，由 GitHub 的 macOS runner 自动运行 `scripts/build.sh`、读取同名更新说明，并将 `dist/CCBar.dmg`、`dist/CCBar.app.zip` 与 `dist/version.json`（App 检查更新读取的版本清单，由 workflow 自动生成，本地打包不产出）挂到 GitHub Release：
+4. **触发远程构建发布**：推送分支 + 打带 `v` 前缀的 tag 触发 [.github/workflows/release.yml](.github/workflows/release.yml)，由 GitHub 的 macOS runner 自动运行 `scripts/build.sh`、读取同名更新说明，并将 `dist/CCBar.dmg`、`dist/CCBar.app.zip`、`dist/appcast.xml`、`dist/release-notes.md` 与 `dist/version.json`（新版读取签名 appcast，version.json 保留给旧客户端；均由 workflow 生成，本地打包不产出）挂到 GitHub Release：
    ```bash
    git push origin main
    git tag vX.Y.Z

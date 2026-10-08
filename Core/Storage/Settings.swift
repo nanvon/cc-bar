@@ -271,8 +271,12 @@ final class SettingsStore {
     /// 截图隐私模式：全局隐藏账号、项目及对话身份；保留真实用量统计。
     var privacyMode: Bool { didSet { defaults.set(privacyMode, forKey: Keys.privacyMode) } }
 
-    /// 启动时自动检查 GitHub 是否有新版本(默认开;只读静态版本清单,手动检查始终可用)
-    var autoCheckForUpdates: Bool { didSet { defaults.set(autoCheckForUpdates, forKey: Keys.autoCheckForUpdates) } }
+    /// Sparkle 管理检查偏好；旧版开关只作为首次迁移的兜底，保留用户关闭的选择。
+    var autoCheckForUpdates: Bool {
+        defaults.object(forKey: "SUEnableAutomaticChecks") as? Bool
+            ?? defaults.object(forKey: Keys.autoCheckForUpdates) as? Bool
+            ?? true
+    }
 
     /// 详细日志(默认关)。打开后 `AppLog` 的 debug 级别才落盘,排查完建议关掉。
     /// 与 `privacyMode` 无关——那是界面打码,日志脱敏始终无条件生效。
@@ -329,7 +333,6 @@ final class SettingsStore {
         appLanguage = AppLanguage(rawValue: langRaw) ?? .system
         launchAtLogin = Self.isLaunchAtLoginOn(SMAppService.mainApp.status)
         privacyMode = defaults.object(forKey: Keys.privacyMode) as? Bool ?? false
-        autoCheckForUpdates = defaults.object(forKey: Keys.autoCheckForUpdates) as? Bool ?? true
         verboseLogging = defaults.object(forKey: Keys.verboseLogging) as? Bool ?? false
         didShowKeychainPrompt = defaults.object(forKey: Keys.didShowKeychainPrompt) as? Bool ?? false
         didCompleteOnboarding = defaults.object(forKey: Keys.didCompleteOnboarding) as? Bool ?? false

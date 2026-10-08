@@ -2,15 +2,12 @@
 #
 # build.sh — 命令行构建 CCBar 并同时打包成可分发的 DMG 和 zip。
 #
-# 思路和主流免费开源 Mac App(如 Burrow)一致:不用付费证书、不做公证,
-# 用 CODE_SIGNING_ALLOWED=NO 让工具链自动给 arm64 打上 ad-hoc 签名,
-# 得到一个能在任意 Mac 上执行的 ad-hoc 包;用户首次手动去隔离一次即可。
-#
-# 相比 Xcode GUI 的 Archive 导出,这条路不会引入 "Apple Development" 开发证书,
-# 所以也不需要事后重签脚本。
+# 免费 ad-hoc 分发。Sparkle 的框架和安装助手逐层签名后，再封装外层 App；
+# Sparkle 的 EdDSA 更新包签名由 release workflow 完成，和 Apple 代码签名独立。
 #
 # 用法:
-#   scripts/build.sh            # 产物输出到 ./dist/CCBar.dmg 和 ./dist/CCBar.app.zip
+#   SPARKLE_PUBLIC_ED_KEY="公钥" scripts/build.sh
+#                               # 产物输出到 ./dist/CCBar.dmg 和 ./dist/CCBar.app.zip
 #   scripts/build.sh <输出目录>
 #
 set -euo pipefail
@@ -22,6 +19,16 @@ BUILD_DIR="$REPO_ROOT/build"
 OUT_DIR="${1:-$REPO_ROOT/dist}"
 APP="$BUILD_DIR/Build/Products/Release/CCBar.app"
 
+# 正式分发必须包含更新验证公钥。仅有 UI、没有公钥的包不能发布。
+: "${SPARKLE_PUBLIC_ED_KEY:?请先配置 SPARKLE_PUBLIC_ED_KEY；见 docs/打包发布.md}"
+python3 -c 'import base64, os, sys
+try:
+    key = base64.b64decode(os.environ["SPARKLE_PUBLIC_ED_KEY"], validate=True)
+except ValueError:
+    sys.exit("SPARKLE_PUBLIC_ED_KEY 必须是有效的 base64 公钥")
+if len(key) != 32:
+    sys.exit("SPARKLE_PUBLIC_ED_KEY 必须是 32 字节 Ed25519 公钥")'
+
 echo "==> [1/4] 清理旧构建"
 rm -rf "$BUILD_DIR"
 
@@ -32,6 +39,7 @@ xcodebuild \
   -configuration Release \
   -derivedDataPath "$BUILD_DIR" \
   CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
+  SPARKLE_PUBLIC_ED_KEY="$SPARKLE_PUBLIC_ED_KEY" \
   build
 
 [[ -d "$APP" ]] || { echo "❌ 构建产物未找到: $APP" >&2; exit 1; }
@@ -39,9 +47,22 @@ xcodebuild \
 echo "==> [3/4] 签名并校验"
 xattr -cr "$APP"
 
-# 对整个 CCBar.app 做一次外层签名,封装 Bundle 的 sealed resources,
-# 否则 CODE_SIGNING_ALLOWED=NO 下主可执行文件只有裸 ad-hoc 签名、没有资源封装,
-# Gatekeeper 会报 "应用程序已损坏"。
+# 不用 --deep 签名；嵌套组件需要各自的 entitlements，必须由内向外封装。
+SPARKLE_FRAMEWORK="$APP/Contents/Frameworks/Sparkle.framework"
+[[ -d "$SPARKLE_FRAMEWORK" ]] || { echo "❌ Sparkle.framework 未嵌入 App" >&2; exit 1; }
+SPARKLE_CONTENTS="$SPARKLE_FRAMEWORK/Versions/B"
+[[ -x "$SPARKLE_CONTENTS/Autoupdate" && -d "$SPARKLE_CONTENTS/Updater.app" ]] || {
+  echo "❌ Sparkle 安装助手缺失" >&2; exit 1;
+}
+for SERVICE in "$SPARKLE_CONTENTS"/XPCServices/*.xpc; do
+  [[ -d "$SERVICE" ]] || continue
+  codesign --force --sign - --options runtime --timestamp=none \
+    --preserve-metadata=entitlements "$SERVICE"
+done
+codesign --force --sign - --options runtime --timestamp=none "$SPARKLE_CONTENTS/Autoupdate"
+codesign --force --sign - --options runtime --timestamp=none "$SPARKLE_CONTENTS/Updater.app"
+codesign --force --sign - --options runtime --timestamp=none "$SPARKLE_FRAMEWORK"
+
 echo "   -> 对 Bundle 做最终签名(ad-hoc,封装资源)"
 codesign --force --sign - \
   --entitlements "$REPO_ROOT/CCBar.entitlements" \
@@ -58,7 +79,7 @@ ZIP="$OUT_DIR/CCBar.app.zip"
 DMG="$OUT_DIR/CCBar.dmg"
 rm -f "$ZIP"
 rm -f "$DMG"
-ditto -c -k --keepParent "$APP" "$ZIP"
+ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
 
 # DMG 内放入 Applications 快捷方式，用户打开后可直接拖拽安装。
 DMG_STAGING_DIR="$(mktemp -d "${TMPDIR:-/tmp}/CCBar-dmg.XXXXXX")"

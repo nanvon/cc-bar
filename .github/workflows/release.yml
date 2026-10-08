@@ -1,6 +1,6 @@
 name: Release
 
-# 推送 v 开头的 tag(如 v1.0.0)时自动构建并把 DMG 和 zip 挂到对应 GitHub Release
+# 推送 v 开头的 tag 后构建、签名更新源，并发布 DMG / ZIP / appcast / 更新日志。
 on:
   push:
     tags: ['v*']
@@ -13,6 +13,19 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+
+      - name: 校验更新签名配置
+        shell: bash
+        env:
+          SPARKLE_PUBLIC_ED_KEY: ${{ vars.SPARKLE_PUBLIC_ED_KEY }}
+          SPARKLE_PRIVATE_ED_KEY: ${{ secrets.SPARKLE_PRIVATE_ED_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$SPARKLE_PUBLIC_ED_KEY" || -z "$SPARKLE_PRIVATE_ED_KEY" ]]; then
+            echo "请先设置 repository variable SPARKLE_PUBLIC_ED_KEY 和 secret SPARKLE_PRIVATE_ED_KEY。"
+            echo "配置方式见 docs/打包发布.md；本次停止发布，避免分发无法验证更新的 App。"
+            exit 1
+          fi
 
       - name: 校验发布说明
         shell: bash
@@ -32,30 +45,50 @@ jobs:
           xcode-version: latest-stable
 
       - name: 构建并打包(ad-hoc 签名,无需证书)
+        env:
+          SPARKLE_PUBLIC_ED_KEY: ${{ vars.SPARKLE_PUBLIC_ED_KEY }}
         run: ./scripts/build.sh
 
-      - name: 生成版本清单(供 App 无限流检查更新)
+      - name: 签名更新包、更新日志和 appcast
         shell: bash
         env:
           TAG: ${{ github.ref_name }}
+          SPARKLE_PUBLIC_ED_KEY: ${{ vars.SPARKLE_PUBLIC_ED_KEY }}
+          SPARKLE_PRIVATE_ED_KEY: ${{ secrets.SPARKLE_PRIVATE_ED_KEY }}
         run: |
           set -euo pipefail
-          # App 主路读取 releases/latest/download/version.json,走 302 + CDN,不占用
-          # GitHub API 的匿名额度(60 次/小时/IP)。见 Core/UpdateChecker.swift。
-          printf '{"tag":"%s","version":"%s","page":"%s"}\n' \
-            "$TAG" \
-            "${TAG#v}" \
-            "https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}" \
-            > dist/version.json
-          cat dist/version.json
+          # SPM 的预编译 artifact 内含官方签名工具，与 App 锁定的 Sparkle 版本相同。
+          sparkle_sign_update="build/SourcePackages/artifacts/sparkle/Sparkle/bin/sign_update"
+          if [[ ! -x "$sparkle_sign_update" ]]; then
+            echo "构建目录中找不到 Sparkle sign_update；请检查 SPM artifact。"
+            exit 1
+          fi
+          python3 scripts/generate-update-feed.py \
+            --tag "$TAG" \
+            --repository "$GITHUB_REPOSITORY" \
+            --app build/Build/Products/Release/CCBar.app \
+            --dist dist \
+            --sign-update "$sparkle_sign_update"
 
       - name: 上传到 GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           # 不设 name:Release 标题沿用默认的 tag 名(如 v1.0.40)。
           body_path: release-notes/${{ github.ref_name }}.md
+          # 先将产物上传到 draft，全部成功后才使 latest/appcast 对用户可见。
+          draft: true
+          fail_on_unmatched_files: true
           files: |
             dist/CCBar.dmg
             dist/CCBar.app.zip
             dist/version.json
+            dist/appcast.xml
+            dist/release-notes.md
           generate_release_notes: false
+
+      - name: 发布已完整上传的 Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest

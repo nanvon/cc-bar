@@ -7,7 +7,7 @@ import AppKit
 // 结构:Header(标题 + 副标题 + 状态点 + 刷新 / 统计 / 设置 / 退出 四个一级图标) /
 //      每个已启用 Provider 一个 ServiceBlockView(tile + 服务名/plan + 主额度大字 +
 //      进度条 + reset + today/week cost + 次要额度行),block 间 0.5pt Divider。
-// footer 与 kebab 菜单都已移除,退出是 header 上的一级图标。
+// 退出是 header 上的一级图标；有更新或更新任务时才显示底部更新入口。
 
 struct PopoverRootView: View {
     @Environment(AppState.self) private var appState
@@ -21,6 +21,25 @@ struct PopoverRootView: View {
             Divider()
 
             content
+
+            if AppUpdater.shared.hasUpdate || AppUpdater.shared.isWorking || AppUpdater.shared.installedVersion != nil {
+                Divider()
+                Button { AppUpdater.shared.checkForUpdates() } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "arrow.down.circle")
+                        Text(AppUpdater.shared.statusText ?? tr("View update", "查看更新"))
+                            .lineLimit(1)
+                        Spacer()
+                        Image(systemName: "chevron.right").font(.system(size: 10))
+                    }
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                }
+                .buttonStyle(.plain)
+                .pointingHandCursor()
+            }
         }
         .frame(width: 340)
         // 转圈由 appState.isRefreshing 统一驱动:无论刷新从哪个入口发起

@@ -7,6 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		49C2AC02000000000001AAAA /* AppUpdater.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C2AC01000000000001AAAA /* AppUpdater.swift */; };
+		49C2AC04000000000001AAAA /* AppUpdateWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C2AC03000000000001AAAA /* AppUpdateWindow.swift */; };
+		49C2AC07000000000001AAAA /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 49C2AC06000000000001AAAA /* Sparkle */; };
+		49C2AC09000000000001AAAA /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 49C2AC08000000000001AAAA /* Sparkle */; };
 		49C2AB04000000000001AAAA /* CodexModelIdentityMigrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C2AB03000000000001AAAA /* CodexModelIdentityMigrationTests.swift */; };
 		49C2AB02000000000001AAAA /* CodexModelIdentityMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C2AB01000000000001AAAA /* CodexModelIdentityMigration.swift */; };
 		49C1BE03000000000001AAAA /* libzstd in Frameworks */ = {isa = PBXBuildFile; productRef = 49C1BE02000000000001AAAA /* libzstd */; };
@@ -150,6 +154,8 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		49C2AC01000000000001AAAA /* AppUpdater.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUpdater.swift; sourceTree = "<group>"; };
+		49C2AC03000000000001AAAA /* AppUpdateWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUpdateWindow.swift; sourceTree = "<group>"; };
 		49C2AB03000000000001AAAA /* CodexModelIdentityMigrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexModelIdentityMigrationTests.swift; sourceTree = "<group>"; };
 		49C2AB01000000000001AAAA /* CodexModelIdentityMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexModelIdentityMigration.swift; sourceTree = "<group>"; };
 		4931AC302FC029A000EE598C /* CCBar.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CCBar.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -291,6 +297,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				49C1BE03000000000001AAAA /* libzstd in Frameworks */,
+				49C2AC07000000000001AAAA /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -299,6 +306,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				49C1BE05000000000001AAAA /* libzstd in Frameworks */,
+				49C2AC09000000000001AAAA /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -341,6 +349,7 @@
 				49C1B131000000000001AAAA /* Scheduler.swift */,
 				49C1B132000000000001AAAA /* L10n.swift */,
 				49C1BF08000000000001AAAA /* UpdateChecker.swift */,
+				49C2AC01000000000001AAAA /* AppUpdater.swift */,
 				49C1B110000000000001AAAA /* Credentials */,
 				49C1B112000000000001AAAA /* Quota */,
 				49C1B15F000000000001AAAA /* Usage */,
@@ -512,6 +521,7 @@
 			isa = PBXGroup;
 			children = (
 				49C1B161000000000001AAAA /* MainWindowRootView.swift */,
+				49C2AC03000000000001AAAA /* AppUpdateWindow.swift */,
 				49C1B162000000000001AAAA /* StatsView.swift */,
 				49C1B1F0000000000001AAAA /* StatsOverviewModel.swift */,
 				49C1B163000000000001AAAA /* DesignSystem.swift */,
@@ -603,6 +613,7 @@
 			name = ccbar;
 			packageProductDependencies = (
 				49C1BE02000000000001AAAA /* libzstd */,
+				49C2AC06000000000001AAAA /* Sparkle */,
 			);
 			productName = CCBar;
 			productReference = 4931AC302FC029A000EE598C /* CCBar.app */;
@@ -624,6 +635,7 @@
 			name = CCBarTests;
 			packageProductDependencies = (
 				49C1BE04000000000001AAAA /* libzstd */,
+				49C2AC08000000000001AAAA /* Sparkle */,
 			);
 			productName = CCBarTests;
 			productReference = 49C1B301000000000001AAAA /* CCBarTests.xctest */;
@@ -659,6 +671,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				49C1BE01000000000001AAAA /* XCRemoteSwiftPackageReference "zstd" */,
+				49C2AC05000000000001AAAA /* XCRemoteSwiftPackageReference "Sparkle" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 4931AC312FC029A000EE598C /* Products */;
@@ -748,6 +761,8 @@
 				49C1BD02000000000001AABB /* Redact.swift in Sources */,
 				49C1BD03000000000001AABB /* DiagnosticsBundle.swift in Sources */,
 				49C1BF08000000000001AABB /* UpdateChecker.swift in Sources */,
+				49C2AC02000000000001AAAA /* AppUpdater.swift in Sources */,
+				49C2AC04000000000001AAAA /* AppUpdateWindow.swift in Sources */,
 				49C1B107000000000001AABB /* ScanCache.swift in Sources */,
 				49C1B196000000000001AABB /* ImportedUsageBackfill.swift in Sources */,
 				49C1B108000000000001AABB /* QuotaHistoryStore.swift in Sources */,
@@ -981,7 +996,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = "$(MARKETING_VERSION)";
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_PREVIEWS = YES;
@@ -996,6 +1011,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.nanvon.ccbar;
 				PRODUCT_NAME = CCBar;
 				REGISTER_APP_GROUPS = YES;
+				SPARKLE_PUBLIC_ED_KEY = "ZBP7TIEjReojbAckWVPq4ShHcG1o9+nAEm4hfsfhj98=";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
@@ -1014,7 +1030,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = "$(MARKETING_VERSION)";
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_PREVIEWS = YES;
@@ -1029,6 +1045,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.nanvon.ccbar;
 				PRODUCT_NAME = CCBar;
 				REGISTER_APP_GROUPS = YES;
+				SPARKLE_PUBLIC_ED_KEY = "ZBP7TIEjReojbAckWVPq4ShHcG1o9+nAEm4hfsfhj98=";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
@@ -1121,6 +1138,14 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		49C2AC05000000000001AAAA /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = exactVersion;
+				version = 2.10.0;
+			};
+		};
 		49C1BE01000000000001AAAA /* XCRemoteSwiftPackageReference "zstd" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/facebook/zstd.git";
@@ -1132,6 +1157,16 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		49C2AC06000000000001AAAA /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 49C2AC05000000000001AAAA /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
+		};
+		49C2AC08000000000001AAAA /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 49C2AC05000000000001AAAA /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
+		};
 		49C1BE02000000000001AAAA /* libzstd */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 49C1BE01000000000001AAAA /* XCRemoteSwiftPackageReference "zstd" */;

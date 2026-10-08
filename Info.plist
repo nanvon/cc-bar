@@ -22,6 +22,26 @@
     <string>$(MACOSX_DEPLOYMENT_TARGET)</string>
     <key>LSUIElement</key>
     <true/>
+    <key>LSMultipleInstancesProhibited</key>
+    <true/>
+    <key>SUFeedURL</key>
+    <string>https://github.com/nanvon/cc-bar/releases/latest/download/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string>$(SPARKLE_PUBLIC_ED_KEY)</string>
+    <key>SUEnableAutomaticChecks</key>
+    <true/>
+    <key>SUScheduledCheckInterval</key>
+    <integer>86400</integer>
+    <key>SUAllowsAutomaticUpdates</key>
+    <false/>
+    <key>SUAutomaticallyUpdate</key>
+    <false/>
+    <key>SUSendProfileInfo</key>
+    <false/>
+    <key>SUVerifyUpdateBeforeExtraction</key>
+    <true/>
+    <key>SURequireSignedFeed</key>
+    <true/>
     <key>NSDesktopFolderUsageDescription</key>
     <string>CCBar 只确认 AI 会话记录中项目目录是否存在，不读取文件夹内容，数据不会离开这台 Mac。CCBar only checks whether project folders exist; it never reads their contents.</string>
     <key>NSDocumentsFolderUsageDescription</key>
@@ -37,8 +57,8 @@
     <key>NSHumanReadableCopyright</key>
     <string></string>
     <key>NSSupportsAutomaticTermination</key>
-    <true/>
+    <false/>
     <key>NSSupportsSuddenTermination</key>
-    <true/>
+    <false/>
 </dict>
 </plist>
