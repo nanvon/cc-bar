@@ -8,7 +8,7 @@ nonisolated struct ConversationRollupPayload: Sendable, Codable {
     static let currentVersion = 8
     var version = Self.currentVersion
     var generationID = ""
-    /// 写盘时记录的价格指纹，仅作诊断；加载不因指纹不一致丢弃（价格变化不自动重算）。
+    /// 写盘时记录的价格指纹，仅作诊断；加载不因指纹不一致丢弃（价格变化由 `UsageRebuildBasis` 判断是否重建）。
     var pricingFingerprint = ""
     var infos: [ConversationInfo] = []
     var buckets: [ConversationUsageBucket] = []

@@ -453,8 +453,8 @@ struct SettingsRootView: View {
             PrefsRow(
                 label: "Price catalog",
                 chinese: "价格目录",
-                desc: "Applies to new usage only. Use Recalculate to update past costs.",
-                chineseDesc: "只影响新记录；历史费用需「重新计算」"
+                desc: "Past costs are recalculated automatically when prices change.",
+                chineseDesc: "价格变化后自动重算历史费用"
             ) {
                 HStack(spacing: 8) {
                     if let pricingCatalogMessage {
@@ -490,12 +490,14 @@ struct SettingsRootView: View {
             PrefsRow(
                 label: "Recalculate usage",
                 chinese: "重新计算用量",
-                desc: "Recompute all past costs with current prices.",
-                chineseDesc: "按当前价格重算全部历史费用",
+                desc: "Recompute history with the latest prices and rules. Usage from deleted logs is kept.",
+                chineseDesc: "用最新价格表和统计规则重算历史；已删除日志的对话保留用量",
                 detail: recalculateOutcomeDetail
             ) {
+                // 自动重建进行中同样显示进度并禁用按钮，避免再排一次完整重建。
+                let recalculating = isRecalculatingUsage || appState.usageService.isRebuildingHistory
                 HStack(spacing: 8) {
-                    if appState.usageService.cycleUsageNeedsManualRecalculation, !isRecalculatingUsage {
+                    if appState.usageService.cycleUsageNeedsManualRecalculation, !recalculating {
                         HStack(spacing: 4) {
                             Image(systemName: "exclamationmark.triangle")
                             Text(tr("Cycle usage incomplete", "周期用量不完整"))
@@ -507,7 +509,7 @@ struct SettingsRootView: View {
                             "部分历史周期缺少用量数据，点「重新计算」补齐"
                         ))
                     }
-                    if let progress = appState.usageService.scanProgress, isRecalculatingUsage {
+                    if let progress = appState.usageService.scanProgress, recalculating {
                         Text(scanProgressText(progress))
                             .font(.system(size: 11))
                             .foregroundStyle(.secondary)
@@ -521,7 +523,7 @@ struct SettingsRootView: View {
                             isRecalculatingUsage = false
                         }
                     } label: {
-                        if isRecalculatingUsage {
+                        if recalculating {
                             ProgressView()
                                 .controlSize(.small)
                         } else {
@@ -530,7 +532,7 @@ struct SettingsRootView: View {
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
-                    .disabled(isRecalculatingUsage)
+                    .disabled(recalculating)
                 }
             }
         }

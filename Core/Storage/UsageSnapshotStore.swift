@@ -59,6 +59,10 @@ nonisolated struct UsageSnapshot: Sendable, Codable {
     var dshContributions: DshContributionPayload = DshContributionPayload()
     /// 可选字段兼容旧 envelope / payload；与桶和进度原子提交，不使旧快照失效。
     var codexModelIdentityMigration: CodexModelIdentityMigrationState?
+    /// 按对话记录的已计入消息 ID（`UsageMessageLedger`）。旧快照没有；版本不认识时按没有处理。
+    var messageLedger: UsageMessageLedgerPayload?
+    /// 现有历史对应的统计规则与价格（`UsageRebuildBasis`）。nil 表示还没有建立，启动后自动重建一次。
+    var rebuildBasis: UsageRebuildBasis?
 
     /// 结构性不变量。校验失败一律不写盘、不切换内存，避免「JSON 能解码」被当成可用。
     func validateStructure() throws {

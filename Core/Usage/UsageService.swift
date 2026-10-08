@@ -89,9 +89,12 @@ private struct RebuildCandidate {
     var scanState: ScanState
     /// 非 nil 表示来源不完整，候选不可提交。
     var incompleteSources: String?
-    /// 与重建前历史的差异。受限恢复据此拒绝；手动重建只作诊断记录。
+    /// 与重建前历史的差异。受限恢复据此拒绝；手动 / 自动重建只作诊断记录。
     var mismatch: UsageRebuildMismatch
-    /// 手动重建保留的已删除日志对话数，以及因重扫已覆盖而没有叠加的桶数。
+    /// 重扫计入的消息 ID，加上被保留的已删除对话原有的 ID。
+    var messageLedger: UsageMessageLedger
+    var rebuildBasis: UsageRebuildBasis
+    /// 保留的已删除日志对话数，以及因重扫已覆盖而没有叠加的桶数。
     var preservedConversations = 0
     var skippedBuckets = 0
 }
@@ -123,6 +126,24 @@ final class UsageService {
     private(set) var lastRebuildDiagnostic: String?
     /// 主历史含 DSH 分区但逐会话贡献不可用：冻结该分区，既不增量也不重建。
     private(set) var isDshHistoryFrozen = false
+    /// 正在完整重建历史（手动或自动）。设置页据此禁用「重新计算」并显示进度。
+    private(set) var isRebuildingHistory = false
+    /// 价格或统计规则变化后自动重建历史。单测默认关闭，避免干扰既有用例的提交次数与快照断言；
+    /// 覆盖自动重建的用例显式打开。
+    var automaticRebuildEnabled = !AppRuntime.isRunningUnitTests
+
+    /// 按对话记录的已计入消息 ID，与汇总同代提交、同步回滚。
+    private var messageLedger = UsageMessageLedger()
+    /// 现有历史对应的统计规则与价格。nil 表示还没有建立（升级后首次）：
+    /// 此时账本不完整，增量去重仍沿用 seen 列表，并尽快自动重建一次。
+    private var rebuildBasis: UsageRebuildBasis?
+    /// 用户刚手动更新过价格目录：价格有变化就立即重建，不等 24 小时。
+    private var catalogUpdateRequestedByUser = false
+    /// 本进程最近一次自动重建未提交的时间；之后 24 小时内不再自动重试。
+    private var lastAutomaticRebuildFailureAt: Date?
+    private var isRefreshingMissingPricing = false
+    /// 远端价格普通变化的自动重建间隔、自动失败后的重试间隔、自动补价的同模型间隔。
+    nonisolated private static let automaticRebuildInterval: TimeInterval = 24 * 3600
 
     private let historyStore: UsageSnapshotStore
     private let roots: UsageScanRoots
@@ -494,10 +515,19 @@ final class UsageService {
         dshNeedsFullRescan = snapshot.dshHistoryFrozen
             || snapshot.dshContributions.generationID.isEmpty
             || snapshot.dshContributions.requiresRebuild == true
+        loadRebuildState(from: snapshot)
         hasUnwrittenRollupChanges = false
         lastRollupWriteAt = snapshot.committedAt
         lastScanAt = max(snapshot.usageRollup.updatedAt, snapshot.conversationRollup.updatedAt)
         committedSnapshot = snapshot
+    }
+
+    /// 账本不可用（旧快照、版本不认识、没有可信进度）时基准一并作废，启动后自动重建一次补齐。
+    private func loadRebuildState(from snapshot: UsageSnapshot) {
+        let ledgerUsable = snapshot.hasScanProgress
+            && snapshot.messageLedger?.version == UsageMessageLedgerPayload.currentVersion
+        messageLedger = ledgerUsable ? UsageMessageLedger(payload: snapshot.messageLedger) : UsageMessageLedger()
+        rebuildBasis = ledgerUsable ? snapshot.rebuildBasis : nil
     }
 
     nonisolated private static let restrictedHistoryMessage =
@@ -820,6 +850,7 @@ final class UsageService {
             }
             if await runScan(prev: cacheResult.state, allowDeferredWrite: true) {
                 requiresFullRebuild = false
+                await rebuildAutomaticallyIfNeeded()
             }
         } while scanQueued && !suspendedForTermination
     }
@@ -1071,6 +1102,8 @@ final class UsageService {
         cycleAggregator.load(from: [])
         // DSH 分区同属被清空的聚合结果：贡献缓存与 watermark 一并作废，下轮从零重建。
         resetDshContributions()
+        messageLedger = UsageMessageLedger()
+        rebuildBasis = nil
         loadedRollupGeneration = nil
         loadedCycleGeneration = nil
         cycleInitialRebuildCompletedAt = nil
@@ -1278,8 +1311,8 @@ final class UsageService {
     }
 
     /// 决定本轮扫描的起点状态。进度随快照一起加载，与已加载汇总同代；
-    /// 价格指纹不参与失效判定：价格目录更新后自动扫描按现价计新条目，
-    /// 历史桶保持旧价，等用户在设置页「重新计算用量」手动全量重扫对齐。
+    /// 价格指纹不参与失效判定：价格变化后新条目按现价计，历史费用由扫描后的
+    /// 自动重建（`rebuildAutomaticallyIfNeeded`）按新价格重算，不清空重扫。
     private func resolveScanState() async -> ScanCacheLoadResult {
         if requiresFullRebuild { return .invalidated }
         guard let cached = cachedScanState,
@@ -1292,7 +1325,7 @@ final class UsageService {
 
     // MARK: - 安全重算
 
-    /// 用户在设置页手动触发的强制重算。候选在独立的聚合器上从现有日志完整重建，
+    /// 用户在设置页手动触发的强制重算，与自动重建走同一流程。候选在独立的聚合器上从现有日志完整重建，
     /// 日志已删除的对话按 `UsageRebuildMerge` 保留原用量、按现价重新计费；
     /// 来源读取不完整或持久化失败时一律保留原历史。历史受限时只做受限恢复的核对。
     func forceRescan() async {
@@ -1335,6 +1368,8 @@ final class UsageService {
             return
         }
 
+        isRebuildingHistory = true
+        defer { isRebuildingHistory = false }
         // 基准必须与磁盘一致：先把上一次常规扫描之后积压的增量提交掉。
         guard await drainPendingIncrements() else {
             lastRebuildOutcome = .commitFailed(lastError ?? "pending changes could not be committed")
@@ -1358,11 +1393,78 @@ final class UsageService {
             }
         }
         lastRebuildOutcome = outcome
-        // 第一轮提交后，周期桶已按全部现有日志和周期记录重建（日志已删除的部分原样保留），
-        // 再点重算也补不出更多数据，不能继续提示「周期用量不完整」。
-        if case .replaced = first {
-            cycleUsageNeedsManualRecalculation = false
-            hasPendingOrphanCycleRebuild = false
+        if case .replaced = first { didCommitFullRebuild() }
+    }
+
+    /// 完整重建提交后的收尾。周期桶已按全部现有日志和周期记录重建（日志已删除的部分原样保留），
+    /// 再重算也补不出更多数据，不能继续提示「周期用量不完整」；自动重建的待办随之清除。
+    private func didCommitFullRebuild() {
+        cycleUsageNeedsManualRecalculation = false
+        hasPendingOrphanCycleRebuild = false
+        catalogUpdateRequestedByUser = false
+        lastAutomaticRebuildFailureAt = nil
+    }
+
+    // MARK: - 自动重建
+
+    /// 常规扫描提交后调用（调用方持有 isScanning）：统计规则或价格与现有历史不一致时，
+    /// 按手动「重新计算用量」同一流程自动重建一次。触发与间隔规则见 `UsageRebuildBasis.rebuildReason`；
+    /// 没有提交成功时，本进程 24 小时内不再自动重试。
+    private func rebuildAutomaticallyIfNeeded() async {
+        guard automaticRebuildEnabled, !suspendedForTermination, !storeWriteDisabled,
+              historyRecoveryState == .complete, committedSnapshot != nil else { return }
+        refreshMissingPricingInBackground()
+        let now = Date()
+        if let failedAt = lastAutomaticRebuildFailureAt,
+           now.timeIntervalSince(failedAt) < Self.automaticRebuildInterval { return }
+        let buckets = aggregator.snapshotLocal()
+        let reason = UsageRebuildBasis.rebuildReason(
+            basis: rebuildBasis,
+            usageKeys: pricingUsageKeys(from: buckets),
+            unpricedKeys: pricingUsageKeys(from: buckets.filter(\.hasUnpricedUsage)),
+            userRequestedCatalog: catalogUpdateRequestedByUser,
+            now: now,
+            minimumInterval: Self.automaticRebuildInterval
+        )
+        catalogUpdateRequestedByUser = false
+        guard let reason else { return }
+
+        AppLog.info(.usage, "usage automatic rebuild started reason=\(reason.rawValue)")
+        isRebuildingHistory = true
+        defer {
+            isRebuildingHistory = false
+            scanProgress = nil
+        }
+        guard await drainPendingIncrements() else {
+            lastAutomaticRebuildFailureAt = now
+            return
+        }
+        let outcome = await runCandidateRebuild(purpose: .automatic(reason))
+        if case .replaced = outcome {
+            didCommitFullRebuild()
+            // 设置页上一次手动重算的失败提示已被这次重建取代。
+            lastRebuildOutcome = nil
+        } else {
+            lastAutomaticRebuildFailureAt = now
+            AppLog.warn(.usage, "usage automatic rebuild not committed reason=\(reason.rawValue); retry after 24h")
+        }
+    }
+
+    /// 有缺价用量时后台查一次远端价格目录（同一用量键 24 小时最多一次）。查到后立即再扫描一轮，
+    /// 由自动重建按新价格重算这些用量。不阻塞当前扫描。
+    private func refreshMissingPricingInBackground() {
+        guard !isRefreshingMissingPricing else { return }
+        let missing = missingPricingKeys(in: aggregator.snapshotLocal())
+        guard !missing.isEmpty else { return }
+        isRefreshingMissingPricing = true
+        Task { [weak self] in
+            let refreshed = await PricingCatalogStore.shared.refreshForMissing(
+                missing,
+                minimumInterval: Self.automaticRebuildInterval
+            )
+            guard let self else { return }
+            self.isRefreshingMissingPricing = false
+            if refreshed { await self.scanNow() }
         }
     }
 
@@ -1382,10 +1484,12 @@ final class UsageService {
         return true
     }
 
-    private enum RebuildPurpose {
+    private enum RebuildPurpose: Equatable {
         case manualRecalculation
         case pricingRefresh
         case restrictedRecovery
+        /// 价格或统计规则变化后的自动重建，行为与手动重算相同。
+        case automatic(UsageAutomaticRebuildReason)
     }
 
     /// 候选隔离重算：完整扫描 → 独立聚合 → 完整性门槛 → 对账（仅受限恢复） → 提交 → 发布。
@@ -1431,7 +1535,8 @@ final class UsageService {
             cycleInitialRebuildCompletedAt: candidate.cycleInitialRebuildCompletedAt,
             cycleInitialRebuildCompletedApps: candidate.cycleInitialRebuildCompletedApps,
             dshContributions: candidate.dshContributions,
-            dshRequiresRebuild: candidate.dshRequiresRebuild
+            dshRequiresRebuild: candidate.dshRequiresRebuild,
+            rebuildState: (candidate.messageLedger, candidate.rebuildBasis)
         )
         if let error {
             lastRebuildDiagnostic = "commit=\(error)"
@@ -1447,6 +1552,8 @@ final class UsageService {
         cycleAggregator.load(from: candidate.cycleBuckets)
         dshContributions = candidate.dshContributions
         dshNeedsFullRescan = candidate.dshRequiresRebuild
+        messageLedger = candidate.messageLedger
+        rebuildBasis = candidate.rebuildBasis
         cachedScanState = candidate.scanState
         loadedRollupGeneration = candidate.scanState.generationID
         loadedCycleGeneration = candidate.scanState.generationID
@@ -1470,6 +1577,7 @@ final class UsageService {
         case .manualRecalculation: tag = "manual"
         case .pricingRefresh: tag = "pricing refresh"
         case .restrictedRecovery: tag = "restricted recovery"
+        case .automatic(let reason): tag = "automatic reason=\(reason.rawValue)"
         }
         AppLog.info(
             .usage,
@@ -1501,10 +1609,27 @@ final class UsageService {
         let dshFrozen = isDshHistoryFrozen
         let preservedDshState = cachedScanState?.dsh ?? [:]
 
+        // 日志已删除、且账本里有消息 ID 的对话：先把这些 ID 放进去重集合，续接 / 分叉对话复制过去的
+        // 同一批消息就不会被重扫再计一次，合并时原用量可以全部保留。基准建立之前账本不完整，不能这样用。
+        var ledgerBackedKeys: [UsageApp: Set<String>] = [:]
+        if preserveDeletedConversations, rebuildBasis != nil {
+            let deleted = UsageRebuildMerge.deletedConversations(
+                conversationAggregator.snapshot().infos,
+                sourceExists: { FileManager.default.fileExists(atPath: $0) }
+            )
+            for info in deleted where messageLedger.contains(info.key, app: info.app) {
+                ledgerBackedKeys[info.app, default: []].insert(info.key)
+            }
+        }
+        let claudeKnown = messageLedger.ids(for: ledgerBackedKeys[.claude] ?? [], app: .claude)
+        let codexKnown = messageLedger.ids(for: ledgerBackedKeys[.codex] ?? [], app: .codex)
+        let piKnown = messageLedger.ids(for: ledgerBackedKeys[.pi] ?? [], app: .pi)
+
         async let claudeTask = Task.detached(priority: .utility) {
             ClaudeJSONLScanner.scan(
                 previous: [:],
                 seenMessageIds: [],
+                knownIDs: claudeKnown,
                 root: claudeRoot,
                 conversationIndex: claudeIndex,
                 onProgress: progress
@@ -1514,6 +1639,7 @@ final class UsageService {
             await CodexJSONLScanner.scan(
                 previous: [:],
                 seenTokenIds: [],
+                knownIDs: codexKnown,
                 roots: codexRoots,
                 indexedTitles: codexTitles,
                 onProgress: progress
@@ -1523,6 +1649,7 @@ final class UsageService {
             PiJSONLScanner.scan(
                 previous: [:],
                 seenEntryIds: [],
+                knownIDs: piKnown,
                 root: piRoot,
                 onProgress: progress
             )
@@ -1582,17 +1709,6 @@ final class UsageService {
             entries: claude.entries + codex.entries + pi.entries,
             seeds: claude.conversationSeeds + codex.conversationSeeds + pi.conversationSeeds
         )
-        let existingClaudeDays = Set(
-            candidateDaily.snapshotLocal().filter { $0.app == .claude }.map(\.day)
-        )
-        candidateDaily.ingestLocal(
-            ImportedUsageBackfill.loadMissingEntries(
-                app: .claude,
-                existingDays: existingClaudeDays,
-                from: backfillURL
-            )
-        )
-
         let cycleEntries = claude.entries + codex.entries
         let freshDshContributions = dshFrozen
             ? dshContributions
@@ -1640,10 +1756,21 @@ final class UsageService {
                 candidateConversation: merged.conversationBuckets,
                 candidateCycles: merged.cycleBuckets,
                 cycleStartByID: cycleStartByID,
+                ledgerBackedKeys: ledgerBackedKeys.values.reduce(into: Set<String>()) { $0.formUnion($1) },
                 sourceExists: { FileManager.default.fileExists(atPath: $0) }
             )
         }
-        let candidateDay = merged.dayBuckets
+        // 补录只填没有任何 Claude 用量的天，必须在保留已删除对话之后判断，否则同一天会补录和保留各算一次。
+        let finalDaily = UsageAggregator()
+        finalDaily.load(from: merged.dayBuckets)
+        finalDaily.ingestLocal(
+            ImportedUsageBackfill.loadMissingEntries(
+                app: .claude,
+                existingDays: Set(merged.dayBuckets.filter { $0.app == .claude }.map(\.day)),
+                from: backfillURL
+            )
+        )
+        let candidateDay = finalDaily.snapshotLocal()
         var mismatch = UsageHistoryConsistency.compareUsage(
             baseline: baselineDay,
             candidateDay: candidateDay,
@@ -1658,18 +1785,23 @@ final class UsageService {
             into: &mismatch
         )
 
-        let fingerprint = Pricing.fingerprint(
-            knownUsage: Set(candidateDay.map { PricingUsageKey(app: $0.app, model: $0.model, speed: $0.speed) })
-        )
+        let usageKeys = pricingUsageKeys(from: candidateDay)
+        let fingerprint = Pricing.fingerprint(knownUsage: usageKeys)
+        // 账本从完整重扫建立，再带上被保留的已删除对话原有的 ID；有了账本，seen 列表不再保存。
+        var candidateLedger = UsageMessageLedger()
+        candidateLedger.record(claude.ledger, app: .claude)
+        candidateLedger.record(codex.ledger, app: .codex)
+        candidateLedger.record(pi.ledger, app: .pi)
+        let keptKeys = Set(merged.conversationInfos.map(\.key))
+        for (app, keys) in ledgerBackedKeys {
+            candidateLedger.record(messageLedger.filtered(keys.intersection(keptKeys), app: app), app: app)
+        }
         let scanState = ScanState(
             generationID: UUID().uuidString,
             pricingFingerprint: fingerprint,
             claude: claude.newState,
             codex: codex.newState,
-            claudeSeenMessageIds: claude.newSeenIds,
-            codexSeenTokenIds: codex.newSeenIds,
             pi: pi.newState,
-            piSeenEntryIds: pi.newSeenIds,
             opencode: opencode.newState,
             dsh: dshFrozen ? preservedDshState : dsh.newState
         )
@@ -1689,21 +1821,27 @@ final class UsageService {
             scanState: scanState,
             incompleteSources: incomplete.isEmpty ? nil : incomplete.joined(separator: ", "),
             mismatch: mismatch,
+            messageLedger: candidateLedger,
+            rebuildBasis: .current(usageKeys: usageKeys, at: Date()),
             preservedConversations: merged.preservedConversations,
             skippedBuckets: merged.skippedBuckets
         )
     }
 
     /// 设置页手动更新在线价格目录：绕过 24 小时拉取最新目录，新价格在下一轮扫描的
-    /// 安全边界提交生效。只更新价格表，不触发重算；历史费用保持旧价，
-    /// 需要对齐历史时用「重新计算用量」（forceRescan）。
+    /// 安全边界提交生效。成功后立即扫描一轮；用到的模型价格有变化时，自动重建不等 24 小时间隔。
     @discardableResult
     func refreshPricingCatalog() async -> Bool {
         guard !suspendedForTermination, !isPersistingForTermination else { return false }
         guard !isRefreshingPricingCatalog else { return false }
         isRefreshingPricingCatalog = true
         defer { isRefreshingPricingCatalog = false }
-        return await PricingCatalogStore.shared.forceRefresh()
+        let succeeded = await PricingCatalogStore.shared.forceRefresh()
+        if succeeded, automaticRebuildEnabled {
+            catalogUpdateRequestedByUser = true
+            Task { await scanNow() }
+        }
+        return succeeded
     }
 
     // MARK: - 常规扫描实现
@@ -1738,11 +1876,16 @@ final class UsageService {
         let opencodeDatabaseURL = roots.opencodeDatabaseURL
         let dshRoot = roots.dshRoot
         let dshFrozen = isDshHistoryFrozen
+        // 账本里的 ID 没有条数上限；基准建立之前账本不完整，旧 seen 列表照常参与去重。
+        let claudeKnown = messageLedger.knownIDs(for: .claude)
+        let codexKnown = messageLedger.knownIDs(for: .codex)
+        let piKnown = messageLedger.knownIDs(for: .pi)
 
         async let claudeTask = Task.detached(priority: .utility) {
             ClaudeJSONLScanner.scan(
                 previous: prev.claude,
                 seenMessageIds: prevSeen,
+                knownIDs: claudeKnown,
                 root: claudeRoot,
                 conversationIndex: claudeIndex,
                 onProgress: progress
@@ -1752,6 +1895,7 @@ final class UsageService {
             await CodexJSONLScanner.scan(
                 previous: prev.codex,
                 seenTokenIds: prev.codexSeenTokenIds,
+                knownIDs: codexKnown,
                 roots: codexRoots,
                 indexedTitles: codexTitles,
                 onProgress: progress
@@ -1761,6 +1905,7 @@ final class UsageService {
             PiJSONLScanner.scan(
                 previous: prev.pi,
                 seenEntryIds: prev.piSeenEntryIds,
+                knownIDs: piKnown,
                 root: piRoot,
                 onProgress: progress
             )
@@ -1793,6 +1938,9 @@ final class UsageService {
         aggregator.ingestLocal(claude.entries)
         aggregator.ingestLocal(codex.entries)
         aggregator.ingestLocal(pi.entries)
+        messageLedger.record(claude.ledger, app: .claude)
+        messageLedger.record(codex.ledger, app: .codex)
+        messageLedger.record(pi.ledger, app: .pi)
         let cycleEntries = claude.entries + codex.entries
         let opencodeChanged = Self.applyOpenCodeScan(
             opencode, aggregator: aggregator, conversations: conversationAggregator
@@ -1888,7 +2036,20 @@ final class UsageService {
         }
 
         let buckets = aggregator.snapshotLocal()
-        let fingerprint = Pricing.fingerprint(knownUsage: pricingUsageKeys(from: buckets))
+        let usageKeys = pricingUsageKeys(from: buckets)
+        let fingerprint = Pricing.fingerprint(knownUsage: usageKeys)
+        // 从零全量扫描（首装、进度失效）的结果本身就按现行规则和价格算出，直接建立基准；
+        // 增量扫描新出现的用量键按当时价格计价，补记进基准。
+        if prev.generationID.isEmpty {
+            rebuildBasis = .current(usageKeys: usageKeys, at: started)
+        } else if var basis = rebuildBasis, basis.recordNewKeys(usageKeys) {
+            rebuildBasis = basis
+        }
+        // 基准建立后账本完整，seen 列表不再保存（账本没有条数上限）。
+        let ledgerComplete = rebuildBasis != nil
+        let claudeSeen = ledgerComplete ? [] : claude.newSeenIds
+        let codexSeen = ledgerComplete ? [] : codex.newSeenIds
+        let piSeen = ledgerComplete ? [] : pi.newSeenIds
         let dshStateForScan = shouldWriteRollups && canCommitDsh ? dsh.newState : prev.dsh
         // watermark 绝不能单独越过尚未落盘的聚合数据：进度落后一轮只是多扫一次，
         // 进度领先则会在重启后拿到「新 watermark + 旧汇总」，中间那段用量永久丢失。
@@ -1898,10 +2059,10 @@ final class UsageService {
             pricingFingerprint: fingerprint,
             claude: claude.newState,
             codex: codex.newState,
-            claudeSeenMessageIds: claude.newSeenIds,
-            codexSeenTokenIds: codex.newSeenIds,
+            claudeSeenMessageIds: claudeSeen,
+            codexSeenTokenIds: codexSeen,
             pi: pi.newState,
-            piSeenEntryIds: pi.newSeenIds,
+            piSeenEntryIds: piSeen,
             opencode: opencode.newState,
             dsh: dshStateForScan
         )
@@ -1920,10 +2081,10 @@ final class UsageService {
             pricingFingerprint: fingerprint,
             claude: claude.newState,
             codex: codex.newState,
-            claudeSeenMessageIds: claude.newSeenIds,
-            codexSeenTokenIds: codex.newSeenIds,
+            claudeSeenMessageIds: claudeSeen,
+            codexSeenTokenIds: codexSeen,
             pi: pi.newState,
-            piSeenEntryIds: pi.newSeenIds,
+            piSeenEntryIds: piSeen,
             opencode: opencode.newState,
             dsh: dshStateForScan
         )
@@ -2007,11 +2168,17 @@ final class UsageService {
         cycleInitialRebuildCompletedAt: Date?,
         cycleInitialRebuildCompletedApps: Set<UsageApp>,
         dshContributions: [String: DshContribution],
-        dshRequiresRebuild: Bool
+        dshRequiresRebuild: Bool,
+        rebuildState: (ledger: UsageMessageLedger, basis: UsageRebuildBasis)? = nil
     ) async -> String? {
         guard !storeWriteDisabled else { return "usage history store is read-only" }
         let now = Date()
         var snapshot = UsageSnapshot()
+        // 账本与基准随汇总同代提交；不传时取内存里的当前值（增量、周期、退出保存）。
+        let ledger = rebuildState?.ledger ?? messageLedger
+        let basis = rebuildState?.basis ?? rebuildBasis
+        snapshot.messageLedger = basis == nil && ledger.isEmpty ? nil : ledger.payload
+        snapshot.rebuildBasis = basis
         // 首装没有旧标识；既有迁移结果必须跨增量、重算与周期提交保留。
         snapshot.codexModelIdentityMigration = committedSnapshot?.codexModelIdentityMigration
             ?? (committedSnapshot == nil ? CodexModelIdentityMigrationState() : nil)
@@ -2134,6 +2301,7 @@ final class UsageService {
             let validCycles = Set(appState?.quotaCycles.records.map(\.id) ?? [])
             cycleAggregator.load(from: snapshot.cycleRollup.buckets.filter { validCycles.contains($0.cycleID) })
             cachedScanState = snapshot.scanState
+            loadRebuildState(from: snapshot)
             loadedRollupGeneration = snapshot.snapshotID
             loadedCycleGeneration = snapshot.cycleRollup.generationID.isEmpty ? nil : snapshot.cycleRollup.generationID
             lastRollupWriteAt = snapshot.committedAt
@@ -2187,6 +2355,7 @@ final class UsageService {
         dshNeedsFullRescan = snapshot.dshHistoryFrozen
             || snapshot.dshContributions.generationID.isEmpty
             || snapshot.dshContributions.requiresRebuild == true
+        loadRebuildState(from: snapshot)
         hasUnwrittenRollupChanges = false
         publishTotals()
     }
@@ -2261,10 +2430,8 @@ final class UsageService {
 
     /// 只把“已有 Standard/Fast 用量但当前所有可靠价格源都未命中”的桶视为刷新候选。
     /// Unknown 档位和已知模型的请求级限制（例如 Codex Fast >272K）不会造成无休止刷新。
-    /// 仅手动重算（forceRescan）路径调用；自动扫描不做缺价刷新、也不因缺价排队重算。
-    private func refreshMissingPricingIfNeeded() async -> Bool {
-        let buckets = aggregator.snapshotLocal()
-        let missing = Set(buckets.compactMap { bucket -> PricingUsageKey? in
+    private func missingPricingKeys(in buckets: [UsageBucket]) -> Set<PricingUsageKey> {
+        Set(buckets.compactMap { bucket -> PricingUsageKey? in
             guard bucket.hasUnpricedUsage else { return nil }
             guard Pricing.needsRemotePriceRefresh(
                 model: bucket.model,
@@ -2273,6 +2440,13 @@ final class UsageService {
             ) else { return nil }
             return PricingUsageKey(app: bucket.app, model: bucket.model, speed: bucket.speed)
         })
+    }
+
+    /// 手动重算路径的缺价刷新：等刷新完成，价格有变化时由调用方再做一轮完整重算。
+    /// 自动路径走 `refreshMissingPricingInBackground`，不阻塞扫描。
+    private func refreshMissingPricingIfNeeded() async -> Bool {
+        let buckets = aggregator.snapshotLocal()
+        let missing = missingPricingKeys(in: buckets)
         guard !missing.isEmpty else { return false }
 
         let knownUsage = pricingUsageKeys(from: buckets)

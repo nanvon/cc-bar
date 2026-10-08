@@ -4,9 +4,10 @@ import SQLite3
 
 /// 安全重算的端到端测试（执行计划 A10～A16、A19～A23、A25）。
 ///
-/// 手动重算以现有日志为准，日志已删除的对话保留原用量并按现价重新计费；只在来源不完整、
-/// 候选持久化失败时拒绝。另覆盖：费用按新价重算、重复重算幂等、续接对话不重复计入、
-/// 周期与 DSH 分区自洽。用量向量逐项比对只用于受限恢复（见 UsageHistoryRecoveryTests）。
+/// 手动 / 自动重算以现有日志为准，日志已删除的对话保留原用量并按现价重新计费；只在来源不完整、
+/// 候选持久化失败时拒绝。另覆盖：费用按新价重算、重复重算幂等、续接对话不重复计入（消息账本）、
+/// 价格与统计规则变化后的自动重建、周期与 DSH 分区自洽。用量向量逐项比对只用于受限恢复
+/// （见 UsageHistoryRecoveryTests）。
 @MainActor
 final class UsageSafeRebuildTests: XCTestCase {
     private var environment: UsageTestEnvironment!
@@ -1258,8 +1259,8 @@ final class UsageSafeRebuildTests: XCTestCase {
         XCTAssertEqual(env.conversationVector(before.conversation), env.conversationVector(result(service).conversation))
     }
 
-    /// 原会话日志被删、续接会话还在：重算时续接会话会重新计入复制过去的消息，
-    /// 被删的原会话不能再按历史叠加一份。
+    /// 原会话日志被删、续接会话还在：账本里有原会话的消息 ID，重算时续接会话不会再计入
+    /// 复制过去的消息，原会话的用量原样保留，归属与增量扫描一致。
     func testForkedMessagesAreNotCountedTwiceAfterOriginalLogIsDeleted() async throws {
         let env = environment!
         env.installPricing(model: model, input: 1, output: 10)
@@ -1275,15 +1276,245 @@ final class UsageSafeRebuildTests: XCTestCase {
         try FileManager.default.removeItem(at: original)
         await service.forceRescan()
         XCTAssertEqual(service.lastRebuildOutcome, .replaced(cycleVerified: true), service.lastRebuildDiagnostic ?? "")
+        XCTAssertNil(service.lastRebuildDiagnostic, "有账本时被删原会话的用量与归属都不变")
         try assertSameDayVector(before.day, result(service).day, env: env)
-        XCTAssertEqual(env.totals(result(service).day, app: .claude).inputTokens, 7_000)
-        XCTAssertFalse(result(service).infos.contains { $0.key == "claude:fork-original" })
+        XCTAssertEqual(env.conversationVector(before.conversation), env.conversationVector(result(service).conversation))
+        XCTAssertTrue(result(service).infos.contains { $0.key == "claude:fork-original" })
+    }
+
+    /// 账本建立之前就删除的会话没有消息 ID，只能按日核对：续接会话在重扫里计入了复制的消息，
+    /// 同一键上已不少于历史，被删的原会话不再叠加。
+    func testDeletedConversationWithoutLedgerFallsBackToDayGuard() async throws {
+        let env = environment!
+        env.installPricing(model: model, input: 1, output: 10)
+        let original = try env.writeClaudeLog(session: "fork-original", lines: forkOriginalLines(env, session: "fork-original"))
+        let service = env.makeService()
+        await env.bootstrap(service)
+        await service.scanNow()
+        try env.writeClaudeLog(session: "fork-continued", lines: forkContinuedLines(env))
+        await service.scanNow()
+        await service.flushPendingRollupChangesForTesting()
+        let before = result(service)
+
+        // 模拟旧版本写的快照：没有账本与基准。
+        try stripRebuildState(env)
+        let restarted = env.makeService()
+        await env.bootstrap(restarted)
+        try FileManager.default.removeItem(at: original)
+        await restarted.forceRescan()
+        XCTAssertEqual(restarted.lastRebuildOutcome, .replaced(cycleVerified: true), restarted.lastRebuildDiagnostic ?? "")
+        try assertSameDayVector(before.day, result(restarted).day, env: env)
+        XCTAssertFalse(result(restarted).infos.contains { $0.key == "claude:fork-original" })
         XCTAssertEqual(
-            result(service).conversation
+            result(restarted).conversation
                 .filter { $0.conversationKey == "claude:fork-continued" }
                 .reduce(0) { $0 + $1.inputTokens },
             7_000
         )
+        // 重算后账本从现有日志补齐。
+        XCTAssertNotNil(try committed(env).rebuildBasis)
+        XCTAssertNotNil(try committed(env).messageLedger)
+    }
+
+    // MARK: - 消息账本
+
+    /// 基准建立后不再保存 2 万条上限的 seen 列表；账本随快照保存，重启后照样去重续接会话复制的消息。
+    func testLedgerReplacesSeenListsAndSurvivesRestart() async throws {
+        let env = environment!
+        env.installPricing(model: model, input: 1, output: 10)
+        try env.writeClaudeLog(session: "fork-original", lines: forkOriginalLines(env, session: "fork-original"))
+        let service = env.makeService()
+        await env.bootstrap(service)
+        await service.scanNow()
+
+        let snapshot = try committed(env)
+        XCTAssertNotNil(snapshot.rebuildBasis)
+        XCTAssertTrue(snapshot.scanState.claudeSeenMessageIds.isEmpty)
+        let ledger = UsageMessageLedger(payload: snapshot.messageLedger)
+        XCTAssertEqual(
+            ledger.ids(for: ["claude:fork-original"], app: .claude),
+            [SeenIDSet.digest("fork-1"), SeenIDSet.digest("fork-2")]
+        )
+
+        let restarted = env.makeService()
+        await env.bootstrap(restarted)
+        try env.writeClaudeLog(session: "fork-continued", lines: forkContinuedLines(env))
+        await restarted.scanNow()
+        XCTAssertEqual(env.totals(result(restarted).day, app: .claude).inputTokens, 7_000, "复制过去的消息不得重复计入")
+        XCTAssertEqual(
+            result(restarted).conversation
+                .filter { $0.conversationKey == "claude:fork-continued" }
+                .reduce(0) { $0 + $1.inputTokens },
+            4_000
+        )
+    }
+
+    /// 按日核对的缺口：同一天同一模型有两个被删会话、其中一个被续接时，按日核对会重复计入。
+    /// 有账本时两个被删会话都原样保留，续接会话只计自己的新消息。
+    func testTwoDeletedConversationsOnSameDayAreKeptExactlyWithLedger() async throws {
+        let env = environment!
+        env.installPricing(model: model, input: 1, output: 10)
+        let first = try env.writeClaudeLog(session: "gone-a", lines: forkOriginalLines(env, session: "gone-a"))
+        let second = try env.writeClaudeLog(session: "gone-b", lines: [
+            env.claudeLine(id: "gone-b-1", session: "gone-b", model: model, timestamp: timestamp(-0.4, from: forkReference), input: 8_000, output: 800, speed: "standard"),
+        ])
+        let service = env.makeService()
+        await env.bootstrap(service)
+        await service.scanNow()
+        try env.writeClaudeLog(session: "fork-continued", lines: forkContinuedLines(env))
+        await service.scanNow()
+        let before = result(service)
+        XCTAssertEqual(env.totals(before.day, app: .claude).inputTokens, 15_000)
+
+        try FileManager.default.removeItem(at: first)
+        try FileManager.default.removeItem(at: second)
+        await service.forceRescan()
+        XCTAssertEqual(service.lastRebuildOutcome, .replaced(cycleVerified: true), service.lastRebuildDiagnostic ?? "")
+        XCTAssertEqual(env.totals(result(service).day, app: .claude).inputTokens, 15_000)
+        XCTAssertEqual(env.conversationVector(before.conversation), env.conversationVector(result(service).conversation))
+    }
+
+    /// 补录只填没有任何 Claude 用量的天：被删会话保留下来的那天不能再叠加补录。
+    func testBackfillDoesNotStackOnPreservedConversation() async throws {
+        let env = environment!
+        env.installPricing(model: model, input: 1, output: 10)
+        let day = UsageDay.startOfDay(for: forkReference.addingTimeInterval(-0.6 * 3_600))
+        try JSONEncoder().encode([
+            UsageBucket(
+                app: .claude, model: model, speed: .standard, day: day,
+                inputTokens: 999_999, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0,
+                costUSD: 0, requestCount: 1, hasUnpricedUsage: true
+            ),
+        ]).write(to: env.backfillURL)
+        let original = try env.writeClaudeLog(session: "fork-original", lines: forkOriginalLines(env, session: "fork-original"))
+        let service = env.makeService()
+        await env.bootstrap(service)
+        await service.scanNow()
+        XCTAssertEqual(env.totals(result(service).day, app: .claude).inputTokens, 3_000)
+
+        try FileManager.default.removeItem(at: original)
+        await service.forceRescan()
+        XCTAssertEqual(service.lastRebuildOutcome, .replaced(cycleVerified: true), service.lastRebuildDiagnostic ?? "")
+        XCTAssertEqual(env.totals(result(service).day, app: .claude).inputTokens, 3_000)
+    }
+
+    func testLedgerDigestIsStableAndPayloadRoundTrips() {
+        // SHA-256("abc") 前 8 字节按小端序；改动摘要算法会让已保存的账本全部失效。
+        XCTAssertEqual(SeenIDSet.digest("abc"), 0xeacf_018f_bf16_78ba)
+        var ledger = UsageMessageLedger()
+        ledger.record(["claude:a": [1, 2], "claude:b": [3]], app: .claude)
+        ledger.record(["codex:c": [UInt64.max]], app: .codex)
+        let restored = UsageMessageLedger(payload: ledger.payload)
+        XCTAssertEqual(restored.conversations[.claude]?["claude:a"], [1, 2])
+        XCTAssertEqual(restored.conversations[.claude]?["claude:b"], [3])
+        XCTAssertEqual(restored.knownIDs(for: .codex), [UInt64.max])
+        var unknown = ledger.payload
+        unknown.version = UsageMessageLedgerPayload.currentVersion + 1
+        XCTAssertTrue(UsageMessageLedger(payload: unknown).isEmpty)
+    }
+
+    // MARK: - 自动重建
+
+    /// 旧版本快照没有基准：升级后第一次扫描自动重建一次，补齐账本；之后不再重复。
+    func testAutomaticRebuildRunsOnceAfterUpgrade() async throws {
+        let env = environment!
+        env.installPricing(model: model, input: 1, output: 10)
+        let service = try await seed(env)
+        await service.flushPendingRollupChangesForTesting()
+        let before = result(service)
+        try stripRebuildState(env)
+
+        let restarted = env.makeService()
+        restarted.automaticRebuildEnabled = true
+        await env.bootstrap(restarted)
+        await restarted.scanNow()
+        let snapshot = try committed(env)
+        XCTAssertNotNil(snapshot.rebuildBasis)
+        XCTAssertNotNil(snapshot.messageLedger)
+        XCTAssertTrue(snapshot.scanState.claudeSeenMessageIds.isEmpty)
+        XCTAssertTrue(snapshot.scanState.codexSeenTokenIds.isEmpty)
+        try assertSameDayVector(before.day, result(restarted).day, env: env)
+
+        let commits = env.stats.commitCount
+        await restarted.scanNow()
+        XCTAssertEqual(env.stats.commitCount, commits, "基准与现行规则一致后不再重建")
+    }
+
+    /// 原来缺价的用量拿到价格后立即自动重算，不等 24 小时。
+    func testAutomaticRebuildRepricesNewlyPricedUsage() async throws {
+        let env = environment!
+        try env.writeClaudeLog(session: "fork-original", lines: forkOriginalLines(env, session: "fork-original"))
+        let service = env.makeService()
+        service.automaticRebuildEnabled = true
+        await env.bootstrap(service)
+        await service.scanNow()
+        XCTAssertTrue(result(service).day.allSatisfy(\.hasUnpricedUsage))
+
+        env.installPricing(model: model, input: 1, output: 10)
+        await service.scanNow()
+        XCTAssertFalse(result(service).day.contains(where: \.hasUnpricedUsage))
+        XCTAssertEqual(dayCost(result(service).day, model: model), expectedCost(result(service).day, input: 1, output: 10))
+    }
+
+    /// 已定价模型的远端价格变化：距上次完整重建不足 24 小时先不重建，新价格只用于新记录。
+    func testRemotePriceChangeWithinIntervalDoesNotRebuild() async throws {
+        let env = environment!
+        env.installPricing(model: model, input: 1, output: 10)
+        try env.writeClaudeLog(session: "fork-original", lines: forkOriginalLines(env, session: "fork-original"))
+        let service = env.makeService()
+        service.automaticRebuildEnabled = true
+        await env.bootstrap(service)
+        await service.scanNow()
+
+        env.installPricing(model: model, input: 2, output: 20)
+        await service.scanNow()
+        XCTAssertEqual(dayCost(result(service).day, model: model), expectedCost(result(service).day, input: 1, output: 10))
+    }
+
+    func testRebuildReasonFollowsRulesPricesAndInterval() {
+        let env = environment!
+        env.installPricing(model: model, input: 1, output: 10)
+        let key = PricingUsageKey(app: .claude, model: model, speed: .standard)
+        let now = Date()
+        let recent = UsageRebuildBasis.current(usageKeys: [key], at: now.addingTimeInterval(-3_600))
+        func reason(
+            _ basis: UsageRebuildBasis?,
+            keys: Set<PricingUsageKey> = [key],
+            unpriced: Set<PricingUsageKey> = [],
+            user: Bool = false
+        ) -> UsageAutomaticRebuildReason? {
+            UsageRebuildBasis.rebuildReason(
+                basis: basis, usageKeys: keys, unpricedKeys: unpriced,
+                userRequestedCatalog: user, now: now, minimumInterval: 24 * 3_600
+            )
+        }
+
+        XCTAssertNil(reason(recent))
+        XCTAssertEqual(reason(nil), .statsRules)
+        var oldRules = recent
+        oldRules.statsRules = [:]
+        XCTAssertEqual(reason(oldRules), .statsRules)
+        var oldLocal = recent
+        oldLocal.localPricing = "older"
+        XCTAssertEqual(reason(oldLocal), .localPricing)
+        // 新出现的键按当时价格计价，不触发重建。
+        XCTAssertNil(reason(recent, keys: [key, PricingUsageKey(app: .codex, model: model, speed: .standard)]))
+
+        env.installPricing(model: model, input: 2, output: 20)
+        XCTAssertNil(reason(recent), "24 小时内的普通价格变化先不重建")
+        XCTAssertEqual(reason(recent, unpriced: [key]), .newlyPriced)
+        XCTAssertEqual(reason(recent, user: true), .catalogUpdatedByUser)
+        var stale = recent
+        stale.rebuiltAt = now.addingTimeInterval(-25 * 3_600)
+        XCTAssertEqual(reason(stale), .remotePricing)
+    }
+
+    /// 把快照改成旧版本写的样子：去掉账本与基准。
+    private func stripRebuildState(_ env: UsageTestEnvironment) throws {
+        var snapshot = try committed(env)
+        snapshot.messageLedger = nil
+        snapshot.rebuildBasis = nil
+        try env.store.commit(snapshot)
     }
 
     private let forkReference = Date()

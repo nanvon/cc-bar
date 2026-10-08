@@ -38,6 +38,8 @@ enum CodexJSONLScanner {
         /// 仅 `historicalBoundary` 模式：根目录不可访问、文件读取失败或扫描中被移走的数量。
         /// 这类失败可重试，调用方不能把缺失的证据当成确定结果提交。
         var historicalTransientFailureCount = 0
+        /// 本轮计入的去重键摘要，按对话 key 分组（见 `UsageMessageLedger`）。
+        var ledger: [String: [UInt64]] = [:]
     }
 
     /// 文件级并发解析的最大并发数。codex 日志文件独立（会话互不重叠），
@@ -68,6 +70,7 @@ enum CodexJSONLScanner {
     /// 解析结果与串行实现完全一致。
     /// - Parameter seenTokenIds: 上一轮持久化的跨文件去重键；缺省为空表示本轮从零建集合
     ///   （全量重扫走这条，测试同理）。
+    /// - Parameter knownIDs: 消息账本里已计入的去重键摘要，与 `seenTokenIds` 一起去重。
     /// - Parameter minimumMtime: 非 nil 时只扫修改时间不早于该时刻的文件（周期受限重建用）。
     /// - Parameter historicalBoundary: 标识迁移用，从零重放到各文件已提交 offset；不定价，
     ///   截断 / 无效记录 / 末尾上下文不符的文件不产出证据；读取失败、根目录不可访问、
@@ -76,6 +79,7 @@ enum CodexJSONLScanner {
     nonisolated static func scan(
         previous: [String: ScanFileState],
         seenTokenIds: [String] = [],
+        knownIDs: Set<UInt64> = [],
         roots: [URL],
         indexedTitles: [String: String],
         minimumMtime: Date? = nil,
@@ -120,7 +124,8 @@ enum CodexJSONLScanner {
         var historicalTransientFailureCount = historicalBoundary == nil ? 0 : failedRootCount
         // 跨文件去重：fork 会话把父会话的整段 token_count 历史重放进自己的 JSONL，
         // 同一条记录因此出现在多个文件里。键为 `发出该记录的会话 id#累计用量签名`。
-        var seen = SeenIDSet(seenTokenIds)
+        var seen = SeenIDSet(seenTokenIds, known: knownIDs)
+        var ledger: [String: [UInt64]] = [:]
         // 本批次内出现过 cache_write 的会话 key；避免每个文件收尾时对全部
         // 已累积 entries 做线性 contains（全量重扫时是平方级开销）。
         var cacheCreationKeys: Set<String> = []
@@ -184,6 +189,7 @@ enum CodexJSONLScanner {
                     if let key = pending.dedupeKey {
                         if seen.contains(key) { continue }
                         seen.insert(key)
+                        ledger[pending.entry.conversationKey, default: []].append(SeenIDSet.digest(key))
                     }
                     entries.append(pending.entry)
                     if pending.hasCacheCreation {
@@ -234,7 +240,8 @@ enum CodexJSONLScanner {
             filesScanned: files.count,
             linesParsed: linesParsed,
             failedFileCount: failedFileCount,
-            historicalTransientFailureCount: historicalTransientFailureCount
+            historicalTransientFailureCount: historicalTransientFailureCount,
+            ledger: ledger
         )
     }
 

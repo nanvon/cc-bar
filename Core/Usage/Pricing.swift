@@ -414,7 +414,7 @@ nonisolated enum Pricing {
     ///
     /// DeepSeek（2026-09 起）：官方按「高峰 / 空闲」两档峰谷计价，空闲时段是高峰价的五折。
     /// 第一版不实现峰谷时段与中国法定假日日历，**两段都取高峰价**，因此金额是估算上界：
-    /// 偏高但不低报。分段按用量记录时间判定，历史天数仍落在旧价，手动重算也不会改写历史。
+    /// 偏高但不低报。分段按用量记录时间判定，历史天数仍落在旧价，重算也不会改写历史。
     private static let timedOverrides: [String: [PricedPeriod]] = [
         "deepseek-flash": deepseekFlashPeriods,
         "deepseek-v4-flash": deepseekFlashPeriods,
@@ -899,14 +899,54 @@ nonisolated enum Pricing {
         return ratio
     }
 
-    /// 价格表内容指纹（SHA-256，确定性）。
-    /// 扫描状态 / 汇总缓存只把它当作诊断记录，**加载时不做比对**：价格变化既不让缓存失效，
-    /// 也不自动全量重扫重算历史桶（见 `ScanCache`）。新增模型、改价、修正数值或调整限时覆盖后，
-    /// 新条目按现价计，历史桶保持旧价，需要对齐时由用户在设置页手动「重新计算用量」。
+    /// 价格表内容指纹（SHA-256，确定性），只写进快照作诊断记录，加载时不做比对。
+    /// 是否要按新价格重建历史由 `localPricingFingerprint()` 与 `remotePricingSignature(for:)`
+    /// 逐项判断（见 `UsageRebuildBasis`）。
     ///
     /// - Parameter knownUsage: 当前用量中实际出现过的 app/model/speed 集合。远端合并价只对
     ///   这个集合算入哈希，避免远端目录里本地未使用模型的变化造成无关的指纹漂移。
     static func fingerprint(knownUsage: Set<PricingUsageKey>) -> String {
+        let fastMultiplierBody = [
+            fingerprintBody(codexFastMultipliers, prefix: "codex"),
+            fingerprintBody(claudeFastMultipliers, prefix: "claude")
+        ].joined(separator: ";")
+        let remoteBody = knownUsage.sorted { $0.persistedKey < $1.persistedKey }.compactMap { usage -> String? in
+            remoteRate(for: usage).map { rate in
+                "\(usage.persistedKey):\(rate.input)/\(rate.output)/\(rate.cacheRead)/\(rate.cacheCreation)"
+            }
+        }.joined(separator: ";")
+        return sha256Hex("\(localPriceBody())|\(fastMultiplierBody)|\(remoteBody)")
+    }
+
+    /// 本地价格规则（固定价、分段价、阶梯价、Fast 价、缓存规则）的指纹，不含远端目录与 Fast 倍率。
+    /// 本地价格表随 App 更新改变；与历史计价时的值不同就说明历史费用需要按新价格重建。
+    static func localPricingFingerprint() -> String {
+        cachedLocalPricingFingerprint
+    }
+
+    /// 本地价格规则都是编译期常量，进程内只算一次；每轮扫描后的自动重建判断都要用它。
+    private static let cachedLocalPricingFingerprint = sha256Hex(localPriceBody())
+
+    /// 某个用量键当前采用的远端价格；本地规则管辖或远端没有收录时为 "-"。
+    /// 与历史计价时记下的值不同，说明这个键的历史费用需要按新价格重建。
+    static func remotePricingSignature(for usage: PricingUsageKey) -> String {
+        guard let rate = remoteRate(for: usage) else { return "-" }
+        return "\(rate.input)/\(rate.output)/\(rate.cacheRead)/\(rate.cacheCreation)"
+    }
+
+    /// 计价时实际会用到的远端价格。本地规则优先的键返回 nil，与 `price(for:)` 的取价顺序一致。
+    private static func remoteRate(for usage: PricingUsageKey) -> ModelPrice? {
+        if usage.speed == .standard, localOverrideKeys.contains(usage.model) { return nil }
+        if usage.speed == .fast, fixedFastLocalOverrideKeys.contains(usage.model) { return nil }
+        if usage.speed == .fast, usage.app == .codex, timedCodexFastPrices[usage.model] != nil { return nil }
+        return PricingCatalogStore.shared.rate(for: usage.model, app: usage.app, speed: usage.speed)
+    }
+
+    private static func sha256Hex(_ text: String) -> String {
+        SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func localPriceBody() -> String {
         let baseBody = table.keys.sorted().map { key -> String in
             let p = table[key]!
             return "\(key):\(p.input)/\(p.output)/\(p.cacheRead)/\(p.cacheCreation)"
@@ -951,26 +991,10 @@ nonisolated enum Pricing {
             fingerprintBody(codexFastPrices, prefix: "codex"),
             fingerprintBody(claudeFastPrices, prefix: "claude")
         ].joined(separator: ";")
-        let fastMultiplierBody = [
-            fingerprintBody(codexFastMultipliers, prefix: "codex"),
-            fingerprintBody(claudeFastMultipliers, prefix: "claude")
-        ].joined(separator: ";")
         let cacheRuleBody = "claude-cache-creation-1h:\(claudeCacheCreation1hMultiplier)"
         let fixedOverrideBody = fixedLocalOverrideKeys.sorted().joined(separator: ";")
         let fixedFastOverrideBody = fixedFastLocalOverrideKeys.sorted().joined(separator: ";")
-        let remoteBody = knownUsage.sorted { $0.persistedKey < $1.persistedKey }.compactMap { usage -> String? in
-            if usage.speed == .standard, localOverrideKeys.contains(usage.model) { return nil }
-            if usage.speed == .fast, fixedFastLocalOverrideKeys.contains(usage.model) { return nil }
-            if usage.speed == .fast, usage.app == .codex, timedCodexFastPrices[usage.model] != nil { return nil }
-            guard let rate = PricingCatalogStore.shared.rate(
-                for: usage.model,
-                app: usage.app,
-                speed: usage.speed
-            ) else { return nil }
-            return "\(usage.persistedKey):\(rate.input)/\(rate.output)/\(rate.cacheRead)/\(rate.cacheCreation)"
-        }.joined(separator: ";")
-        let digest = SHA256.hash(data: Data("\(baseBody)|\(tierBody)|\(timedTierBody)|\(timedFastBody)|\(fastLongBody)|\(timedFastLongBody)|\(overrideBody)|\(fixedOverrideBody)|\(fixedFastOverrideBody)|\(fastPriceBody)|\(fastMultiplierBody)|\(cacheRuleBody)|\(remoteBody)".utf8))
-        return digest.map { String(format: "%02x", $0) }.joined()
+        return "\(baseBody)|\(tierBody)|\(timedTierBody)|\(timedFastBody)|\(fastLongBody)|\(timedFastLongBody)|\(overrideBody)|\(fixedOverrideBody)|\(fixedFastOverrideBody)|\(fastPriceBody)|\(cacheRuleBody)"
     }
 
     private static func fingerprintBody(_ values: [String: ModelPrice], prefix: String) -> String {

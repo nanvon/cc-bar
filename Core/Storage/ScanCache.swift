@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 /// 单个 JSONL 文件的扫描 watermark。
 nonisolated struct ScanFileState: Sendable, Equatable, Codable {
@@ -56,10 +57,10 @@ nonisolated struct ScanFileIdentity: Sendable, Equatable, Codable {
 }
 
 nonisolated struct ScanState: Sendable, Equatable, Codable {
-    /// version 管「结构变更」（字段增减或费用口径改变时 bump）；价格变化不触发自动失效，
-    /// 历史费用保持旧价，由设置页「重新计算用量」手动对齐。
-    /// 因此**修正本地价格表（`Pricing.table` 等）后若要让已发布用户的历史费用自动对齐，
-    /// 必须一并 bump 本版本号**——没有指纹兜底了，忘了 bump 就只有手动重算才会生效。
+    /// version 管「结构变更」（字段增减时 bump），bump 会让进度失效、清空后从零重扫，
+    /// 已删除日志的历史随之丢失，不要用它对齐价格或统计规则：
+    /// 价格变化由 `UsageRebuildBasis` 自动重建对齐；会改变历史数字的解析 / 归属规则改动，
+    /// bump `UsageStatsRules` 对应来源的版本，升级后自动安全重建（保留已删除日志的对话）。
     /// v9: Claude 流式半成品不再入账；旧 seen / rollup 可能已污染，必须全量重建。
     /// v10: 新增 pi 扫描 watermark（`pi` / `piSeenEntryIds`）。
     /// v11: 新增 opencode 扫描 watermark（`opencodeLastMessageTime` / `opencodeSeenMessageIds`）。
@@ -73,11 +74,12 @@ nonisolated struct ScanState: Sendable, Equatable, Codable {
     static let currentVersion: Int = 15
     var version: Int = ScanState.currentVersion
     var generationID: String = ""
-    /// 写盘时记录的价格指纹，仅作诊断；加载不因指纹不一致失效（价格变化不自动重算）。
+    /// 写盘时记录的价格指纹，仅作诊断；加载不因指纹不一致失效（价格变化由 `UsageRebuildBasis` 判断是否重建）。
     var pricingFingerprint: String = ""
     var claude: [String: ScanFileState] = [:]
     var codex: [String: ScanFileState] = [:]
     /// 跨文件的 Claude message.id 去重集合（同一条 assistant 消息可能被 sidechain / subagent 在多个 jsonl 里重复引用）。
+    /// 三个 seen 列表都有 2 万条上限；`UsageRebuildBasis` 建立后由无上限的 `UsageMessageLedger` 代替，保存为空。
     var claudeSeenMessageIds: [String] = []
     /// 跨文件的 Codex token_count 去重集合，键为 `发出该记录的会话 id#累计用量签名`；
     /// 覆盖 fork 会话把父会话整段历史重放进新 JSONL 导致的重复计费。
@@ -109,9 +111,12 @@ nonisolated struct SeenIDSet {
     /// 旧 → 新。
     private var ordered: [String]
     private var index: Set<String>
+    /// 消息账本里已计入的 ID 摘要（见 `UsageMessageLedger`）。只读：本轮新记下的 ID 仍进 `index`。
+    private let known: Set<UInt64>
 
     /// - Parameter existing: 上一轮持久化的 ID，已按旧 → 新排列；重复项按首次出现保留。
-    init(_ existing: [String]) {
+    /// - Parameter known: 账本里已计入的 ID 摘要，没有条数上限。
+    init(_ existing: [String], known: Set<UInt64> = []) {
         var index = Set<String>()
         index.reserveCapacity(existing.count)
         var ordered: [String] = []
@@ -121,10 +126,19 @@ nonisolated struct SeenIDSet {
         }
         self.ordered = ordered
         self.index = index
+        self.known = known
     }
 
     func contains(_ id: String) -> Bool {
-        index.contains(id)
+        index.contains(id) || (!known.isEmpty && known.contains(Self.digest(id)))
+    }
+
+    /// 去重 ID 的稳定 64 位摘要（SHA-256 前 8 字节），账本只存它、不存原始 ID。
+    /// 不能用 `hashValue`：它每次启动随机加盐，跨启动不一致。
+    static func digest(_ id: String) -> UInt64 {
+        SHA256.hash(data: Data(id.utf8)).withUnsafeBytes {
+            UInt64(littleEndian: $0.loadUnaligned(as: UInt64.self))
+        }
     }
 
     mutating func insert(_ id: String) {
@@ -210,14 +224,14 @@ enum ScanCache {
 
 /// 聚合结果磁盘缓存，启动后立刻 UI 有数。
 nonisolated struct UsageRollupPayload: Sendable, Codable {
-    /// version 管「结构变更或费用口径改变」；价格变化不触发自动失效，由手动重算对齐。
+    /// version 管「结构变更或费用口径改变」；价格变化不触发失效，由自动重建对齐（见 `UsageRebuildBasis`）。
     /// v8: 配合 ScanState v9 清除曾被提前入账的 Claude 流式半成品。
     /// v9: Pi/OpenCode 统一费用解析规则改变，旧聚合结果必须全量重算。
     /// v10: 新增 DSH 本地用量服务（配合 ScanState v15）；旧快照没有 DSH 分区，必须全量重建。
     static let currentVersion: Int = 10
     var version: Int = UsageRollupPayload.currentVersion
     var generationID: String = ""
-    /// 写盘时记录的价格指纹，仅作诊断；加载不因指纹不一致丢弃（价格变化不自动重算）。
+    /// 写盘时记录的价格指纹，仅作诊断；加载不因指纹不一致丢弃（价格变化由 `UsageRebuildBasis` 判断是否重建）。
     var pricingFingerprint: String = ""
     var buckets: [UsageBucket] = []
     var updatedAt: Date = Date()

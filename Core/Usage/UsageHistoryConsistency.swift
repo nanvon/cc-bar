@@ -255,7 +255,199 @@ nonisolated enum UsageHistoryConsistency {
     }
 }
 
-/// 手动重建的合并规则：日志还在的对话以重扫结果为准（新解析规则、新价格都生效）；
+/// 按对话记录已计入的消息 ID，只存 `SeenIDSet.digest` 摘要，不存原始 ID。
+///
+/// 两个用途：一是代替有 2 万条上限的 seen 列表做跨轮去重，ID 不再因截断被遗忘；
+/// 二是重建时把日志已删除对话的 ID 预先放进去重集合，续接 / 分叉对话复制过去的同一批消息
+/// 不会被重扫再计一次，已删除对话的原用量可以原样保留（见 `UsageRebuildMerge`）。
+/// Claude 记 message.id，Codex 记 `会话 id#累计用量签名`，Pi 记 `entryID@timestamp`；
+/// OpenCode、DSH 按会话整体替换，不需要账本。
+nonisolated struct UsageMessageLedger: Sendable {
+    static let apps: [UsageApp] = [.claude, .codex, .pi]
+
+    /// app → 对话 key → 摘要。
+    private(set) var conversations: [UsageApp: [String: [UInt64]]] = [:]
+    /// app → 全部摘要，扫描时直接作为已计入集合。
+    private var known: [UsageApp: Set<UInt64>] = [:]
+
+    init() {}
+
+    /// 版本不认识时返回空账本，由调用方按「没有重建基准」处理。
+    init(payload: UsageMessageLedgerPayload?) {
+        guard let payload, payload.version == UsageMessageLedgerPayload.currentVersion else { return }
+        for (rawApp, entries) in payload.conversations {
+            guard let app = UsageApp(rawValue: rawApp), Self.apps.contains(app) else { continue }
+            record(entries.mapValues(Self.unpack), app: app)
+        }
+    }
+
+    var payload: UsageMessageLedgerPayload {
+        var result = UsageMessageLedgerPayload()
+        for (app, entries) in conversations {
+            result.conversations[app.rawValue] = entries.mapValues(Self.pack)
+        }
+        return result
+    }
+
+    var isEmpty: Bool { conversations.values.allSatisfy(\.isEmpty) }
+
+    func knownIDs(for app: UsageApp) -> Set<UInt64> {
+        known[app] ?? []
+    }
+
+    func contains(_ conversationKey: String, app: UsageApp) -> Bool {
+        conversations[app]?[conversationKey] != nil
+    }
+
+    /// 指定对话的全部摘要。
+    func ids(for conversationKeys: Set<String>, app: UsageApp) -> Set<UInt64> {
+        var result = Set<UInt64>()
+        for key in conversationKeys {
+            if let ids = conversations[app]?[key] { result.formUnion(ids) }
+        }
+        return result
+    }
+
+    /// 只保留指定对话。
+    func filtered(_ conversationKeys: Set<String>, app: UsageApp) -> [String: [UInt64]] {
+        (conversations[app] ?? [:]).filter { conversationKeys.contains($0.key) }
+    }
+
+    /// 追加一轮扫描计入的 ID。扫描器已按 seen 去重，同一 ID 不会出现两次。
+    mutating func record(_ ids: [String: [UInt64]], app: UsageApp) {
+        for (key, values) in ids where !values.isEmpty {
+            conversations[app, default: [:]][key, default: []].append(contentsOf: values)
+            known[app, default: []].formUnion(values)
+        }
+    }
+
+    private static func pack(_ ids: [UInt64]) -> Data {
+        var data = Data(capacity: ids.count * 8)
+        for id in ids {
+            withUnsafeBytes(of: id.littleEndian) { data.append(contentsOf: $0) }
+        }
+        return data
+    }
+
+    private static func unpack(_ data: Data) -> [UInt64] {
+        guard data.count % 8 == 0 else { return [] }
+        return data.withUnsafeBytes { raw in
+            stride(from: 0, to: raw.count, by: 8).map {
+                UInt64(littleEndian: raw.loadUnaligned(fromByteOffset: $0, as: UInt64.self))
+            }
+        }
+    }
+}
+
+nonisolated struct UsageMessageLedgerPayload: Sendable, Codable, Equatable {
+    static let currentVersion = 1
+    var version = UsageMessageLedgerPayload.currentVersion
+    /// app → 对话 key → 小端序拼接的 8 字节摘要（JSON 里是 base64）。
+    var conversations: [String: [String: Data]] = [:]
+}
+
+/// 各来源的统计规则版本。修改解析、去重或归属规则，且会改变已采集的历史数字时，把对应来源加 1：
+/// 用户升级后自动按新规则重建一次历史（日志已删除的对话保留原用量）。只影响新记录的改动不用加。
+nonisolated enum UsageStatsRules {
+    static let versions: [UsageApp: Int] = [
+        .claude: 1,
+        .codex: 1,
+        .pi: 1,
+        .opencode: 1,
+        .dsh: 1,
+    ]
+
+    static var persisted: [String: Int] {
+        Dictionary(uniqueKeysWithValues: versions.map { ($0.key.rawValue, $0.value) })
+    }
+}
+
+/// 自动重建的原因，写日志用。
+nonisolated enum UsageAutomaticRebuildReason: String, Sendable, Equatable {
+    /// 还没有重建基准（升级后首次，或账本不可用），或统计规则版本变化。
+    case statsRules = "stats_rules"
+    /// 本地价格规则变化（随 App 更新）。
+    case localPricing = "local_pricing"
+    /// 远端价格变化，其中有原来缺价的用量。
+    case newlyPriced = "newly_priced"
+    /// 用户手动更新价格目录后，远端价格有变化。
+    case catalogUpdatedByUser = "catalog_updated"
+    /// 远端价格变化；距上次完整重建不足 24 小时时等到满 24 小时。
+    case remotePricing = "remote_pricing"
+}
+
+/// 现有历史对应的统计规则与价格。与现行规则或价格不一致时，自动按新规则 / 新价格重建一次历史。
+nonisolated struct UsageRebuildBasis: Sendable, Codable, Equatable {
+    static let currentVersion = 1
+    var version = UsageRebuildBasis.currentVersion
+    /// 最近一次完整重建（或首装全量扫描）的提交时间。
+    var rebuiltAt: Date
+    /// 各来源的统计规则版本（`UsageStatsRules`）。
+    var statsRules: [String: Int]
+    /// 本地价格规则指纹（`Pricing.localPricingFingerprint()`）。
+    var localPricing: String
+    /// 每个用量键计价时采用的远端价格（`Pricing.remotePricingSignature(for:)`），
+    /// 键为 `PricingUsageKey.persistedKey`。增量扫描遇到新键时按当时的价格补记。
+    var remotePricing: [String: String]
+
+    /// 按现行规则和价格建立基准。
+    static func current(usageKeys: Set<PricingUsageKey>, at date: Date) -> UsageRebuildBasis {
+        var remote: [String: String] = [:]
+        for key in usageKeys {
+            remote[key.persistedKey] = Pricing.remotePricingSignature(for: key)
+        }
+        return UsageRebuildBasis(
+            rebuiltAt: date,
+            statsRules: UsageStatsRules.persisted,
+            localPricing: Pricing.localPricingFingerprint(),
+            remotePricing: remote
+        )
+    }
+
+    /// 增量扫描新出现的用量键按当时的价格计价，补记进基准；已有的键不改。
+    /// 返回是否有变化。
+    @discardableResult
+    mutating func recordNewKeys(_ usageKeys: Set<PricingUsageKey>) -> Bool {
+        var changed = false
+        for key in usageKeys where remotePricing[key.persistedKey] == nil {
+            remotePricing[key.persistedKey] = Pricing.remotePricingSignature(for: key)
+            changed = true
+        }
+        return changed
+    }
+
+    /// 判断是否需要自动重建。
+    /// - Parameters:
+    ///   - basis: 现有历史的基准；nil 表示还没有建立（升级后首次）。
+    ///   - usageKeys: 现有历史里出现过的用量键。
+    ///   - unpricedKeys: 其中带缺价用量的键。
+    ///   - userRequestedCatalog: 用户刚手动更新过价格目录。
+    ///   - minimumInterval: 普通远端价格变化距上次完整重建的最短间隔。
+    static func rebuildReason(
+        basis: UsageRebuildBasis?,
+        usageKeys: Set<PricingUsageKey>,
+        unpricedKeys: Set<PricingUsageKey>,
+        userRequestedCatalog: Bool,
+        now: Date,
+        minimumInterval: TimeInterval
+    ) -> UsageAutomaticRebuildReason? {
+        guard let basis, basis.version == currentVersion,
+              basis.statsRules == UsageStatsRules.persisted
+        else { return .statsRules }
+        if basis.localPricing != Pricing.localPricingFingerprint() { return .localPricing }
+        // 只比较两边都有的键：Codex 标识迁移等改名后，旧键不再出现在用量里。
+        let changed = usageKeys.filter { key in
+            guard let recorded = basis.remotePricing[key.persistedKey] else { return false }
+            return recorded != Pricing.remotePricingSignature(for: key)
+        }
+        guard !changed.isEmpty else { return nil }
+        if !changed.isDisjoint(with: unpricedKeys) { return .newlyPriced }
+        if userRequestedCatalog { return .catalogUpdatedByUser }
+        return now.timeIntervalSince(basis.rebuiltAt) >= minimumInterval ? .remotePricing : nil
+    }
+}
+
+/// 重建的合并规则：日志还在的对话以重扫结果为准（新解析规则、新价格都生效）；
 /// 日志已全部删除的对话保留原用量，只按当前价格表重新计算金额。
 /// 只处理 Claude / Codex / Pi：OpenCode、DSH 本来就按会话保留源库中已删除的历史，候选里已带着这部分。
 nonisolated enum UsageRebuildMerge {
@@ -272,8 +464,21 @@ nonisolated enum UsageRebuildMerge {
 
     static let preservedApps: Set<UsageApp> = [.claude, .codex, .pi]
 
+    /// 日志已删除的对话：档案里记录的日志路径都已不存在。重建扫描之前就要确定，
+    /// 才能把其中有账本的对话的消息 ID 预先放进去重集合。
+    static func deletedConversations(
+        _ infos: [ConversationInfo],
+        sourceExists: (String) -> Bool
+    ) -> [ConversationInfo] {
+        infos.filter { info in
+            preservedApps.contains(info.app) && !info.sourcePaths.contains(where: sourceExists)
+        }
+    }
+
     /// - Parameters:
     ///   - cycleStartByID: 周期起点，用作被保留周期桶的取价时间；找不到的周期桶保留原金额。
+    ///   - ledgerBackedKeys: 日志已删除、且账本里有消息 ID 的对话。扫描时已把它们的 ID 预先放进
+    ///     去重集合，重扫不会再计入这些消息，原用量全部保留，不做核对。
     ///   - sourceExists: 判断对话档案里记录的日志路径是否仍在。
     static func preserveDeletedConversations(
         baselineDay: [UsageBucket],
@@ -285,6 +490,7 @@ nonisolated enum UsageRebuildMerge {
         candidateConversation: [ConversationUsageBucket],
         candidateCycles: [CycleUsageBucket],
         cycleStartByID: [String: Date],
+        ledgerBackedKeys: Set<String> = [],
         sourceExists: (String) -> Bool
     ) -> Result {
         var result = Result(
@@ -295,33 +501,63 @@ nonisolated enum UsageRebuildMerge {
         )
         let candidateKeys = Set(candidateInfos.map(\.key))
             .union(candidateConversation.map(\.conversationKey))
-        // 重扫里没有、且记录的日志路径都已不存在，才算日志已删除。
+        let exactKeys = Set(baselineInfos.lazy
+            .filter { preservedApps.contains($0.app) && ledgerBackedKeys.contains($0.key) }
+            .map(\.key))
+        // 没有账本的（账本建立之前就删除的）：重扫里没有、且日志路径都已不存在才保留。
         // 文件还在却没有重扫出用量的对话（归属改变、解析规则变化）以重扫结果为准，不保留。
-        let deleted = baselineInfos.filter { info in
-            preservedApps.contains(info.app)
-                && !candidateKeys.contains(info.key)
-                && !info.sourcePaths.contains(where: sourceExists)
-        }
-        guard !deleted.isEmpty else { return result }
-        let deletedKeys = Set(deleted.map(\.key))
+        let legacyKeys = Set(deletedConversations(baselineInfos, sourceExists: sourceExists).lazy
+            .filter { !exactKeys.contains($0.key) && !candidateKeys.contains($0.key) }
+            .map(\.key))
+        guard !exactKeys.isEmpty || !legacyKeys.isEmpty else { return result }
 
-        // 防重复计入：原对话日志被删、续接对话还在时，续接对话会在重扫里重新计入复制过去的消息。
-        // 某个键上重扫结果已不少于历史，说明被删对话的用量已经算在别处，不再叠加。
+        // 没有账本的对话只能按日核对防重复：原对话日志被删、续接对话还在时，续接对话会在重扫里
+        // 重新计入复制过去的消息。某个键上重扫结果已不少于历史，说明被删对话的用量已经算在别处，不再叠加。
         let baselineDayVector = UsageHistoryConsistency.dayVector(baselineDay)
         let candidateDayVector = UsageHistoryConsistency.dayVector(candidateDay)
         var dayBuckets: [UsageVectorKey: UsageBucket] = [:]
         for bucket in candidateDay {
             dayBuckets[UsageVectorKey(app: bucket.app, day: bucket.day, model: bucket.model, speed: bucket.speed)] = bucket
         }
+        // 有账本的对话可能同时出现在重扫里（例如日志被移到档案没记录的路径、又追加了新消息），
+        // 保留的桶要与重扫的同键桶相加，不能并列。
+        var conversationBuckets: [ConversationVectorKey: ConversationUsageBucket] = [:]
+        for bucket in candidateConversation {
+            conversationBuckets[ConversationVectorKey(
+                conversationKey: bucket.conversationKey, day: bucket.day, model: bucket.model, speed: bucket.speed
+            )] = bucket
+        }
         var keptKeys: Set<String> = []
-        for bucket in baselineConversation where deletedKeys.contains(bucket.conversationKey) {
+        for bucket in baselineConversation {
+            let isExact = exactKeys.contains(bucket.conversationKey)
+            guard isExact || legacyKeys.contains(bucket.conversationKey) else { continue }
             let key = UsageVectorKey(app: bucket.app, day: bucket.day, model: bucket.model, speed: bucket.speed)
-            if covers(candidateDayVector[key], baselineDayVector[key]) {
+            if !isExact, covers(candidateDayVector[key], baselineDayVector[key]) {
                 result.skippedBuckets += 1
                 continue
             }
             let kept = repriced(bucket)
-            result.conversationBuckets.append(kept)
+            let conversationKey = ConversationVectorKey(
+                conversationKey: kept.conversationKey, day: kept.day, model: kept.model, speed: kept.speed
+            )
+            if var existing = conversationBuckets[conversationKey] {
+                existing.inputTokens += kept.inputTokens
+                existing.outputTokens += kept.outputTokens
+                existing.cacheReadTokens += kept.cacheReadTokens
+                existing.cacheCreationTokens += kept.cacheCreationTokens
+                existing.requestCount += kept.requestCount
+                existing.firstAt = min(existing.firstAt, kept.firstAt)
+                existing.lastAt = max(existing.lastAt, kept.lastAt)
+                existing.costUSD += kept.costUSD
+                existing.inputCostUSD += kept.inputCostUSD
+                existing.outputCostUSD += kept.outputCostUSD
+                existing.cacheReadCostUSD += kept.cacheReadCostUSD
+                existing.cacheCreationCostUSD += kept.cacheCreationCostUSD
+                existing.hasUnpricedUsage = existing.hasUnpricedUsage || kept.hasUnpricedUsage
+                conversationBuckets[conversationKey] = existing
+            } else {
+                conversationBuckets[conversationKey] = kept
+            }
             keptKeys.insert(kept.conversationKey)
             if var day = dayBuckets[key] {
                 day.inputTokens += kept.inputTokens
@@ -343,13 +579,23 @@ nonisolated enum UsageRebuildMerge {
             }
         }
         result.dayBuckets = Array(dayBuckets.values)
-        result.conversationInfos += deleted.filter { keptKeys.contains($0.key) }
+        result.conversationBuckets = Array(conversationBuckets.values)
+        let candidateInfoKeys = Set(candidateInfos.map(\.key))
+        result.conversationInfos += baselineInfos.filter {
+            keptKeys.contains($0.key) && !candidateInfoKeys.contains($0.key)
+        }
         result.preservedConversations = keptKeys.count
 
         let baselineCycleVector = UsageHistoryConsistency.cycleVector(baselineCycles)
         let candidateCycleVector = UsageHistoryConsistency.cycleVector(candidateCycles)
+        var cycleBuckets: [CycleBucketIdentity: CycleUsageBucket] = [:]
+        for bucket in candidateCycles {
+            cycleBuckets[CycleBucketIdentity(bucket)] = bucket
+        }
         for bucket in baselineCycles {
-            guard let conversationKey = bucket.conversationKey, deletedKeys.contains(conversationKey) else { continue }
+            guard let conversationKey = bucket.conversationKey else { continue }
+            let isExact = exactKeys.contains(conversationKey)
+            guard isExact || legacyKeys.contains(conversationKey) else { continue }
             let key = CycleVectorKey(
                 cycleID: bucket.cycleID,
                 allowanceSegmentID: bucket.allowanceSegmentID,
@@ -358,7 +604,7 @@ nonisolated enum UsageRebuildMerge {
                 speed: bucket.speed,
                 quality: bucket.quality
             )
-            if covers(candidateCycleVector[key], baselineCycleVector[key]) {
+            if !isExact, covers(candidateCycleVector[key], baselineCycleVector[key]) {
                 result.skippedBuckets += 1
                 continue
             }
@@ -372,9 +618,40 @@ nonisolated enum UsageRebuildMerge {
                 kept.costUSD = cost.total
                 kept.hasUnpricedUsage = false
             }
-            result.cycleBuckets.append(kept)
+            let identity = CycleBucketIdentity(kept)
+            if var existing = cycleBuckets[identity] {
+                existing.inputTokens += kept.inputTokens
+                existing.outputTokens += kept.outputTokens
+                existing.cacheReadTokens += kept.cacheReadTokens
+                existing.cacheCreationTokens += kept.cacheCreationTokens
+                existing.costUSD += kept.costUSD
+                existing.requestCount += kept.requestCount
+                existing.hasUnpricedUsage = existing.hasUnpricedUsage || kept.hasUnpricedUsage
+                cycleBuckets[identity] = existing
+            } else {
+                cycleBuckets[identity] = kept
+            }
         }
+        result.cycleBuckets = Array(cycleBuckets.values)
         return result
+    }
+
+    /// 周期聚合器的桶键：在对账键之外还按来源对话区分。
+    private struct CycleBucketIdentity: Hashable {
+        var key: CycleVectorKey
+        var conversationKey: String?
+
+        init(_ bucket: CycleUsageBucket) {
+            key = CycleVectorKey(
+                cycleID: bucket.cycleID,
+                allowanceSegmentID: bucket.allowanceSegmentID,
+                app: bucket.app,
+                model: bucket.model,
+                speed: bucket.speed,
+                quality: bucket.quality
+            )
+            conversationKey = bucket.conversationKey
+        }
     }
 
     private static func covers(_ candidate: UsageVectorCounts?, _ baseline: UsageVectorCounts?) -> Bool {

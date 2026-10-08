@@ -174,8 +174,9 @@ nonisolated final class PricingCatalogStore: @unchecked Sendable {
         return succeeded
     }
 
-    /// 扫描发现缺价时触发。每个 app/model/speed 持久化 30 分钟冷却，避免上游尚未收录时反复下载。
-    func refreshForMissing(_ keys: Set<PricingUsageKey>) async -> Bool {
+    /// 扫描发现缺价时触发。每个 app/model/speed 持久化冷却，避免上游尚未收录时反复下载：
+    /// 手动重算用默认 30 分钟，后台自动补价传 24 小时。
+    func refreshForMissing(_ keys: Set<PricingUsageKey>, minimumInterval: TimeInterval? = nil) async -> Bool {
         #if DEBUG
         if let handler = testOverridesStorage.withLock({ $0.missingRefreshHandler }) {
             return await handler(keys)
@@ -183,6 +184,7 @@ nonisolated final class PricingCatalogStore: @unchecked Sendable {
         if testOverridesStorage.withLock({ $0.networkDisabled }) { return false }
         #endif
         let now = Date()
+        let interval = minimumInterval ?? missingRefreshInterval
         let eligible = state.withLock { catalog -> Bool in
             var payload = catalog.pending ?? catalog.active
             payload.missingRefreshAttempts = payload.missingRefreshAttempts.filter {
@@ -190,7 +192,7 @@ nonisolated final class PricingCatalogStore: @unchecked Sendable {
             }
             let dueKeys = keys.filter { key in
                 guard let attemptedAt = payload.missingRefreshAttempts[key.persistedKey] else { return true }
-                return now.timeIntervalSince(attemptedAt) >= missingRefreshInterval
+                return now.timeIntervalSince(attemptedAt) >= interval
             }
             guard !dueKeys.isEmpty else { return false }
             for key in dueKeys {

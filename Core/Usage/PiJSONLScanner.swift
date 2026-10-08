@@ -25,6 +25,8 @@ enum PiJSONLScanner {
         var newSeenIds: [String]
         var filesScanned: Int
         var linesParsed: Int
+        /// 本轮计入的去重键摘要，按对话 key 分组（见 `UsageMessageLedger`）。
+        var ledger: [String: [UInt64]] = [:]
     }
 
     nonisolated static func scan(
@@ -43,10 +45,12 @@ enum PiJSONLScanner {
     }
 
     /// 可注入日志根目录，供脱敏 JSONL fixture 测试真实 byte-offset 扫描链路。
+    /// - Parameter knownIDs: 消息账本里已计入的去重键摘要，与 `seenEntryIds` 一起去重。
     /// - Parameter onProgress: 非 nil 时按约每 50 个文件回报一次扫描进度。
     nonisolated static func scan(
         previous: [String: ScanFileState],
         seenEntryIds: [String],
+        knownIDs: Set<UInt64> = [],
         root: URL,
         onProgress: ScanProgressCallback? = nil
     ) -> Result {
@@ -56,7 +60,8 @@ enum PiJSONLScanner {
         var entries: [UsageEntry] = []
         var linesParsed = 0
         var seeds: [String: ConversationSeed] = [:]
-        var seen = SeenIDSet(seenEntryIds)
+        var seen = SeenIDSet(seenEntryIds, known: knownIDs)
+        var ledger: [String: [UInt64]] = [:]
         var projectResolver = ConversationProjectResolver()
 
         let totalFiles = files.count
@@ -98,6 +103,7 @@ enum PiJSONLScanner {
             // 与 Claude / Codex 一致——不推进 watermark 就不能留下半份结果。
             var fileEntries: [UsageEntry] = []
             var fileSeenKeys: [String] = []
+            var fileLedger: [(conversationKey: String, id: UInt64)] = []
             // 按批流式解析：单文件不再把整份内容和全部行同时读进内存。
             let outcome = JSONLLineReader.streamLines(url: url, fromOffset: state.offset) { batch in
                 for line in batch {
@@ -151,6 +157,7 @@ enum PiJSONLScanner {
                             timestamp: ts,
                             usage: parsed
                         ))
+                        fileLedger.append(("pi:\(resolvedID)", SeenIDSet.digest(dedupeKey)))
                     } else {
                         // compaction / branch_summary：仅当带 usage 字段时计入（生成摘要的 LLM 开销）。
                         guard let usage = root["usage"] as? [String: Any] else { continue }
@@ -172,6 +179,7 @@ enum PiJSONLScanner {
                             timestamp: ts,
                             usage: parsed
                         ))
+                        fileLedger.append(("pi:\(resolvedID)", SeenIDSet.digest(dedupeKey)))
                     }
                 }
             }
@@ -182,6 +190,9 @@ enum PiJSONLScanner {
                 continue
             }
             entries.append(contentsOf: fileEntries)
+            for item in fileLedger {
+                ledger[item.conversationKey, default: []].append(item.id)
+            }
 
             state.mtime = mtime
             state.offset = newOffset
@@ -210,7 +221,8 @@ enum PiJSONLScanner {
             newState: newState,
             newSeenIds: cappedSeen,
             filesScanned: files.count,
-            linesParsed: linesParsed
+            linesParsed: linesParsed,
+            ledger: ledger
         )
     }
 

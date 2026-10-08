@@ -11,6 +11,8 @@ enum ClaudeJSONLScanner {
         var filesScanned: Int
         var linesParsed: Int
         var failedFileCount: Int
+        /// 本轮计入的消息 ID 摘要，按对话 key 分组（见 `UsageMessageLedger`）。
+        var ledger: [String: [UInt64]] = [:]
     }
 
     nonisolated static func defaultRoot() -> URL {
@@ -33,11 +35,13 @@ enum ClaudeJSONLScanner {
     }
 
     /// 可注入日志根目录与标题索引，供脱敏 JSONL fixture 测试真实 byte-offset 扫描链路。
+    /// - Parameter knownIDs: 消息账本里已计入的 message.id 摘要，与 `seenMessageIds` 一起去重。
     /// - Parameter minimumMtime: 非 nil 时只扫修改时间不早于该时刻的文件（周期受限重建用）。
     /// - Parameter onProgress: 非 nil 时按约每 50 个文件回报一次扫描进度。
     nonisolated static func scan(
         previous: [String: ScanFileState],
         seenMessageIds: [String],
+        knownIDs: Set<UInt64> = [],
         root: URL,
         conversationIndex: ConversationTitleIndex.ClaudeIndex,
         minimumMtime: Date? = nil,
@@ -58,7 +62,8 @@ enum ClaudeJSONLScanner {
         var seeds: [String: ConversationSeed] = [:]
         var projectCandidates: [String: [ProjectCandidate]] = [:]
         // 跨文件全局去重：同一 message.id 在 sidechain / subagent 文件中会反复出现。
-        var seen = SeenIDSet(seenMessageIds)
+        var seen = SeenIDSet(seenMessageIds, known: knownIDs)
+        var ledger: [String: [UInt64]] = [:]
 
         let totalFiles = files.count
         for (index, file) in files.enumerated() {
@@ -200,6 +205,7 @@ enum ClaudeJSONLScanner {
                 // message.id 放进全局 seen；等待后续完整行追加后再由下一次增量扫描接收。
                 guard isComplete(p) else { continue }
                 seen.insert(id)
+                ledger["claude:\(p.sessionID)", default: []].append(SeenIDSet.digest(id))
                 let day = UsageDay.startOfDay(for: p.timestamp)
                 let cost = Pricing.costBreakdown(
                     app: .claude,
@@ -315,7 +321,8 @@ enum ClaudeJSONLScanner {
             newSeenIds: cappedSeen,
             filesScanned: files.count,
             linesParsed: linesParsed,
-            failedFileCount: failedFileCount
+            failedFileCount: failedFileCount,
+            ledger: ledger
         )
     }
 
