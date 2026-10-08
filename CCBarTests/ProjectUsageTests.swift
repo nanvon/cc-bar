@@ -196,9 +196,10 @@ final class ProjectUsageTests: XCTestCase {
         ), conversationOverview: overview)
 
         let rows = model.composition[.project] ?? []
-        XCTAssertEqual(rows.filter { $0.kind == .item }.map(\.title), ["p6", "p5", "p4", "p3"])
-        XCTAssertEqual(rows.dropLast(2).count, 4)
-        XCTAssertEqual(rows[4].kind, .rest(count: 3), "p2、p1 与无明确项目并入其余")
+        XCTAssertEqual(rows.count, 8, "全部列出：6 个项目 + 无明确项目 + 未归属")
+        XCTAssertEqual(rows.prefix(6).map(\.title), ["p6", "p5", "p4", "p3", "p2", "p1"])
+        XCTAssertEqual(rows[6].kind, .item)
+        XCTAssertEqual(rows[6].color, .rest, "无明确项目不参与排名，固定在项目之后")
         XCTAssertEqual(rows.last?.kind, .unattributed)
         XCTAssertEqual(model.unattributed.totalTokens, 1000)
         XCTAssertEqual(model.unattributed.costUSD, 10)
@@ -228,17 +229,21 @@ final class ProjectUsageTests: XCTestCase {
         ))
 
         let providers = model.composition[.provider] ?? []
-        XCTAssertEqual(providers.count, 4)
-        XCTAssertEqual(providers.prefix(3).map(\.id), ["provider:openAI", "provider:anthropic", "provider:deepseek"])
-        XCTAssertEqual(providers.last?.kind, .rest(count: 2), "「其他」提供商不参与前 3，与剩余提供商合并")
-        XCTAssertEqual(providers.last?.totals.costUSD, 34)
+        XCTAssertEqual(
+            providers.map(\.id),
+            ["provider:openAI", "provider:anthropic", "provider:deepseek", "provider:opencodeGo", "provider:other"],
+            "全部列出；「其他」提供商不参与排名，固定在最后"
+        )
+        XCTAssertEqual(providers.first?.totals.costUSD, 18)
+        XCTAssertEqual(providers.last?.color, .rest)
+        XCTAssertEqual(providers.last?.totals.costUSD, 30)
 
         let models = model.composition[.model] ?? []
-        XCTAssertEqual(models.count, 6)
+        XCTAssertEqual(models.count, 7, "全部列出，不合并其余")
         XCTAssertEqual(models.first?.title, "mystery")
         XCTAssertEqual(models[1].title, "gpt-5", "同名模型跨服务合并")
         XCTAssertEqual(models[1].totals.costUSD, 10)
-        XCTAssertEqual(models.last?.kind, .rest(count: 2), "deepseek-chat 与 opencode-go/kimi 合并为其余 2 个模型")
+        XCTAssertEqual(models.last?.title, "opencode-go/kimi")
 
         let services = model.composition[.service] ?? []
         XCTAssertEqual(services.count, UsageApp.allCases.count, "服务维度全部列出")
@@ -328,6 +333,71 @@ final class ProjectUsageTests: XCTestCase {
         XCTAssertEqual(CodexJSONLScanner.gitBranch(inSessionMeta: ["git": ["branch": "main"]]), "main")
         XCTAssertNil(CodexJSONLScanner.gitBranch(inSessionMeta: ["git": ["branch": ""]]))
         XCTAssertNil(CodexJSONLScanner.gitBranch(inSessionMeta: ["cwd": "/x"]))
+    }
+
+    // MARK: - Codex 子任务并入父对话
+
+    func testCodexSessionMetaParentThread() {
+        XCTAssertEqual(CodexJSONLScanner.parentThreadID(inSessionMeta: ["id": "child", "parent_thread_id": "root"]), "root")
+        XCTAssertEqual(CodexJSONLScanner.parentThreadID(inSessionMeta: [
+            "id": "child",
+            "source": ["subagent": ["thread_spawn": ["parent_thread_id": "root", "depth": 1]]]
+        ]), "root")
+        XCTAssertNil(CodexJSONLScanner.parentThreadID(inSessionMeta: ["id": "fork", "forked_from_id": "root"]),
+                     "用户手动 fork 是独立对话")
+        XCTAssertNil(CodexJSONLScanner.parentThreadID(inSessionMeta: ["id": "self", "parent_thread_id": "self"]))
+        XCTAssertNil(CodexJSONLScanner.parentThreadID(inSessionMeta: ["id": "a", "parent_thread_id": ""]))
+    }
+
+    func testSubtaskConversationsMergeIntoRootRow() throws {
+        let aggregator = ConversationAggregator(worktreeResolver: ProjectWorktreeResolver(home: tempRoot.path))
+        let root = info("r", app: .codex, project: "/x/alpha")
+        var child = info("c", app: .codex, project: "/x/alpha")
+        child.parentKey = "r"
+        child.lastAt = day(2026, 3, 9)
+        var grandchild = info("g", app: .codex, project: "/x/alpha")
+        grandchild.parentKey = "c"
+        var orphan = info("o", app: .codex, project: "/x/alpha")
+        orphan.parentKey = "missing"
+        aggregator.load(
+            infos: [root, child, grandchild, orphan],
+            buckets: [
+                bucket("r", .codex, day(2026, 3, 1), tokens: 10, cost: 1),
+                bucket("c", .codex, day(2026, 3, 1), tokens: 20, cost: 2),
+                bucket("g", .codex, day(2026, 3, 2), tokens: 30, cost: 3),
+                bucket("o", .codex, day(2026, 3, 1), tokens: 40, cost: 4)
+            ]
+        )
+
+        let query = aggregator.query(ConversationQueryRequest(
+            revision: 0, app: nil, projectKey: nil,
+            from: day(2026, 3, 1), to: day(2026, 3, 3), search: "", sort: .cost
+        ))
+        XCTAssertEqual(Set(query.rows.map(\.id)), ["r", "o"], "子任务并入根对话，父档案缺失的保持独立")
+        let rootRow = try XCTUnwrap(query.rows.first { $0.id == "r" })
+        XCTAssertEqual(rootRow.totals.totalTokens, 60)
+        XCTAssertTrue(rootRow.info.includesSubtasks)
+        XCTAssertEqual(rootRow.info.lastAt, day(2026, 3, 9))
+        XCTAssertFalse(try XCTUnwrap(query.rows.first { $0.id == "o" }).info.includesSubtasks)
+
+        let detail = try XCTUnwrap(aggregator.detail(key: "c"))
+        XCTAssertEqual(detail.info.key, "r", "旧的子对话选中项落到根对话")
+        XCTAssertEqual(detail.totals.totalTokens, 60)
+
+        let overview = aggregator.overviewBreakdown(ConversationOverviewRequest(
+            revision: 0, from: day(2026, 3, 1), to: day(2026, 3, 3),
+            apps: [.codex], topConversationLimit: 5
+        ))
+        XCTAssertEqual(overview.topConversations.count, 2)
+        XCTAssertEqual(overview.projects.first?.conversationCount, 2)
+        XCTAssertEqual(overview.projects.first?.totals.totalTokens, 100)
+
+        let project = try XCTUnwrap(aggregator.projectDetail(ProjectDetailRequest(
+            revision: 0, projectKey: "path:/x/alpha",
+            from: day(2026, 3, 1), to: day(2026, 3, 3), previous: nil, apps: [.codex]
+        )))
+        XCTAssertEqual(project.conversationCount, 2)
+        XCTAssertEqual(project.totals.totalTokens, 100)
     }
 
     // MARK: - Helpers
