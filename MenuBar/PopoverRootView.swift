@@ -7,7 +7,7 @@ import AppKit
 // 结构:Header(标题 + 副标题 + 状态点 + 刷新 / 统计 / 设置 / 退出 四个一级图标) /
 //      每个已启用 Provider 一个 ServiceBlockView(tile + 服务名/plan + 主额度大字 +
 //      进度条 + reset + today/week cost + 次要额度行),block 间 0.5pt Divider。
-// 退出是 header 上的一级图标；有更新或更新任务时才显示底部更新入口。
+// 退出是 header 上的一级图标；底部按状态显示更新入口或升级完成提示。
 
 struct PopoverRootView: View {
     @Environment(AppState.self) private var appState
@@ -22,9 +22,9 @@ struct PopoverRootView: View {
 
             content
 
-            if AppUpdater.shared.hasUpdate || AppUpdater.shared.isWorking || AppUpdater.shared.installedVersion != nil {
+            if AppUpdater.shared.hasUpdate || AppUpdater.shared.isWorking {
                 Divider()
-                Button { AppUpdater.shared.checkForUpdates() } label: {
+                Button { AppUpdater.shared.showUpdateWindow() } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "arrow.down.circle")
                         Text(AppUpdater.shared.statusText ?? tr("View update", "查看更新"))
@@ -36,9 +36,23 @@ struct PopoverRootView: View {
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .pointingHandCursor()
+                .help(tr("View update", "查看更新"))
+            } else if let version = AppUpdater.shared.installedVersion {
+                Divider()
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.circle")
+                    Text(tr("Updated to \(version)", "已更新至 \(version)"))
+                        .lineLimit(1)
+                    Spacer()
+                }
+                .font(.system(size: 11.5))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
             }
         }
         .frame(width: 340)

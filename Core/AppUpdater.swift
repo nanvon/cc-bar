@@ -117,6 +117,11 @@ final class AppUpdater: NSObject, SPUUserDriver, SPUUpdaterDelegate, NSWindowDel
         }
     }
 
+    /// Popover 仅查看已有更新或任务，不额外发起检查。
+    func showUpdateWindow() {
+        showWindow()
+    }
+
     /// 手动检查或重新打开当前更新，始终复用同一窗口与下载任务。
     func checkForUpdates() {
         start()
