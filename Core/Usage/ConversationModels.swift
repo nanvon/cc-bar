@@ -62,6 +62,8 @@ nonisolated struct ConversationSeed: Sendable, Equatable {
     var sourcePath: String
     var includesSubtasks: Bool
     var cacheCreationAvailable: Bool
+    /// 父对话 key。Codex 子代理 / Guardian 审查写成独立日志，统计页按它并入父对话展示。
+    var parentKey: String? = nil
 }
 
 /// 持久化的对话档案。不保存消息正文，只保存最多 80 字的标题摘要。
@@ -81,6 +83,9 @@ nonisolated struct ConversationInfo: Sendable, Codable, Equatable, Identifiable 
     var lastAt: Date
     var includesSubtasks: Bool
     var cacheCreationAvailable: Bool
+    /// 父对话 key；非 nil 且父档案存在时，统计页把本对话的用量并入父对话一行展示。
+    /// 存储层仍按本对话 key 记账，不改写历史桶。
+    var parentKey: String? = nil
 
     var id: String { key }
 }

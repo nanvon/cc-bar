@@ -282,10 +282,16 @@ enum CodexJSONLScanner {
         // mtime 没变 & size 没变 → 跳过，用 state 元数据补种子。
         if boundary == nil, state.mtime == mtime, state.offset == size {
             if let id = state.conversationID ?? filenameID {
-                // 旧版本扫描过的文件没有记录分支：只读一次首行的 session_meta 补齐，
-                // 读到或确认没有分支后写回（空串表示已检查），之后不再读。
-                if state.conversationGitBranch == nil {
-                    state.conversationGitBranch = firstLineGitBranch(url: url) ?? ""
+                // 旧版本扫描过的文件没有记录分支 / 父对话：只读一次首行的 session_meta 补齐，
+                // 读到或确认没有后写回（空串表示已检查），之后不再读。
+                if state.conversationGitBranch == nil || state.conversationParentSession == nil {
+                    let meta = firstLineSessionMeta(url: url)
+                    if state.conversationGitBranch == nil {
+                        state.conversationGitBranch = meta.flatMap(gitBranch(inSessionMeta:)) ?? ""
+                    }
+                    if state.conversationParentSession == nil {
+                        state.conversationParentSession = meta.flatMap(parentThreadID(inSessionMeta:)) ?? ""
+                    }
                 }
                 var projectResolver = ConversationProjectResolver()
                 return CodexFileScanResult(
@@ -302,7 +308,8 @@ enum CodexJSONLScanner {
                         gitBranch: nonEmpty(state.conversationGitBranch),
                         sourcePath: path,
                         includesSubtasks: false,
-                        cacheCreationAvailable: false
+                        cacheCreationAvailable: false,
+                        parentKey: nonEmpty(state.conversationParentSession).map { "codex:\($0)" }
                     ),
                     linesParsed: 0,
                     readFailed: false
@@ -336,6 +343,7 @@ enum CodexJSONLScanner {
         var emittingSessionID = state.lastCodexEmittingSessionID ?? ownSessionID
         var sessionCwd = state.conversationCwd ?? ""
         var sessionBranch = nonEmpty(state.conversationGitBranch)
+        var parentThread = nonEmpty(state.conversationParentSession)
         var fallbackTitle = state.fallbackTitle
         var entries: [PendingCodexEntry] = []
         var invalidHistoricalRecord = false
@@ -359,6 +367,7 @@ enum CodexJSONLScanner {
                     if metaID == nil || metaID == ownSessionID {
                         sessionCwd = (payload["cwd"] as? String) ?? sessionCwd
                         sessionBranch = Self.gitBranch(inSessionMeta: payload) ?? sessionBranch
+                        parentThread = Self.parentThreadID(inSessionMeta: payload) ?? parentThread
                     }
                     continue
                 }
@@ -497,6 +506,14 @@ enum CodexJSONLScanner {
         state.conversationCwd = sessionCwd
         // 从头读过仍没有分支时记空串，避免之后按「未检查」再读首行。
         state.conversationGitBranch = sessionBranch ?? (startsFromBeginning ? "" : state.conversationGitBranch)
+        // 父对话同理；旧版本从中途续扫、从没检查过的文件，补读一次首行。
+        if let parentThread {
+            state.conversationParentSession = parentThread
+        } else if startsFromBeginning {
+            state.conversationParentSession = ""
+        } else if state.conversationParentSession == nil {
+            state.conversationParentSession = firstLineSessionMeta(url: url).flatMap(Self.parentThreadID(inSessionMeta:)) ?? ""
+        }
         state.fallbackTitle = fallbackTitle
 
         var seedKey: String?
@@ -514,7 +531,8 @@ enum CodexJSONLScanner {
                 sourcePath: path,
                 includesSubtasks: false,
                 // 由调用方在跨文件去重之后统一补标（见 scan 收尾）。
-                cacheCreationAvailable: false
+                cacheCreationAvailable: false,
+                parentKey: nonEmpty(state.conversationParentSession).map { "codex:\($0)" }
             )
         }
         return CodexFileScanResult(
@@ -622,14 +640,26 @@ enum CodexJSONLScanner {
         return nonEmpty(git["branch"] as? String)
     }
 
+    /// 子代理 / Guardian 审查在自身 `session_meta` 里记录的父对话 ID：优先 `parent_thread_id`，
+    /// 其次 `source.subagent.thread_spawn.parent_thread_id`；指向自身或缺失时返回 nil。
+    /// 只认 `parent_thread_id`：用户手动 fork（只有 `forked_from_id`）是独立对话，不并入。
+    nonisolated static func parentThreadID(inSessionMeta payload: [String: Any]) -> String? {
+        let subagent = (payload["source"] as? [String: Any])?["subagent"] as? [String: Any]
+        let spawn = subagent?["thread_spawn"] as? [String: Any]
+        guard let parent = nonEmpty(payload["parent_thread_id"] as? String)
+                ?? nonEmpty(spawn?["parent_thread_id"] as? String),
+              parent != (payload["id"] as? String) else { return nil }
+        return parent
+    }
+
     private nonisolated static func nonEmpty(_ value: String?) -> String? {
         guard let value, !value.isEmpty else { return nil }
         return value
     }
 
-    /// 只读文件首行（Codex 首行固定是本会话的 session_meta）取分支。
+    /// 只读文件首行（Codex 首行固定是本会话的 session_meta）。
     /// 首行含完整 base_instructions，可能有几十 KB；超过 2MB 仍无换行视为异常，放弃。
-    private nonisolated static func firstLineGitBranch(url: URL) -> String? {
+    private nonisolated static func firstLineSessionMeta(url: URL) -> [String: Any]? {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? handle.close() }
         var data = Data()
@@ -646,6 +676,6 @@ enum CodexJSONLScanner {
               (root["type"] as? String) == "session_meta",
               let payload = root["payload"] as? [String: Any]
         else { return nil }
-        return gitBranch(inSessionMeta: payload)
+        return payload
     }
 }

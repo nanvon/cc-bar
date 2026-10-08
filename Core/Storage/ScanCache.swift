@@ -20,6 +20,8 @@ nonisolated struct ScanFileState: Sendable, Equatable, Codable {
     var conversationIsSidechain: Bool?
     var fallbackTitle: String?
     /// DSH 用：`session` 记录里的 `parentSession`，用于把子代理归到所属根会话（§4.1）。
+    /// Codex 用：自身 `session_meta` 的 `parent_thread_id`（子代理 / Guardian 审查），
+    /// 空串表示已检查、没有父对话；nil 表示旧版本扫描过、尚未检查。
     var conversationParentSession: String?
     /// DSH 用：文件身份（device + inode）。同路径被原地替换时 inode 会变，
     /// 此时不能从旧 offset 续读，必须从 0 重扫并替换该会话贡献（§3.3）。

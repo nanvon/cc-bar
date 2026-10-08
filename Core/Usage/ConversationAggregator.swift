@@ -16,6 +16,18 @@ final class ConversationAggregator {
     /// worktree → 主仓库的只读识别，按路径缓存；只影响统计口径，不改写已保存的项目身份。
     @ObservationIgnored private let worktreeResolver: ProjectWorktreeResolver
     @ObservationIgnored private var identityCache: [IdentityCacheKey: ResolvedIdentity] = [:]
+    @ObservationIgnored private var cachedSubtaskGrouping: SubtaskGrouping?
+
+    /// 子任务对话（Codex 子代理 / Guardian 审查）并入父对话的展示映射。
+    /// 存储仍按各自 key 记账；列表、概览、项目和详情按根对话汇总成一行。
+    private struct SubtaskGrouping {
+        /// 子对话 key → 根对话 key；只收录父档案存在的子对话。
+        var rootKeys: [String: String] = [:]
+        /// 有子对话并入的根对话档案：标记含子任务，起止时间覆盖子对话。
+        var rootInfos: [String: ConversationInfo] = [:]
+
+        func rootKey(_ key: String) -> String { rootKeys[key] ?? key }
+    }
 
     private struct BucketKey: Hashable {
         let conversationKey: String
@@ -174,17 +186,18 @@ final class ConversationAggregator {
         request.search = request.search.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if let cachedQuery, cachedQuery.request == request { return cachedQuery.result }
 
+        let subtasks = subtaskGrouping()
         var grouped: [String: [ConversationUsageBucket]] = [:]
         for bucket in buckets.values where bucket.day >= request.from && bucket.day < request.to {
             if let app = request.app, bucket.app != app { continue }
-            grouped[bucket.conversationKey, default: []].append(bucket)
+            grouped[subtasks.rootKey(bucket.conversationKey), default: []].append(bucket)
         }
 
         var allSummaries: [ConversationSummary] = []
         var projects: [String: ProjectAccumulator] = [:]
         allSummaries.reserveCapacity(grouped.count)
         for (key, values) in grouped {
-            guard let info = infos[key] else { continue }
+            guard let info = subtasks.rootInfos[key] ?? infos[key] else { continue }
             let item = aggregate(values)
             var rangeLastAt = Date.distantPast
             var modelNames: Set<String> = []
@@ -282,11 +295,12 @@ final class ConversationAggregator {
             var worktrees: Set<String> = []
         }
 
+        let subtasks = subtaskGrouping()
         var grouped: [String: [ConversationUsageBucket]] = [:]
         var attributedByDayApp: [UsageDayAppKey: UsageTotals] = [:]
         for bucket in buckets.values where bucket.day >= request.from && bucket.day < request.to {
             guard request.apps.contains(bucket.app), infos[bucket.conversationKey] != nil else { continue }
-            grouped[bucket.conversationKey, default: []].append(bucket)
+            grouped[subtasks.rootKey(bucket.conversationKey), default: []].append(bucket)
             attributedByDayApp[UsageDayAppKey(day: bucket.day, app: bucket.app), default: .zero]
                 .add(Self.totals(of: bucket))
         }
@@ -296,7 +310,7 @@ final class ConversationAggregator {
         var conversations: [TopConversationRow] = []
         conversations.reserveCapacity(grouped.count)
         for (key, values) in grouped {
-            guard let info = infos[key] else { continue }
+            guard let info = subtasks.rootInfos[key] ?? infos[key] else { continue }
             let item = aggregate(values)
             var rangeLastAt = Date.distantPast
             var modelNames: Set<String> = []
@@ -373,9 +387,12 @@ final class ConversationAggregator {
         var activeDays: Set<Date> = []
         var inRange: [String: [ConversationUsageBucket]] = [:]
         var worktreeLinks: [String: ProjectWorktreeLink?] = [:]
+        let subtasks = subtaskGrouping()
 
         for bucket in buckets.values where request.apps.contains(bucket.app) {
-            guard let info = infos[bucket.conversationKey] else { continue }
+            // 子对话按根对话的项目归属，与列表合并成一行的口径一致。
+            let conversationKey = subtasks.rootKey(bucket.conversationKey)
+            guard let info = subtasks.rootInfos[conversationKey] ?? infos[conversationKey] else { continue }
             let resolved = resolvedIdentity(for: info)
             guard resolved.identity.key == request.projectKey else { continue }
             identity = identity ?? resolved.identity
@@ -394,7 +411,7 @@ final class ConversationAggregator {
             model.totals.add(bucketTotals)
             models[bucket.model] = model
             activeDays.insert(bucket.day)
-            inRange[bucket.conversationKey, default: []].append(bucket)
+            inRange[conversationKey, default: []].append(bucket)
             if worktreeLinks[info.projectPath] == nil {
                 worktreeLinks[info.projectPath] = .some(resolved.worktree)
             }
@@ -409,7 +426,7 @@ final class ConversationAggregator {
         var worktreeTotals: [String: UsageTotals] = [:]
         var conversations: [TopConversationRow] = []
         for (key, values) in inRange {
-            guard let info = infos[key] else { continue }
+            guard let info = subtasks.rootInfos[key] ?? infos[key] else { continue }
             let item = aggregate(values)
             var rangeLastAt = Date.distantPast
             var modelNames: Set<String> = []
@@ -504,7 +521,7 @@ final class ConversationAggregator {
 
     /// 周期拆分用：对话 key → 统计页项目身份；缺档案时返回 nil。
     func statsProjectIdentity(forConversationKey key: String) -> StatsProjectIdentity? {
-        infos[key].map { resolvedIdentity(for: $0).identity }
+        infos[subtaskGrouping().rootKey(key)].map { resolvedIdentity(for: $0).identity }
     }
 
     /// 项目排序：API 等值降序，同值按名称；无明确项目与系统任务固定在最后。
@@ -574,12 +591,14 @@ final class ConversationAggregator {
         return totals
     }
 
-    func detail(key: String, metric: StatsRankMetric = .cost) -> ConversationDetail? {
+    func detail(key rawKey: String, metric: StatsRankMetric = .cost) -> ConversationDetail? {
+        let subtasks = subtaskGrouping()
+        let key = subtasks.rootKey(rawKey)
         if let cachedDetail, cachedDetail.revision == revision, cachedDetail.key == key, cachedDetail.metric == metric {
             return cachedDetail.detail
         }
-        guard let info = infos[key] else { return nil }
-        let values = buckets.values.filter { $0.conversationKey == key }
+        guard let info = subtasks.rootInfos[key] ?? infos[key] else { return nil }
+        let values = buckets.values.filter { subtasks.rootKey($0.conversationKey) == key }
         let overall = aggregate(Array(values))
         var perModel: [String: [ConversationUsageBucket]] = [:]
         for value in values { perModel[value.model, default: []].append(value) }
@@ -620,6 +639,7 @@ final class ConversationAggregator {
                 info.projectSource = seed.project.source
             }
             if info.gitBranch == nil { info.gitBranch = seed.gitBranch }
+            if let parentKey = seed.parentKey { info.parentKey = parentKey }
             if !info.sourcePaths.contains(seed.sourcePath) { info.sourcePaths.append(seed.sourcePath) }
             info.includesSubtasks = info.includesSubtasks || seed.includesSubtasks
             info.cacheCreationAvailable = info.cacheCreationAvailable || seed.cacheCreationAvailable
@@ -643,10 +663,33 @@ final class ConversationAggregator {
                 firstAt: now,
                 lastAt: .distantPast,
                 includesSubtasks: seed.includesSubtasks,
-                cacheCreationAvailable: seed.cacheCreationAvailable
+                cacheCreationAvailable: seed.cacheCreationAvailable,
+                parentKey: seed.parentKey
             )
             return true
         }
+    }
+
+    /// 沿 `parentKey` 找到最上层仍有档案的对话。父档案缺失（父对话没有用量）时子对话保持独立；
+    /// 链上出现环时停在环内，不会死循环。结果随数据版本缓存。
+    private func subtaskGrouping() -> SubtaskGrouping {
+        if let cachedSubtaskGrouping { return cachedSubtaskGrouping }
+        var grouping = SubtaskGrouping()
+        for (key, info) in infos where info.parentKey != nil {
+            var current = key
+            var visited: Set<String> = [key]
+            while let parent = infos[current]?.parentKey, infos[parent] != nil, visited.insert(parent).inserted {
+                current = parent
+            }
+            guard current != key, var root = grouping.rootInfos[current] ?? infos[current] else { continue }
+            grouping.rootKeys[key] = current
+            root.includesSubtasks = true
+            root.firstAt = min(root.firstAt, info.firstAt)
+            root.lastAt = max(root.lastAt, info.lastAt)
+            grouping.rootInfos[current] = root
+        }
+        cachedSubtaskGrouping = grouping
+        return grouping
     }
 
     private func aggregate(_ values: [ConversationUsageBucket]) -> (
@@ -695,6 +738,7 @@ final class ConversationAggregator {
         cachedDetail = nil
         cachedOverview = nil
         cachedProjectDetail = nil
+        cachedSubtaskGrouping = nil
         // 路径状态（worktree 新建 / 删除）可能随扫描变化；身份映射随数据版本一起重算。
         identityCache.removeAll(keepingCapacity: true)
     }
