@@ -44,15 +44,12 @@ struct AppUpdateWindow: View {
                     }
                     if !updater.releaseNotes.isEmpty {
                         UpdateMarkdownView(markdown: updater.releaseNotes)
-                    } else if !updater.isLoadingReleaseNotes {
-                        Text(updater.errorMessage ?? updater.statusText ?? tr("Check for a new version of CCBar.", "检查是否有新版 CCBar。"))
-                            .foregroundStyle(updater.phase == .failed ? .primary : .secondary)
                     }
                     if let error = updater.releaseNotesError {
                         Text(error).font(.callout).foregroundStyle(.secondary)
                         Button(tr("View release notes", "查看发布说明")) { updater.openReleasePage() }
                     }
-                    if !updater.releaseNotes.isEmpty, let error = updater.errorMessage {
+                    if let error = updater.errorMessage {
                         Text(error).font(.callout).foregroundStyle(.red)
                     }
                 }
@@ -84,10 +81,8 @@ struct AppUpdateWindow: View {
 
     private var title: String {
         switch updater.phase {
-        case .checking: return tr("Checking for updates", "检查更新")
-        case .downloading: return tr("Downloading update", "下载更新")
-        case .preparing: return tr("Preparing update", "准备更新")
-        case .installing: return tr("Installing update", "安装更新")
+        case .checking, .downloading, .preparing, .installing:
+            return tr("CCBar Update", "CCBar 更新")
         case .failed: return tr("Update could not be completed", "更新未能完成")
         case .upToDate: return tr("You’re up to date", "已是最新版本")
         case .available, .idle: return tr("CCBar Update", "CCBar 更新")
@@ -118,7 +113,6 @@ struct AppUpdateWindow: View {
     @ViewBuilder private var buttons: some View {
         switch updater.phase {
         case .available:
-            Button(tr("Later", "稍后")) { updater.remindLater() }
             Button(updater.informationOnly ? tr("View release", "查看发布说明") : tr("Download and Install", "下载并安装")) {
                 updater.installUpdate()
             }
@@ -132,9 +126,8 @@ struct AppUpdateWindow: View {
             }
         case .downloading:
             Button(tr("Cancel", "取消")) { updater.cancelDownloadOrCheck() }
-            Button(tr("Continue in Background", "后台继续")) { updater.closeWindow() }
         case .preparing, .installing:
-            Button(tr("Continue in Background", "后台继续")) { updater.closeWindow() }
+            EmptyView()
         case .failed:
             Button(tr("Download Manually", "手动下载")) { updater.openReleasePage() }
             Button(updater.canRetryInstallation ? tr("Retry Installation", "重试安装") : tr("Retry", "重试")) { updater.retry() }

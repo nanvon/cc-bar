@@ -26,7 +26,6 @@ final class AppUpdater: NSObject, SPUUserDriver, SPUUpdaterDelegate, NSWindowDel
     private(set) var expectedBytes: UInt64 = 0
     private(set) var extractionProgress: Double = 0
     private(set) var lastCheckedAt: Date?
-    private(set) var installedVersion: String?
     private(set) var automaticChecks = SettingsStore.shared.autoCheckForUpdates
     private(set) var informationOnly = false
 
@@ -70,7 +69,6 @@ final class AppUpdater: NSObject, SPUUserDriver, SPUUpdaterDelegate, NSWindowDel
         case .upToDate: return tr("You’re up to date", "已是最新版本")
         case .available, .idle:
             if let availableVersion { return tr("Version \(availableVersion) is available", "发现新版本 \(availableVersion)") }
-            if let installedVersion { return tr("Updated to \(installedVersion)", "已更新至 \(installedVersion)") }
             return nil
         }
     }
@@ -170,13 +168,6 @@ final class AppUpdater: NSObject, SPUUserDriver, SPUUpdaterDelegate, NSWindowDel
         reply(.install)
     }
 
-    func remindLater() {
-        let reply = updateReply
-        updateReply = nil
-        reply?(.dismiss)
-        window?.close()
-    }
-
     func skipVersion() {
         guard let reply = updateReply else { return }
         updateReply = nil
@@ -227,10 +218,7 @@ final class AppUpdater: NSObject, SPUUserDriver, SPUUpdaterDelegate, NSWindowDel
         NSWorkspace.shared.open(url)
     }
 
-    func dismissInstalledNotice() { installedVersion = nil }
-
     func closeWindow() {
-        if phase == .idle || phase == .upToDate { dismissInstalledNotice() }
         window?.close()
     }
 
@@ -267,7 +255,6 @@ final class AppUpdater: NSObject, SPUUserDriver, SPUUpdaterDelegate, NSWindowDel
         guard let expected = defaults.string(forKey: Self.pendingVersionKey),
               let build = defaults.string(forKey: Self.pendingBuildKey) else { return }
         if Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String == build {
-            installedVersion = expected
             defaults.removeObject(forKey: Self.pendingVersionKey)
             defaults.removeObject(forKey: Self.pendingBuildKey)
             AppLog.info(.app, "[update] installed version=\(expected)")

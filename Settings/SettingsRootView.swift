@@ -655,28 +655,11 @@ struct SettingsRootView: View {
                 label: "Check for updates",
                 chinese: "检查更新"
             ) {
-                HStack(spacing: 8) {
-                    if let updateStatusText {
-                        Text(updateStatusText)
-                            .font(.system(size: 11))
-                            .foregroundStyle(updateStatusIsError ? Color.red : (updateStatusHasNewVersion ? Color.accentColor : Color.secondary))
-                            .lineLimit(2)
-                            .multilineTextAlignment(.trailing)
-                    }
-                    Button {
-                        updater.checkForUpdates()
-                    } label: {
-                        if isUpdateCheckInProgress {
-                            ProgressView()
-                                .controlSize(.small)
-                        } else {
-                            Text(updateButtonTitle)
-                        }
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .disabled(isUpdateCheckInProgress)
+                Button(updateButtonTitle) {
+                    updater.checkForUpdates()
                 }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
             }
             InsetDivider()
             PrefsRow(label: "Last checked", chinese: "上次检查") {
@@ -1116,24 +1099,8 @@ struct SettingsRootView: View {
 
     // MARK: Update check helpers
 
-    private var isUpdateCheckInProgress: Bool {
-        updater.phase == .checking
-    }
-
-    private var updateStatusHasNewVersion: Bool {
-        updater.hasUpdate
-    }
-
-    private var updateStatusIsError: Bool {
-        updater.phase == .failed
-    }
-
-    private var updateStatusText: String? {
-        updater.statusText
-    }
-
     private var updateButtonTitle: String {
-        updateStatusHasNewVersion || updater.isWorking
+        updater.hasUpdate || updater.isWorking
             ? tr("View update", "查看更新")
             : tr("Check", "检查")
     }
