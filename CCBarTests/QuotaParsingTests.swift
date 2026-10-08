@@ -3117,7 +3117,8 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertEqual(codex.cacheRead, 0.1)
         XCTAssertEqual(codex.cacheCreation, 1.25)
 
-        XCTAssertNil(Pricing.costBreakdown(
+        // GPT-5.6 Fast 超过 272K 按官方 Fast 长上下文价（促销前 $20 / $90）。
+        XCTAssertEqual(Pricing.costBreakdown(
             app: .codex,
             model: "gpt-5.6-sol",
             speed: .fast,
@@ -3127,7 +3128,7 @@ final class QuotaParsingTests: XCTestCase {
             cacheCreation: 0,
             at: Date(timeIntervalSince1970: 0),
             inputTotal: 272_001
-        ))
+        ), CostBreakdown(input: Decimal(string: "5.44002")!, output: Decimal(string: "0.00009")!, cacheRead: 0, cacheCreation: 0))
         XCTAssertNil(Pricing.costBreakdown(
             app: .claude,
             model: "claude-future-model",
