@@ -1780,18 +1780,7 @@ final class AppState {
     /// 此时退化成"最近三天"窗口。
     private func refreshCursorRemoteUsage(snapshot: QuotaSnapshot?) async {
         guard let session = cursorAccount else { return }
-        // 计费周期对 Cursor 的 Total / Auto / API 是同一个，不能只认 primaryLimit：
-        // Free 账号没有可用的 plan used/limit，Total 解析为 nil，周期信息只挂在 Auto 上。
-        let billingWindow: Range<Date>? = snapshot.flatMap { snapshot in
-            snapshot.allLimits.lazy.compactMap { limit -> Range<Date>? in
-                guard let endsAt = limit.window.resetsAt,
-                      let seconds = limit.window.windowSeconds,
-                      seconds > 0
-                else { return nil }
-                let startsAt = endsAt.addingTimeInterval(-Double(seconds))
-                return startsAt < endsAt ? startsAt..<endsAt : nil
-            }.first
-        }
+        let billingWindow = snapshot?.billingCycleWindow
         let initial = await usageService.refreshCursorRemoteUsage(
             session: session,
             billingWindow: billingWindow

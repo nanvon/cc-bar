@@ -616,8 +616,9 @@ final class UsageService {
         return nil
     }
 
-    /// Popover 固定展示自然周，刷新不能因已有任意缓存就遗忘本周前半段。
-    /// 近期窗口负责修正迟到事件；周内缺口单独补拉，重叠或相邻时合并成一次请求。
+    /// Popover 展示本计费周期（拿不到周期时回退自然周），刷新不能因已有任意缓存就遗忘
+    /// 周期或本周的前半段。近期窗口负责修正迟到事件；周期 / 周内缺口单独补拉，
+    /// 重叠或相邻时合并成一次请求。
     nonisolated static func cursorRefreshRanges(
         now: Date,
         billingWindow: Range<Date>?,
@@ -640,8 +641,10 @@ final class UsageService {
         weekCalendar.firstWeekday = 2
         let weekComponents = weekCalendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: now)
         let weekStart = weekCalendar.date(from: weekComponents) ?? today
-        let weekGaps = coveredDayRanges.missingRanges(in: weekStart..<now)
-        let ranges = weekGaps + [recentStart..<now]
+        let billingStart = billingWindow.map { calendar.startOfDay(for: $0.lowerBound) }
+        let gapStart = min(billingStart ?? weekStart, weekStart)
+        let gaps = coveredDayRanges.missingRanges(in: gapStart..<now)
+        let ranges = gaps + [recentStart..<now]
         return mergeCursorRefreshRanges(ranges)
     }
 

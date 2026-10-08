@@ -255,7 +255,8 @@ struct PopoverRootView: View {
             fallback: provider.fallback,
             snapshot: snap,
             error: providerDisplayError(for: provider.app),
-            weekSpend: weekSpend(for: provider.app),
+            periodSpend: periodSpend(for: provider.app),
+            periodIsBillingCycle: cursorCycleBounds(for: provider.app) != nil,
             todayCost: todayCost(for: provider.app),
             serviceStatus: serviceStatus(for: provider.app),
             showsCost: provider.showsCost
@@ -269,12 +270,29 @@ struct PopoverRootView: View {
         appState.quotaError(for: app)
     }
 
-    private func weekSpend(for app: QuotaApp) -> Decimal? {
+    /// Cursor 额度按计费周期重置，拿得到周期时费用跟周期对齐（本期）；
+    /// 其余服务及拿不到周期的 Cursor 仍按自然周（本周）。
+    private func periodSpend(for app: QuotaApp) -> Decimal? {
+        if let cycle = cursorCycleBounds(for: app) { return cursorCost(from: cycle.0, to: cycle.1) }
         let (from, to) = Self.weekBounds()
         if app == .cursor { return cursorCost(from: from, to: to) }
         guard let usageApp = app.usageApp else { return nil }
         let totals = appState.usageService.aggregator.totals(app: usageApp, from: from, to: to)
         return totals.costUSD
+    }
+
+    /// 远端计量按自然日分桶，起点取周期开始那天的 0 点，与补拉范围一致。
+    private func cursorCycleBounds(for app: QuotaApp) -> (Date, Date)? {
+        guard app == .cursor,
+              let cycle = appState.quotaSnapshot(for: .cursor)?.billingCycleWindow
+        else { return nil }
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = .current
+        let startOfToday = cal.startOfDay(for: Date())
+        let startOfTomorrow = cal.date(byAdding: .day, value: 1, to: startOfToday) ?? startOfToday
+        let cycleStart = cal.startOfDay(for: cycle.lowerBound)
+        guard cycleStart < startOfTomorrow else { return nil }
+        return (cycleStart, startOfTomorrow)
     }
 
     /// Cursor 没有本地日志费用。只要远端缓存已有相交日桶，就展示已知 `chargedCents`
@@ -441,7 +459,9 @@ private struct ServiceBlockView: View {
     let fallback: String
     let snapshot: QuotaSnapshot?
     let error: String?
-    let weekSpend: Decimal?
+    let periodSpend: Decimal?
+    /// true 时第二项费用是本计费周期（本期），否则是自然周（本周）。
+    let periodIsBillingCycle: Bool
     let todayCost: Decimal?
     let serviceStatus: ServiceStatus?
     let showsCost: Bool
@@ -575,7 +595,11 @@ private struct ServiceBlockView: View {
                         if showsCost {
                             HStack(spacing: 10) {
                                 statInline(value: formatCostInt(todayCost), english: "today", chinese: "今日")
-                                statInline(value: formatCostInt(weekSpend), english: "this week", chinese: "本周")
+                                statInline(
+                                    value: formatCostInt(periodSpend),
+                                    english: periodIsBillingCycle ? "this cycle" : "this week",
+                                    chinese: periodIsBillingCycle ? "本期" : "本周"
+                                )
                             }
                         }
                     }

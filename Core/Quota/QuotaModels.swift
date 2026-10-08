@@ -291,6 +291,20 @@ nonisolated struct QuotaSnapshot: Sendable, Equatable, Codable {
         [primaryLimit, secondaryLimit].compactMap { $0 } + auxiliaryLimits + modelLimits
     }
 
+    /// 计费周期起止，由任一额度的 `resetsAt - windowSeconds` 推出。
+    /// Cursor 的 Total / Auto / API 共用同一个周期，不能只认 primaryLimit：
+    /// Free 账号没有可用的 plan used/limit，Total 解析为 nil，周期信息只挂在 Auto 上。
+    var billingCycleWindow: Range<Date>? {
+        allLimits.lazy.compactMap { limit -> Range<Date>? in
+            guard let endsAt = limit.window.resetsAt,
+                  let seconds = limit.window.windowSeconds,
+                  seconds > 0
+            else { return nil }
+            let startsAt = endsAt.addingTimeInterval(-Double(seconds))
+            return startsAt < endsAt ? startsAt..<endsAt : nil
+        }.first
+    }
+
     func preservingFutureResetDates(
         from previous: QuotaSnapshot?,
         now: Date = Date()

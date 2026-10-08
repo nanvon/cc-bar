@@ -222,6 +222,24 @@ final class CursorUsageFetcherTests: XCTestCase {
         XCTAssertEqual(ranges, [monday..<now])
     }
 
+    func testCursorRefreshRangesBackfillBillingCycleGapBeforeCurrentWeek() throws {
+        let monday = Date(timeIntervalSince1970: 1_725_840_000) // 2024-09-09 00:00 UTC
+        let now = monday.addingTimeInterval(4 * 24 * 60 * 60 + 12 * 60 * 60) // Friday noon
+        let cycleStart = monday.addingTimeInterval(-10 * 24 * 60 * 60)
+        let cycleEnd = cycleStart.addingTimeInterval(30 * 24 * 60 * 60)
+        let saturday = monday.addingTimeInterval(5 * 24 * 60 * 60)
+        let covered = try XCTUnwrap(CursorUsageDayRange(range: monday..<saturday))
+
+        let ranges = UsageService.cursorRefreshRanges(
+            now: now,
+            billingWindow: cycleStart..<cycleEnd,
+            coveredDayRanges: [covered],
+            calendar: utcCalendar
+        )
+
+        XCTAssertEqual(ranges.first, cycleStart..<monday)
+    }
+
     func testCursorInitialRefreshStartsAtWeekStartWhenBillingCycleStartsMidweek() {
         let monday = Date(timeIntervalSince1970: 1_725_840_000) // 2024-09-09 00:00 UTC
         let now = monday.addingTimeInterval(4 * 24 * 60 * 60 + 12 * 60 * 60) // Friday noon
