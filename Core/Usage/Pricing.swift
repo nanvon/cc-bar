@@ -45,7 +45,7 @@ nonisolated private struct TieredPricedPeriod: Sendable {
 }
 
 nonisolated enum Pricing {
-    /// 价格表按各厂商官方定价页核对（最近一次 2026-09-30），起点对齐 cc-switch `seed_model_pricing` /
+    /// 价格表按各厂商官方定价页核对（最近一次 2026-10-08），起点对齐 cc-switch `seed_model_pricing` /
     /// CodexBar `CostUsagePricing`。命中不到时返回 nil。键为 `pricingKey(model:)` 归一化后的模型名（循环剥 provider 前缀
     /// `openai-codex/` / `openai/` / `anthropic/` / `deepseek/` / `opencode-go/` / `commandcode/` /
     /// `command-code/` / `antigravity/` / `z-ai/` / `zai/` / `minimax/` 和末尾 `-YYYYMMDD` /
@@ -78,8 +78,13 @@ nonisolated enum Pricing {
         "claude-opus-4":     .init(input: 15,  output: 75,  cacheRead: 1.50, cacheCreation: 18.75),
         // Sonnet 5 官方已确认 $2/$10 为固定标准价（原定 2026-09-01 涨价 $3/$15 已取消），列入 fixedLocalOverrideKeys 锁死。
         "claude-sonnet-5":   .init(input: 2,   output: 10,  cacheRead: 0.20, cacheCreation: 2.50),
-        // Sonnet 5.5（2026-09-28 发布）与 Sonnet 5 同价，官方未宣布涨价，不需要固定本地价。
+        // Sonnet 5.5 上市价与 Sonnet 5 相同。2026-10-07 起缓存读取减半为 $0.10，见 timedOverrides。
+        // 定价总表那一行仍印着 $0.20；以同页缓存章节和 10 月 7 日公告的 $0.10 为准。
         "claude-sonnet-5-5": .init(input: 2,   output: 10,  cacheRead: 0.20, cacheCreation: 2.50),
+        "claude-sonnet-5.5": .init(input: 2,   output: 10,  cacheRead: 0.20, cacheCreation: 2.50),
+        // Haiku 5.5（2026-10-07）：≤100K 为短上下文价，超过 100K 整次请求改按长上下文价，见 contextPriceTiers。
+        "claude-haiku-5-5":  .init(input: 0.10, output: 0.50, cacheRead: 0.01, cacheCreation: 0.125),
+        "claude-haiku-5.5":  .init(input: 0.10, output: 0.50, cacheRead: 0.01, cacheCreation: 0.125),
         "claude-sonnet-4-7": .init(input: 3,   output: 15,  cacheRead: 0.30, cacheCreation: 3.75),
         "claude-sonnet-4-6": .init(input: 3,   output: 15,  cacheRead: 0.30, cacheCreation: 3.75),
         "claude-sonnet-4-5": .init(input: 3,   output: 15,  cacheRead: 0.30, cacheCreation: 3.75),
@@ -137,14 +142,16 @@ nonisolated enum Pricing {
         "composer-2.5":         .init(input: 0.50, output: 2.50, cacheRead: 0.20, cacheCreation: 0),
         "cursor-composer-2-5":  .init(input: 0.50, output: 2.50, cacheRead: 0.20, cacheCreation: 0),
         "composer-2.5-fast":    .init(input: 3,    output: 15,   cacheRead: 0.50, cacheCreation: 0),
+        // Grok 4.7 输入超过 256K 时整次请求按 2 倍标准价，见 contextPriceTiers。Cursor 自身费用仍用服务端 chargedCents。
         "grok-4-7":             .init(input: 2,    output: 6,    cacheRead: 0.50, cacheCreation: 0),
         "grok-4-6":             .init(input: 2,    output: 6,    cacheRead: 0.50, cacheCreation: 0),
         "grok-4-5":             .init(input: 2,    output: 6,    cacheRead: 0.50, cacheCreation: 0),
 
         // —— Google Gemini 系列（远端目录不收 Google，只能靠本表）——
-        // 3.7 / 3.8 Flash 同为 $0.75 / $3.75（促销价，到 2026-12-31）；2027-01-01 起的原价见 timedOverrides。
+        // 3.6 / 3.7 / 3.8 Flash 同为 $0.75 / $3.75（促销价，到 2026-12-31）；2027-01-01 起的原价见 timedOverrides。
         "gemini-3.8-flash":  .init(input: 0.75, output: 3.75,  cacheRead: 0.075, cacheCreation: 0),
         "gemini-3.7-flash":  .init(input: 0.75, output: 3.75,  cacheRead: 0.075, cacheCreation: 0),
+        "gemini-3.6-flash":  .init(input: 0.75, output: 3.75,  cacheRead: 0.075, cacheCreation: 0),
         // 3.1 Pro 完整输入超过 200K 时整次请求改按长上下文价（见 contextPriceTiers）。
         "gemini-3.1-pro":    .init(input: 2.00, output: 12.00, cacheRead: 0.20,  cacheCreation: 0),
 
@@ -170,10 +177,16 @@ nonisolated enum Pricing {
         "deepseek-chat":                .init(input: 0.27,  output: 1.10,  cacheRead: 0.07,     cacheCreation: 0),
         "deepseek-reasoner":            .init(input: 0.55,  output: 2.19,  cacheRead: 0.14,     cacheCreation: 0),
         // —— 第三方网关模型（Command Code / OpenCode 转售，远端目录不收这些厂商）——
-        // Z.ai 官方价；GLM-5.3-FlashX、MiniMax M2 系未收录。
-        "glm-5.3":       .init(input: 1.40, output: 4.40, cacheRead: 0.26, cacheCreation: 0),
-        "glm-5.3-flash": .init(input: 0.15, output: 0.50, cacheRead: 0.03, cacheCreation: 0),
-        "minimax-m3":    .init(input: 0.30, output: 1.20, cacheRead: 0.06, cacheCreation: 0),
+        // Z.ai 官方价。GLM-5.2 与 GLM-5.3 同价。缓存存储费官方限时免费，不入表。
+        "glm-5.3":        .init(input: 1.40, output: 4.40, cacheRead: 0.26,  cacheCreation: 0),
+        "glm-5.2":        .init(input: 1.40, output: 4.40, cacheRead: 0.26,  cacheCreation: 0),
+        "glm-5.3-flash":  .init(input: 0.15, output: 0.50, cacheRead: 0.03,  cacheCreation: 0),
+        "glm-5.3-flashx": .init(input: 0.37, output: 1.25, cacheRead: 0.075, cacheCreation: 0),
+        // MiniMax 现价取永久五折后的实付价。M3 官方另有 >512K 的 2 倍档，Command Code 两档都按短上下文价，这里保持短上下文价。
+        // M2.7 官方单列缓存写入；M3 定价页没有这项，继续为 0。
+        "minimax-m3":              .init(input: 0.30, output: 1.20, cacheRead: 0.06, cacheCreation: 0),
+        "minimax-m2.7":            .init(input: 0.30, output: 1.20, cacheRead: 0.06, cacheCreation: 0.375),
+        "minimax-m2.7-highspeed":  .init(input: 0.60, output: 2.40, cacheRead: 0.06, cacheCreation: 0.375),
         // codex-auto-review 内部 review，官方未公开计费；不入表 → cost=0，token 仍记录
     ]
 
@@ -245,9 +258,10 @@ nonisolated enum Pricing {
 
     /// Standard API 的上下文阶梯价（USD / 百万 token）。完整输入严格超过该模型阈值时，
     /// 该次请求的输入、缓存读写和输出全部使用长上下文费率。
-    /// OpenAI（GPT-6 / GPT-5.6 / GPT-5.5 / GPT-5.4）阈值为 272K；OpenAI 的 Priority / Fast 明确排除
-    /// 长上下文，超阈值时 Fast 侧返回 nil，不拿 Standard 长上下文价顶替。
-    /// Gemini 3.1 Pro 的阈值为 200K。
+    /// OpenAI（GPT-6 / GPT-5.6 / GPT-5.5 / GPT-5.4）阈值为 272K。
+    /// GPT-6 与 GPT-5.6 的 Fast 有官方长上下文价，见 `codexFastLongContextPrices`；
+    /// GPT-5.5 / GPT-5.4 的 Fast 仍排除长上下文，超阈值时返回 nil。
+    /// Gemini 3.1 Pro 的阈值为 200K。Claude Haiku 5.5 为 100K。Grok 4.7 为 256K。
     /// `gpt-5.6` 是 Sol 的别名；Pro 是 reasoning.mode，不是独立 model slug。
     /// GPT-5.6 Sol 这里是 2026-08-21 促销前的原价，促销价见 `timedContextPriceTiers`。
     private static let contextPriceTiers: [String: ContextPriceTiers] = [
@@ -316,6 +330,22 @@ nonisolated enum Pricing {
             longContextThreshold: 200_000,
             shortContext: .init(input: 2, output: 12, cacheRead: 0.20, cacheCreation: 0),
             longContext: .init(input: 4, output: 18, cacheRead: 0.40, cacheCreation: 0)
+        ),
+        // 官方：不超过 100K 用短价，超过 100K 整次请求用长价。1h 缓存写入仍按当时输入价的 2 倍。
+        "claude-haiku-5-5": .init(
+            longContextThreshold: 100_000,
+            shortContext: .init(input: 0.10, output: 0.50, cacheRead: 0.01, cacheCreation: 0.125),
+            longContext: .init(input: 0.50, output: 2.50, cacheRead: 0.05, cacheCreation: 0.625)
+        ),
+        "claude-haiku-5.5": .init(
+            longContextThreshold: 100_000,
+            shortContext: .init(input: 0.10, output: 0.50, cacheRead: 0.01, cacheCreation: 0.125),
+            longContext: .init(input: 0.50, output: 2.50, cacheRead: 0.05, cacheCreation: 0.625)
+        ),
+        "grok-4-7": .init(
+            longContextThreshold: 256_000,
+            shortContext: .init(input: 2, output: 6, cacheRead: 0.50, cacheCreation: 0),
+            longContext: .init(input: 4, output: 12, cacheRead: 1, cacheCreation: 0)
         )
     ]
 
@@ -341,6 +371,27 @@ nonisolated enum Pricing {
     private static let timedCodexFastPrices: [String: [PricedPeriod]] = [
         "gpt-5.6": [.init(from: gpt56SolPromoStart, price: .init(input: 8, output: 40, cacheRead: 0.8, cacheCreation: 10))],
         "gpt-5.6-sol": [.init(from: gpt56SolPromoStart, price: .init(input: 8, output: 40, cacheRead: 0.8, cacheCreation: 10))]
+    ]
+
+    /// Codex Fast 在完整输入超过 272K 时的官方价。只收录明确给出 Fast 长上下文的模型；
+    /// GPT-5.5 / GPT-5.4 不在这里，超阈值继续返回 nil。费率是对应 Standard 长上下文的 2 倍。
+    /// GPT-5.6 Sol 这一行是 2026-08-21 促销前的价，促销价见 `timedCodexFastLongPrices`。
+    private static let codexFastLongContextPrices: [String: ModelPrice] = [
+        "gpt-6.1-sol":   .init(input: 8,    output: 30,   cacheRead: 0.40, cacheCreation: 10),
+        "gpt-6-astra":   .init(input: 40,   output: 150,  cacheRead: 4,    cacheCreation: 50),
+        "gpt-6-sol":     .init(input: 8,    output: 30,   cacheRead: 0.8,  cacheCreation: 10),
+        "gpt-6-luna":    .init(input: 0.40, output: 1.50, cacheRead: 0.04, cacheCreation: 0.50),
+        "gpt-5.6":       .init(input: 20,   output: 90,   cacheRead: 2,    cacheCreation: 25),
+        "gpt-5.6-sol":   .init(input: 20,   output: 90,   cacheRead: 2,    cacheCreation: 25),
+        "gpt-5.6-terra": .init(input: 8,    output: 36,   cacheRead: 0.8,  cacheCreation: 10),
+        "gpt-5.6-luna":  .init(input: 0.8,  output: 3.6,  cacheRead: 0.08, cacheCreation: 1)
+    ]
+
+    /// GPT-5.6 Sol 促销期的 Fast 长上下文价：短上下文 Fast 已在 `timedCodexFastPrices`，
+    /// 这里只覆盖 >272K。官方写明输入 $16、输出 $60，缓存读写按 2 倍促销长上下文价。
+    private static let timedCodexFastLongPrices: [String: [PricedPeriod]] = [
+        "gpt-5.6": [.init(from: gpt56SolPromoStart, price: .init(input: 16, output: 60, cacheRead: 1.6, cacheCreation: 20))],
+        "gpt-5.6-sol": [.init(from: gpt56SolPromoStart, price: .init(input: 16, output: 60, cacheRead: 1.6, cacheCreation: 20))]
     ]
 
     private static func utcDay(year: Int, month: Int, day: Int) -> Date {
@@ -370,16 +421,28 @@ nonisolated enum Pricing {
         "deepseek-v4-flash-vision-exp": deepseekFlashPeriods,
         "deepseek-v4.1-flash": deepseekFlashPeriods,
         "deepseek-v4-pro": deepseekProPeriods,
+        "gemini-3.6-flash": geminiFlashPeriods,
         "gemini-3.7-flash": geminiFlashPeriods,
         "gemini-3.8-flash": geminiFlashPeriods,
+        "claude-sonnet-5-5": sonnet55Periods,
+        "claude-sonnet-5.5": sonnet55Periods,
     ]
 
-    /// Gemini 3.7 / 3.8 Flash：表内 $0.75 / $3.75 是截至 2026-12-31 的促销价，
+    /// Gemini 3.6 / 3.7 / 3.8 Flash：表内 $0.75 / $3.75 是截至 2026-12-31 的促销价，
     /// 2027-01-01 起恢复原价 $1.5 / $7.5；缓存读取按同比例由 $0.075 回到 $0.15。
     private static let geminiFlashPeriods: [PricedPeriod] = [
         PricedPeriod(
             from: utcDay(year: 2027, month: 1, day: 1),
             price: ModelPrice(input: 1.50, output: 7.50, cacheRead: 0.15, cacheCreation: 0)
+        ),
+    ]
+
+    /// Sonnet 5.5：2026-10-07（UTC 0 点）起缓存读取从 $0.20 降到 $0.10，其余费率不变。
+    /// 公告没有更细的时刻，按日界处理；10 月 7 日之前的用量保持上市价。
+    private static let sonnet55Periods: [PricedPeriod] = [
+        PricedPeriod(
+            from: utcDay(year: 2026, month: 10, day: 7),
+            price: ModelPrice(input: 2, output: 10, cacheRead: 0.10, cacheCreation: 2.50)
         ),
     ]
 
@@ -435,6 +498,10 @@ nonisolated enum Pricing {
             timedCodexFastPrices.keys.allSatisfy { codexFastPrices[$0] != nil },
             "timedCodexFastPrices 中的模型必须在 codexFastPrices 中提供基础价"
         )
+        precondition(
+            timedCodexFastLongPrices.keys.allSatisfy { codexFastLongContextPrices[$0] != nil },
+            "timedCodexFastLongPrices 中的模型必须在 codexFastLongContextPrices 中提供基础价"
+        )
         return Set(contextPriceTiers.keys)
             .union(timedOverrides.keys)
             .union(fixedLocalOverrideKeys)
@@ -468,6 +535,15 @@ nonisolated enum Pricing {
         return PricingCatalogStore.shared.rate(for: key, app: app, speed: .standard) ?? table[key]
     }
 
+    /// Codex Fast 的长上下文价。没有收录的模型返回 nil，不用短上下文 Fast 价或 Standard 长上下文价顶上。
+    private static func codexFastLongPrice(for key: String, at date: Date) -> ModelPrice? {
+        guard var chosen = codexFastLongContextPrices[key] else { return nil }
+        for period in timedCodexFastLongPrices[key] ?? [] where period.from <= date {
+            chosen = period.price
+        }
+        return chosen
+    }
+
     private static func price(
         for key: String,
         app: UsageApp,
@@ -481,6 +557,10 @@ nonisolated enum Pricing {
         case .unknown:
             return nil
         case .fast:
+            // 固定覆盖不能绕过长上下文：GPT-5.5 在这张表里，但它的 Fast 没有长上下文价。
+            if app == .codex, inputTotal > 272_000 {
+                return codexFastLongPrice(for: key, at: date)
+            }
             if fixedFastLocalOverrideKeys.contains(key) {
                 switch app {
                 case .codex: return codexFastPrices[key]
@@ -493,8 +573,6 @@ nonisolated enum Pricing {
             }
             switch app {
             case .codex:
-                // OpenAI Priority 官方价格明确排除 >272K 长上下文；不能用 Standard 长上下文价猜测。
-                guard inputTotal <= 272_000 else { return nil }
                 if let periods = timedCodexFastPrices[key] {
                     var chosen = codexFastPrices[key]
                     for period in periods where period.from <= date {
@@ -854,6 +932,14 @@ nonisolated enum Pricing {
             }.joined(separator: ",")
             return "codex:\(key)@\(parts)"
         }.joined(separator: ";")
+        let fastLongBody = fingerprintBody(codexFastLongContextPrices, prefix: "codex-long")
+        let timedFastLongBody = timedCodexFastLongPrices.keys.sorted().map { key -> String in
+            let parts = timedCodexFastLongPrices[key]!.sorted { $0.from < $1.from }.map { period -> String in
+                let p = period.price
+                return "\(period.from.timeIntervalSince1970)=\(p.input)/\(p.output)/\(p.cacheRead)/\(p.cacheCreation)"
+            }.joined(separator: ",")
+            return "codex-long:\(key)@\(parts)"
+        }.joined(separator: ";")
         let overrideBody = timedOverrides.keys.sorted().map { key -> String in
             let parts = timedOverrides[key]!.sorted { $0.from < $1.from }.map { period -> String in
                 let p = period.price
@@ -883,7 +969,7 @@ nonisolated enum Pricing {
             ) else { return nil }
             return "\(usage.persistedKey):\(rate.input)/\(rate.output)/\(rate.cacheRead)/\(rate.cacheCreation)"
         }.joined(separator: ";")
-        let digest = SHA256.hash(data: Data("\(baseBody)|\(tierBody)|\(timedTierBody)|\(timedFastBody)|\(overrideBody)|\(fixedOverrideBody)|\(fixedFastOverrideBody)|\(fastPriceBody)|\(fastMultiplierBody)|\(cacheRuleBody)|\(remoteBody)".utf8))
+        let digest = SHA256.hash(data: Data("\(baseBody)|\(tierBody)|\(timedTierBody)|\(timedFastBody)|\(fastLongBody)|\(timedFastLongBody)|\(overrideBody)|\(fixedOverrideBody)|\(fixedFastOverrideBody)|\(fastPriceBody)|\(fastMultiplierBody)|\(cacheRuleBody)|\(remoteBody)".utf8))
         return digest.map { String(format: "%02x", $0) }.joined()
     }
 

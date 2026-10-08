@@ -3378,11 +3378,19 @@ final class QuotaParsingTests: XCTestCase {
             ))
             XCTAssertEqual(promoFast, CostBreakdown(input: 8, output: 40, cacheRead: 0.8, cacheCreation: 10))
 
-            XCTAssertNil(Pricing.costBreakdown(
+            let oldFastLong = try XCTUnwrap(Pricing.costBreakdown(
                 app: .codex, model: model, speed: .fast,
-                input: 272_001, output: 1, cacheRead: 0, cacheCreation: 0,
+                input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheCreation: 1_000_000,
+                at: beforePromo, inputTotal: 272_001
+            ))
+            XCTAssertEqual(oldFastLong, CostBreakdown(input: 20, output: 90, cacheRead: 2, cacheCreation: 25))
+
+            let promoFastLong = try XCTUnwrap(Pricing.costBreakdown(
+                app: .codex, model: model, speed: .fast,
+                input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheCreation: 1_000_000,
                 at: promo, inputTotal: 272_001
             ))
+            XCTAssertEqual(promoFastLong, CostBreakdown(input: 16, output: 60, cacheRead: 1.6, cacheCreation: 20))
         }
     }
 
@@ -3427,6 +3435,79 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertEqual(Pricing.billingEquivalentMultiplier(app: .claude, model: "claude-opus-5-5", speed: .fast), 2)
     }
 
+    func testOctober2026OfficialPriceUpdates() throws {
+        let beforeCut = ISO8601DateFormatter().date(from: "2026-10-06T23:59:59Z")!
+        let afterCut = ISO8601DateFormatter().date(from: "2026-10-07T00:00:00Z")!
+        let nextYear = ISO8601DateFormatter().date(from: "2027-01-01T00:00:00Z")!
+
+        for model in ["claude-sonnet-5-5", "claude-sonnet-5.5"] {
+            let oldCache = try XCTUnwrap(Pricing.costBreakdown(
+                app: .claude, model: model, speed: .standard,
+                input: 0, output: 0, cacheRead: 1_000_000, cacheCreation: 0,
+                at: beforeCut
+            ))
+            XCTAssertEqual(oldCache.cacheRead, 0.20)
+
+            let newCache = try XCTUnwrap(Pricing.costBreakdown(
+                app: .claude, model: model, speed: .standard,
+                input: 0, output: 0, cacheRead: 1_000_000, cacheCreation: 0,
+                at: afterCut
+            ))
+            XCTAssertEqual(newCache.cacheRead, 0.10)
+        }
+
+        for model in ["claude-haiku-5-5", "claude-haiku-5.5"] {
+            let short = try XCTUnwrap(Pricing.costBreakdown(
+                app: .claude, model: model, speed: .standard,
+                input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheCreation: 1_000_000,
+                cacheCreation1h: 1_000_000, at: afterCut, inputTotal: 100_000
+            ))
+            XCTAssertEqual(short, CostBreakdown(input: 0.10, output: 0.50, cacheRead: 0.01, cacheCreation: 0.325))
+
+            let long = try XCTUnwrap(Pricing.costBreakdown(
+                app: .claude, model: model, speed: .standard,
+                input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheCreation: 1_000_000,
+                cacheCreation1h: 1_000_000, at: afterCut, inputTotal: 100_001
+            ))
+            XCTAssertEqual(long, CostBreakdown(input: 0.50, output: 2.50, cacheRead: 0.05, cacheCreation: 1.625))
+        }
+
+        let flashNow = try XCTUnwrap(Pricing.costBreakdown(
+            app: .opencode, model: "gemini-3.6-flash", speed: .standard,
+            input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheCreation: 0,
+            at: afterCut
+        ))
+        XCTAssertEqual(flashNow, CostBreakdown(input: 0.75, output: 3.75, cacheRead: 0.075, cacheCreation: 0))
+
+        let flashLater = try XCTUnwrap(Pricing.costBreakdown(
+            app: .opencode, model: "gemini-3.6-flash", speed: .standard,
+            input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheCreation: 0,
+            at: nextYear
+        ))
+        XCTAssertEqual(flashLater, CostBreakdown(input: 1.50, output: 7.50, cacheRead: 0.15, cacheCreation: 0))
+
+        let grokLong = try XCTUnwrap(Pricing.costBreakdown(
+            app: .opencode, model: "grok-4-7", speed: .standard,
+            input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheCreation: 0,
+            at: afterCut, inputTotal: 256_001
+        ))
+        XCTAssertEqual(grokLong, CostBreakdown(input: 4, output: 12, cacheRead: 1, cacheCreation: 0))
+
+        let flashX = try XCTUnwrap(Pricing.costBreakdown(
+            app: .opencode, model: "commandcode/z-ai/glm-5.3-flashx", speed: .standard,
+            input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheCreation: 0,
+            at: afterCut
+        ))
+        XCTAssertEqual(flashX, CostBreakdown(input: 0.37, output: 1.25, cacheRead: 0.075, cacheCreation: 0))
+
+        let m27 = try XCTUnwrap(Pricing.costBreakdown(
+            app: .opencode, model: "minimax/minimax-m2.7", speed: .standard,
+            input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheCreation: 1_000_000,
+            at: afterCut
+        ))
+        XCTAssertEqual(m27, CostBreakdown(input: 0.30, output: 1.20, cacheRead: 0.06, cacheCreation: 0.375))
+    }
+
     /// GPT-6.1 Sol：与 GPT-6 Sol 同价，但缓存输入减半为 $0.10；长上下文与 Fast 沿用同一套规则。
     func testGPT61SolRates() throws {
         let date = ISO8601DateFormatter().date(from: "2026-09-30T00:00:00Z")!
@@ -3453,9 +3534,16 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertEqual(fast, CostBreakdown(input: 4, output: 20, cacheRead: 0.2, cacheCreation: 5))
         XCTAssertEqual(Pricing.billingEquivalentMultiplier(app: .codex, model: "gpt-6.1-sol", speed: .fast), 2.5)
 
-        // OpenAI Priority 明确排除长上下文：Fast 超阈值不估价，也不拿 Standard 长上下文价顶替。
-        XCTAssertNil(Pricing.costBreakdown(
+        let fastLong = try XCTUnwrap(Pricing.costBreakdown(
             app: .codex, model: "gpt-6.1-sol", speed: .fast,
+            input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheCreation: 1_000_000,
+            at: date, inputTotal: 272_001
+        ))
+        XCTAssertEqual(fastLong, CostBreakdown(input: 8, output: 30, cacheRead: 0.4, cacheCreation: 10))
+
+        // GPT-5.5 Fast 仍没有长上下文价。
+        XCTAssertNil(Pricing.costBreakdown(
+            app: .codex, model: "gpt-5.5", speed: .fast,
             input: 272_001, output: 1, cacheRead: 0, cacheCreation: 0,
             at: date, inputTotal: 272_001
         ))
