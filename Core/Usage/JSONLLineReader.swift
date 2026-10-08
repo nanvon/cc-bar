@@ -369,6 +369,8 @@ struct JSONLFileDescriptor: Sendable {
     var url: URL
     var modificationTime: TimeInterval
     var size: UInt64
+    /// 文件创建时间；取不到时为 0。Claude 扫描器按它排序，让续接 / 分叉对话复制过去的消息归给原对话。
+    var creationTime: TimeInterval = 0
 
     var path: String { url.path }
 }
@@ -401,6 +403,7 @@ enum JSONLDirectoryEnumerator {
             includingPropertiesForKeys: [
                 .isRegularFileKey,
                 .contentModificationDateKey,
+                .creationDateKey,
                 .fileSizeKey,
             ],
             options: [.skipsHiddenFiles]
@@ -412,6 +415,7 @@ enum JSONLDirectoryEnumerator {
             guard url.pathExtension.lowercased() == "jsonl" else { continue }
             let values = try? url.resourceValues(forKeys: [
                 .contentModificationDateKey,
+                .creationDateKey,
                 .fileSizeKey,
             ])
             let modificationDate = values?.contentModificationDate
@@ -421,7 +425,8 @@ enum JSONLDirectoryEnumerator {
             result.append(JSONLFileDescriptor(
                 url: url,
                 modificationTime: modificationDate?.timeIntervalSince1970 ?? 0,
-                size: UInt64(max(0, values?.fileSize ?? 0))
+                size: UInt64(max(0, values?.fileSize ?? 0)),
+                creationTime: values?.creationDate?.timeIntervalSince1970 ?? 0
             ))
         }
         return Result(files: result, accessFailed: false)

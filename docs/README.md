@@ -24,7 +24,7 @@
 | 文件 | 状态 |
 |---|---|
 | [草案-CCBar2.0-设计方案.md](草案-CCBar2.0-设计方案.md) | **待评审、未实施**：下一大版本候选方案，涵盖 SQLite 历史存储与迁移、项目分析、费用解释、性能功耗优化及验收分批；保存方案不代表已确认全部范围或授权实施 |
-| [草案-历史保护与安全恢复-执行计划.md](草案-历史保护与安全恢复-执行计划.md) | **已实施，复核修复与验收见记录**：一致快照（`usage-history/current.json` + `previous.json`）、旧格式一次性只读迁移、受限恢复、候选隔离安全重算与完整用量向量对账，A01～A25 的逐项证据见 [验证记录-历史保护与安全恢复.md](验证记录-历史保护与安全恢复.md)；项目汇总 / 费用来源 / 分来源扫描（第 11 节）未实施 |
+| [草案-历史保护与安全恢复-执行计划.md](草案-历史保护与安全恢复-执行计划.md) | **已实施，复核修复与验收见记录**：一致快照（`usage-history/current.json` + `previous.json`）、旧格式一次性只读迁移、受限恢复、候选隔离安全重算（2026-10-08 起手动重算保留日志已删除的对话、不再逐项对账，完整用量向量对账只用于受限恢复），A01～A25 的逐项证据见 [验证记录-历史保护与安全恢复.md](验证记录-历史保护与安全恢复.md)；项目汇总 / 费用来源 / 分来源扫描（第 11 节）未实施 |
 | [草案-性能与功耗等价优化方案.md](草案-性能与功耗等价优化方案.md) | 批次 A/B/C/D 已落地(单一时基调度、FSEvents 日志门控、rollup / 额度写盘节流与 `QuotaPersistenceCoordinator`、`QuotaRefreshPlan`、统计概览 `StatsOverviewModel` 单次派生 + revision 缓存) |
 | [草案-Cursor支持-设计方案.md](草案-Cursor支持-设计方案.md) | 已落地：`CursorAuth` 只读 SQLite、`CursorQuotaClient` / `CursorUsageFetcher`、独立 `cursor-usage-rollup.json`、Popover / 菜单栏 / 悬浮窗 / 统计页 / 设置 / Onboarding 全部接入。文档保留接口字段与风险说明的追溯细节 |
 | [草案-CommandCode支持-设计方案.md](草案-CommandCode支持-设计方案.md) | 已落地：`CommandCodeAuth` 五级凭据扫描 + Keychain 手动 Key、`CommandCodeQuotaClient`、设置账号行与凭据 Sheet、Popover / 菜单栏 / 悬浮窗。按设计不进入主窗口用量统计 |

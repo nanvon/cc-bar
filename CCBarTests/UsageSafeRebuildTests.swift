@@ -4,8 +4,9 @@ import SQLite3
 
 /// 安全重算的端到端测试（执行计划 A10～A16、A19～A23、A25）。
 ///
-/// 覆盖三类拒绝证明：来源不完整、用量向量不一致、候选持久化失败；以及重算本身
-/// 必须做到的事：费用按新价重算且用量不减不增、重复重算幂等、周期与 DSH 分区自洽。
+/// 手动重算以现有日志为准，日志已删除的对话保留原用量并按现价重新计费；只在来源不完整、
+/// 候选持久化失败时拒绝。另覆盖：费用按新价重算、重复重算幂等、续接对话不重复计入、
+/// 周期与 DSH 分区自洽。用量向量逐项比对只用于受限恢复（见 UsageHistoryRecoveryTests）。
 @MainActor
 final class UsageSafeRebuildTests: XCTestCase {
     private var environment: UsageTestEnvironment!
@@ -371,7 +372,7 @@ final class UsageSafeRebuildTests: XCTestCase {
         XCTAssertEqual(UsageHistoryConsistency.cycleVector(result(authority).cycle), UsageHistoryConsistency.cycleVector(result(restarted).cycle))
     }
 
-    func testCycleMismatchRemainsVisibleAfterSuccessfulCostRebuild() async throws {
+    func testRebuildRestoresCycleUsageFromLogsAndClearsIncompleteHint() async throws {
         let env = environment!
         let now = Date()
         env.appState.quotaCycles.records = [makeCycle(id: "cycle-difference", app: .claude, accountKey: "a", kind: .fiveHour,
@@ -381,14 +382,25 @@ final class UsageSafeRebuildTests: XCTestCase {
         _ = try await seed(env, reference: now)
         var saved = try committed(env)
         XCTAssertFalse(saved.cycleRollup.buckets.isEmpty)
+        let logCycles = saved.cycleRollup.buckets
         saved.cycleRollup.buckets[0].inputTokens += 1
+        // 周期记录里已不存在、且反解不出重置时刻的旧桶：载入时提示「周期用量不完整」。
+        var stale = saved.cycleRollup.buckets[0]
+        stale.cycleID = "stale-cycle"
+        saved.cycleRollup.buckets.append(stale)
         try env.store.commit(saved)
         let service = env.makeService()
         await env.bootstrap(service)
-        await service.forceRescan()
-        XCTAssertEqual(service.lastRebuildOutcome, .replaced(cycleVerified: false))
         XCTAssertTrue(service.cycleUsageNeedsManualRecalculation)
+        await service.forceRescan()
+        // 周期用量以日志为准：被改动的桶恢复成日志结果，差异只记入诊断；重算后不再提示补齐。
+        XCTAssertEqual(service.lastRebuildOutcome, .replaced(cycleVerified: false))
+        XCTAssertFalse(service.cycleUsageNeedsManualRecalculation)
         XCTAssertTrue(service.lastRebuildDiagnostic?.contains("cycle_keys_changed") == true)
+        XCTAssertEqual(
+            UsageHistoryConsistency.cycleVector(logCycles),
+            UsageHistoryConsistency.cycleVector(result(service).cycle)
+        )
         try assertSameDayVector(saved.usageRollup.buckets, result(service).day, env: env)
     }
 
@@ -416,15 +428,15 @@ final class UsageSafeRebuildTests: XCTestCase {
         XCTAssertEqual(env.totals(result(restarted).day, app: .claude).inputTokens, 123)
     }
 
-    // MARK: - A14 拒绝重算：原结果保留、如实报告
+    // MARK: - A14 日志被原地改写：重算以日志为准，差异写入诊断
 
-    func testRejectedRebuildReportsReasonWithoutTouchingHistory() async throws {
+    func testRebuildFollowsLogsRewrittenInPlace() async throws {
         let env = environment!
         let service = try await seed(env)
         let before = result(service)
 
-        // 用「内容变了但 mtime 没变」的旧日志模拟无法用增量解释的历史差异：
-        // 增量扫描看不到变化，全量重扫却会得到不同结果，于是候选必须被拒。
+        // 「内容变了但 mtime 没变」：增量扫描看不到变化，全量重扫读到新内容。
+        // 日志还在的对话以日志为准，重算采用新内容，差异只写入诊断。
         let logURL = env.claudeRoot.appendingPathComponent("fixture-project/safe-session.jsonl")
         let originalAttributes = try FileManager.default.attributesOfItem(atPath: logURL.path)
         let originalText = try XCTUnwrap(String(data: Data(contentsOf: logURL), encoding: .utf8))
@@ -438,16 +450,14 @@ final class UsageSafeRebuildTests: XCTestCase {
             try FileManager.default.setAttributes([.modificationDate: mtime], ofItemAtPath: logURL.path)
         }
         await service.forceRescan()
-        XCTAssertEqual(service.lastRebuildOutcome, .rejectedUsageChanged)
-        XCTAssertEqual(env.dayCost(result(service).day), env.dayCost(before.day), "拒绝后金额也不得变化")
+        XCTAssertEqual(service.lastRebuildOutcome, .replaced(cycleVerified: true), service.lastRebuildDiagnostic ?? "")
+        XCTAssertEqual(
+            env.totals(result(service).day, app: .claude).inputTokens,
+            env.totals(before.day, app: .claude).inputTokens + 7_000
+        )
         let diagnostic = try XCTUnwrap(service.lastRebuildDiagnostic)
         XCTAssertTrue(diagnostic.contains("day_keys"), "诊断必须给出可读的差异类别：\(diagnostic)")
-
-        // 拒绝后 UI 继续展示旧的、已提交的历史。
-        let disk = try committed(env)
-        try assertSameDayVector(before.day, result(service).day, env: env)
-        try assertSameDayVector(before.day, disk.usageRollup.buckets, env: env)
-        XCTAssertGreaterThan(before.day.reduce(0) { $0 + $1.inputTokens }, 0)
+        try assertSameDayVector(result(service).day, try committed(env).usageRollup.buckets, env: env)
     }
 
     // MARK: - A16 DSH 全量重扫：整体替换、不翻倍、结果稳定
@@ -659,12 +669,19 @@ final class UsageSafeRebuildTests: XCTestCase {
         XCTAssertTrue(withTwo.infos.contains { $0.key == "claude:safe-session" })
         XCTAssertTrue(withTwo.infos.contains { $0.key == "claude:safe-second" })
 
-        // 删除其中一个会话文件：普通增量与安全重算都必须保留它的历史。
+        // 删除其中一个会话文件：普通增量与重算都必须保留它的历史，重算按新价重新计费。
         try FileManager.default.removeItem(at: second)
         await service.scanNow()
         try assertSameDayVector(withTwo.day, result(service).day, env: env)
+        env.installPricing(model: model, input: 2, output: 20)
         await service.forceRescan()
-        XCTAssertEqual(service.lastRebuildOutcome, .rejectedUsageChanged)
+        XCTAssertEqual(service.lastRebuildOutcome, .replaced(cycleVerified: true), service.lastRebuildDiagnostic ?? "")
+        XCTAssertNil(service.lastRebuildDiagnostic, "保留已删除会话后，用量必须与重算前完全一致")
+        let keptCost = result(service).conversation
+            .filter { $0.conversationKey == "claude:safe-second" }
+            .reduce(Decimal(0)) { $0 + $1.costUSD }
+        XCTAssertEqual(keptCost, Decimal(4_000) * 2 / 1_000_000 + Decimal(400) * 20 / 1_000_000, "已删除会话按新价重新计费")
+        XCTAssertEqual(dayCost(result(service).day, model: model), expectedCost(result(service).day, input: 2, output: 20))
         XCTAssertEqual(Set(result(service).infos.map(\.key)), Set(withTwo.infos.map(\.key)), "对话档案不得因重算被删")
         XCTAssertEqual(
             env.conversationVector(result(service).conversation),
@@ -674,9 +691,9 @@ final class UsageSafeRebuildTests: XCTestCase {
         try assertSameDayVector(withTwo.day, try committed(env).usageRollup.buckets, env: env)
     }
 
-    // MARK: - A12 / A13 变更必须按完整键比较
+    // MARK: - A12 删除旧会话、新增等量会话：旧会话保留，新会话照常计入
 
-    func testSwapWithEqualTotalsIsRejectedBecauseKeysDiffer() async throws {
+    func testDeletedSessionIsKeptAlongsideEqualNewSession() async throws {
         let env = environment!
         env.installPricing(model: model, input: 1, output: 10)
         try env.writeClaudeLog(
@@ -700,14 +717,10 @@ final class UsageSafeRebuildTests: XCTestCase {
             ]
         )
         await service.forceRescan()
-        XCTAssertEqual(service.lastRebuildOutcome, .rejectedUsageChanged, "总量相同不能成为通过理由")
-        let diagnostic = try XCTUnwrap(service.lastRebuildDiagnostic)
-        XCTAssertTrue(
-            diagnostic.contains("conversation_keys"),
-            "同一天同桶的互换只能靠对话键发现：\(diagnostic)"
-        )
-        // 普通增量会正常收集新会话；被拒候选不得把「已删除会话的历史」抹掉。
+        XCTAssertEqual(service.lastRebuildOutcome, .replaced(cycleVerified: true), service.lastRebuildDiagnostic ?? "")
+        // 同一天同桶的等量新会话不能被当成已删除会话的替身：两者都在。
         XCTAssertTrue(result(service).infos.contains { $0.key == "claude:swap-a" }, "已删除会话的历史不得消失")
+        XCTAssertTrue(result(service).infos.contains { $0.key == "claude:swap-b" })
         XCTAssertEqual(
             env.totals(result(service).day, app: .claude).inputTokens,
             baselineTokens.inputTokens + 1_000,
@@ -723,13 +736,11 @@ final class UsageSafeRebuildTests: XCTestCase {
             ]
         )
         await service.forceRescan()
-        XCTAssertEqual(service.lastRebuildOutcome, .rejectedUsageChanged)
-        let dayDiagnostic = try XCTUnwrap(service.lastRebuildDiagnostic)
-        XCTAssertTrue(dayDiagnostic.contains("day_keys"), "落在另一天只能靠日键发现：\(dayDiagnostic)")
-        // 总量依旧相同（1000 + 1000 + 1000），证明拒绝不是靠总量判断。
+        XCTAssertEqual(service.lastRebuildOutcome, .replaced(cycleVerified: true), service.lastRebuildDiagnostic ?? "")
         XCTAssertEqual(env.totals(result(service).day, app: .claude).inputTokens, baselineTokens.inputTokens + 2_000)
         XCTAssertTrue(result(service).infos.contains { $0.key == "claude:swap-a" })
         XCTAssertTrue(result(service).infos.contains { $0.key == "claude:swap-b" })
+        XCTAssertTrue(result(service).infos.contains { $0.key == "claude:swap-c" })
     }
 
     /// A13 的可辨识性限制：同一天同一完整桶内的事件替换，只要聚合向量不变就无法识别。
@@ -1181,9 +1192,9 @@ final class UsageSafeRebuildTests: XCTestCase {
         XCTAssertEqual(env.totals(result(restarted).day, app: .claude).inputTokens, env.totals(inMemory.day, app: .claude).inputTokens)
     }
 
-    // MARK: - A25 重算期间日志继续变化
+    // MARK: - A25 日志在两次重算之间变化：重算以当时的日志为准，普通增量继续工作
 
-    func testRejectedRebuildRecoversAfterLogsSettle() async throws {
+    func testRebuildAppliesCurrentLogsAndIncrementalScanContinues() async throws {
         let env = environment!
         env.installPricing(model: model, input: 1, output: 10)
         let service = try await seed(env)
@@ -1198,34 +1209,96 @@ final class UsageSafeRebuildTests: XCTestCase {
         }
 
         await service.forceRescan()
-        XCTAssertEqual(service.lastRebuildOutcome, .rejectedUsageChanged, "日志变化期间必须保留基准并报告受限")
-        XCTAssertEqual(service.historyRecoveryState, .complete, "拒绝重算不等于历史受限")
-        try assertSameDayVector(before.day, result(service).day, env: env)
+        XCTAssertEqual(service.lastRebuildOutcome, .replaced(cycleVerified: true), service.lastRebuildDiagnostic ?? "")
+        XCTAssertEqual(service.historyRecoveryState, .complete)
+        XCTAssertEqual(
+            env.totals(result(service).day, app: .claude).inputTokens,
+            env.totals(before.day, app: .claude).inputTokens + 7_000
+        )
 
-        // 让变化对普通增量可见（追加一条新日志会更新 mtime），普通采集必须继续工作。
+        // 重算后普通增量从新的进度继续，追加的条目只计一次。
         try env.append(
             env.claudeLine(id: "settled-1", session: "safe-session", model: model, timestamp: timestamp(-0.05, from: Date()), input: 333, output: 33, speed: "standard") + "\n",
             to: logURL
         )
         await service.scanNow()
         let afterIncrement = result(service)
-        XCTAssertGreaterThan(
+        XCTAssertEqual(
             env.totals(afterIncrement.day, app: .claude).inputTokens,
-            env.totals(before.day, app: .claude).inputTokens,
-            "普通增量必须继续收集新条目"
+            env.totals(before.day, app: .claude).inputTokens + 7_000 + 333
         )
 
-        // 日志静止（把不可见改写还原，恢复与增量历史一致的字节）后再重算：成功且与增量结果一致。
-        let settledAttributes = try FileManager.default.attributesOfItem(atPath: logURL.path)
-        var settled = try XCTUnwrap(String(data: Data(contentsOf: logURL), encoding: .utf8))
-        settled = settled.replacingOccurrences(of: #""input_tokens":9000"#, with: #""input_tokens":2000"#)
-        try Data(settled.utf8).write(to: logURL)
-        if let mtime = settledAttributes[.modificationDate] as? Date {
-            try FileManager.default.setAttributes([.modificationDate: mtime], ofItemAtPath: logURL.path)
-        }
+        // 日志不再变化时重复重算，结果与增量一致（幂等）。
         await service.forceRescan()
         XCTAssertEqual(service.lastRebuildOutcome, .replaced(cycleVerified: true), service.lastRebuildDiagnostic ?? "")
+        XCTAssertNil(service.lastRebuildDiagnostic)
         try assertSameDayVector(afterIncrement.day, result(service).day, env: env)
+    }
+
+    // MARK: - 续接 / 分叉对话
+
+    /// 续接出来的会话会复制原会话的消息（同一 message.id）。重算必须和增量扫描一样把它们
+    /// 归给原会话，否则日志都在也会出现对话归属差异。
+    func testForkedSessionMessagesStayWithOriginalConversationOnRebuild() async throws {
+        let env = environment!
+        env.installPricing(model: model, input: 1, output: 10)
+        // 原会话的文件名排在后面，证明归属靠创建先后而不是路径顺序。
+        try env.writeClaudeLog(session: "fork-original", lines: forkOriginalLines(env, session: "fork-original"), file: "zz-original.jsonl")
+        let service = env.makeService()
+        await env.bootstrap(service)
+        await service.scanNow()
+        try env.writeClaudeLog(session: "fork-continued", lines: forkContinuedLines(env), file: "aa-continued.jsonl")
+        await service.scanNow()
+        let before = result(service)
+        XCTAssertEqual(env.totals(before.day, app: .claude).inputTokens, 7_000)
+
+        await service.forceRescan()
+        XCTAssertEqual(service.lastRebuildOutcome, .replaced(cycleVerified: true), service.lastRebuildDiagnostic ?? "")
+        XCTAssertNil(service.lastRebuildDiagnostic, "续接对话的归属必须与增量扫描一致")
+        XCTAssertEqual(env.conversationVector(before.conversation), env.conversationVector(result(service).conversation))
+    }
+
+    /// 原会话日志被删、续接会话还在：重算时续接会话会重新计入复制过去的消息，
+    /// 被删的原会话不能再按历史叠加一份。
+    func testForkedMessagesAreNotCountedTwiceAfterOriginalLogIsDeleted() async throws {
+        let env = environment!
+        env.installPricing(model: model, input: 1, output: 10)
+        let original = try env.writeClaudeLog(session: "fork-original", lines: forkOriginalLines(env, session: "fork-original"))
+        let service = env.makeService()
+        await env.bootstrap(service)
+        await service.scanNow()
+        try env.writeClaudeLog(session: "fork-continued", lines: forkContinuedLines(env))
+        await service.scanNow()
+        let before = result(service)
+        XCTAssertEqual(env.totals(before.day, app: .claude).inputTokens, 7_000)
+
+        try FileManager.default.removeItem(at: original)
+        await service.forceRescan()
+        XCTAssertEqual(service.lastRebuildOutcome, .replaced(cycleVerified: true), service.lastRebuildDiagnostic ?? "")
+        try assertSameDayVector(before.day, result(service).day, env: env)
+        XCTAssertEqual(env.totals(result(service).day, app: .claude).inputTokens, 7_000)
+        XCTAssertFalse(result(service).infos.contains { $0.key == "claude:fork-original" })
+        XCTAssertEqual(
+            result(service).conversation
+                .filter { $0.conversationKey == "claude:fork-continued" }
+                .reduce(0) { $0 + $1.inputTokens },
+            7_000
+        )
+    }
+
+    private let forkReference = Date()
+
+    private func forkOriginalLines(_ env: UsageTestEnvironment, session: String) -> [String] {
+        [
+            env.claudeLine(id: "fork-1", session: session, model: model, timestamp: timestamp(-0.6, from: forkReference), input: 1_000, output: 100, speed: "standard"),
+            env.claudeLine(id: "fork-2", session: session, model: model, timestamp: timestamp(-0.5, from: forkReference), input: 2_000, output: 200, speed: "standard"),
+        ]
+    }
+
+    private func forkContinuedLines(_ env: UsageTestEnvironment) -> [String] {
+        forkOriginalLines(env, session: "fork-continued") + [
+            env.claudeLine(id: "fork-3", session: "fork-continued", model: model, timestamp: timestamp(-0.1, from: forkReference), input: 4_000, output: 400, speed: "standard"),
+        ]
     }
 
     // MARK: - 断言辅助

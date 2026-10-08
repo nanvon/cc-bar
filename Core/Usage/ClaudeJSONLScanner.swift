@@ -44,7 +44,12 @@ enum ClaudeJSONLScanner {
         onProgress: ScanProgressCallback? = nil
     ) -> Result {
         let enumeration = JSONLDirectoryEnumerator.enumerate(at: root, minimumMtime: minimumMtime)
-        let files = enumeration.files
+        // 续接 / 分叉对话会把原对话的消息（同一 message.id）复制进新文件。全局去重只计第一次
+        // 读到的那条，所以按创建时间读文件，让消息归给原对话；增量扫描先读到原对话也是这个结果，
+        // 两条路径的对话归属才一致。
+        let files = enumeration.files.sorted {
+            $0.creationTime == $1.creationTime ? $0.path < $1.path : $0.creationTime < $1.creationTime
+        }
 
         var newState: [String: ScanFileState] = previous
         var entries: [UsageEntry] = []

@@ -89,7 +89,11 @@ private struct RebuildCandidate {
     var scanState: ScanState
     /// 非 nil 表示来源不完整，候选不可提交。
     var incompleteSources: String?
+    /// 与重建前历史的差异。受限恢复据此拒绝；手动重建只作诊断记录。
     var mismatch: UsageRebuildMismatch
+    /// 手动重建保留的已删除日志对话数，以及因重扫已覆盖而没有叠加的桶数。
+    var preservedConversations = 0
+    var skippedBuckets = 0
 }
 
 /// 协调 JSONL 扫描 → 聚合 → 持久化 → 通知 AppState 的入口。
@@ -1288,8 +1292,9 @@ final class UsageService {
 
     // MARK: - 安全重算
 
-    /// 用户在设置页手动触发的强制重算。候选在独立的聚合器上生成，
-    /// 通过完整用量向量对账并成功持久化后才替换当前结果；失败一律保留原历史。
+    /// 用户在设置页手动触发的强制重算。候选在独立的聚合器上从现有日志完整重建，
+    /// 日志已删除的对话按 `UsageRebuildMerge` 保留原用量、按现价重新计费；
+    /// 来源读取不完整或持久化失败时一律保留原历史。历史受限时只做受限恢复的核对。
     func forceRescan() async {
         guard !suspendedForTermination, !isPersistingForTermination else { return }
         // 撞上另一次进行中的扫描(常见于 App 冷启动自动扫描、或 Scheduler 定时扫描)时,
@@ -1339,7 +1344,7 @@ final class UsageService {
         let first = await runCandidateRebuild(purpose: .manualRecalculation)
         var outcome = first
         if case .replaced = first, await refreshMissingPricingIfNeeded() {
-            // 缺价刷新拿到新价格后必须再走一遍完整候选与对账；第二轮失败时保留第一轮有效结果。
+            // 缺价刷新拿到新价格后必须再走一遍完整候选；第二轮失败时保留第一轮有效结果。
             switch await runCandidateRebuild(purpose: .pricingRefresh) {
             case .replaced(let cycleVerified):
                 outcome = .replaced(cycleVerified: cycleVerified)
@@ -1353,14 +1358,11 @@ final class UsageService {
             }
         }
         lastRebuildOutcome = outcome
-        switch outcome {
-        case .replaced(let cycleVerified):
-            cycleUsageNeedsManualRecalculation = !cycleVerified
-            if cycleVerified { hasPendingOrphanCycleRebuild = false }
-        case .rejectedUsageChanged, .rejectedIncompleteSources, .commitFailed, .partiallyCommitted:
-            break
-        case .recoveredFromRestrictedHistory, .restrictedRecoveryRejected:
-            break
+        // 第一轮提交后，周期桶已按全部现有日志和周期记录重建（日志已删除的部分原样保留），
+        // 再点重算也补不出更多数据，不能继续提示「周期用量不完整」。
+        if case .replaced = first {
+            cycleUsageNeedsManualRecalculation = false
+            hasPendingOrphanCycleRebuild = false
         }
     }
 
@@ -1386,13 +1388,16 @@ final class UsageService {
         case restrictedRecovery
     }
 
-    /// 候选隔离重算：完整扫描 → 独立聚合 → 完整性门槛 → 对账 → 提交 → 发布。
+    /// 候选隔离重算：完整扫描 → 独立聚合 → 完整性门槛 → 对账（仅受限恢复） → 提交 → 发布。
     private func runCandidateRebuild(purpose: RebuildPurpose) async -> UsageRebuildOutcome {
         guard !storeWriteDisabled else {
             return .commitFailed("usage history store is read-only")
         }
         // 标识迁移尚未提交时（含没有可信进度的旧快照）按旧 Codex 身份严格核对。
-        let candidate = await buildRebuildCandidate(useLegacyCodexModels: usesLegacyCodexModels)
+        let candidate = await buildRebuildCandidate(
+            useLegacyCodexModels: usesLegacyCodexModels,
+            preserveDeletedConversations: purpose != .restrictedRecovery
+        )
         #if DEBUG
         await candidateReadyForTesting?()
         #endif
@@ -1401,13 +1406,16 @@ final class UsageService {
             AppLog.warn(.usage, "usage rebuild rejected sources=\(incomplete)")
             return .rejectedIncompleteSources(incomplete)
         }
-        if candidate.mismatch.hasUsageDifference {
+        // 只有受限恢复要求逐项相等：它的作用是证明旧历史与日志一致，才能采纳新进度。
+        // 手动重建以现有日志为准、保留日志已删除的对话，差异是预期结果，只记录不拒绝。
+        if purpose == .restrictedRecovery, candidate.mismatch.hasUsageDifference {
             lastRebuildDiagnostic = candidate.mismatch.summary
             AppLog.warn(.usage, "usage rebuild rejected mismatch=\(candidate.mismatch.summary)")
             return .rejectedUsageChanged
         }
         let cycleVerified = !candidate.mismatch.hasCycleDifference
-        lastRebuildDiagnostic = cycleVerified ? nil : candidate.mismatch.summary
+        let changed = candidate.mismatch.hasUsageDifference || !cycleVerified
+        lastRebuildDiagnostic = changed ? candidate.mismatch.summary : nil
         let error = await persistSnapshot(
             snapshotID: candidate.scanState.generationID,
             fingerprint: candidate.scanState.pricingFingerprint,
@@ -1463,12 +1471,23 @@ final class UsageService {
         case .pricingRefresh: tag = "pricing refresh"
         case .restrictedRecovery: tag = "restricted recovery"
         }
-        AppLog.info(.usage, "usage rebuild \(tag) committed cycle_verified=\(cycleVerified)")
+        AppLog.info(
+            .usage,
+            "usage rebuild \(tag) committed cycle_verified=\(cycleVerified)"
+                + " changes=\(candidate.mismatch.summary)"
+                + " preserved_conversations=\(candidate.preservedConversations)"
+                + " skipped_buckets=\(candidate.skippedBuckets)"
+        )
         return .replaced(cycleVerified: cycleVerified)
     }
 
     /// 用独立聚合器构造完整候选。读取期间当前结果继续展示；这里不修改任何线上状态。
-    private func buildRebuildCandidate(useLegacyCodexModels: Bool = false) async -> RebuildCandidate {
+    /// - Parameter preserveDeletedConversations: 手动重建传 true，按 `UsageRebuildMerge` 保留日志已删除的对话；
+    ///   受限恢复的核对传 false，候选只来自现有日志，才能和基准逐项比对。
+    private func buildRebuildCandidate(
+        useLegacyCodexModels: Bool = false,
+        preserveDeletedConversations: Bool
+    ) async -> RebuildCandidate {
         let progress: ScanProgressCallback? = { [weak self] progress in
             DispatchQueue.main.async { self?.scanProgress = progress }
         }
@@ -1599,19 +1618,43 @@ final class UsageService {
             )
         }
 
-        let candidateDay = candidateDaily.snapshotLocal()
         let conversationSnapshot = candidateConversations.snapshot()
+        var merged = UsageRebuildMerge.Result(
+            dayBuckets: candidateDaily.snapshotLocal(),
+            conversationInfos: conversationSnapshot.infos,
+            conversationBuckets: conversationSnapshot.buckets,
+            cycleBuckets: candidateCycles.snapshot()
+        )
+        if preserveDeletedConversations {
+            var cycleStartByID: [String: Date] = [:]
+            for cycle in cycles where cycleStartByID[cycle.id] == nil {
+                cycleStartByID[cycle.id] = cycle.startAt
+            }
+            merged = UsageRebuildMerge.preserveDeletedConversations(
+                baselineDay: baselineDay,
+                baselineInfos: baselineConversation.infos,
+                baselineConversation: baselineConversation.buckets,
+                baselineCycles: baselineCycles,
+                candidateDay: merged.dayBuckets,
+                candidateInfos: merged.conversationInfos,
+                candidateConversation: merged.conversationBuckets,
+                candidateCycles: merged.cycleBuckets,
+                cycleStartByID: cycleStartByID,
+                sourceExists: { FileManager.default.fileExists(atPath: $0) }
+            )
+        }
+        let candidateDay = merged.dayBuckets
         var mismatch = UsageHistoryConsistency.compareUsage(
             baseline: baselineDay,
             candidateDay: candidateDay,
             baselineConversation: baselineConversation.buckets,
-            candidateConversation: conversationSnapshot.buckets,
+            candidateConversation: merged.conversationBuckets,
             baselineInfos: baselineConversation.infos,
-            candidateInfos: conversationSnapshot.infos
+            candidateInfos: merged.conversationInfos
         )
         UsageHistoryConsistency.compareCycle(
             baseline: baselineCycles,
-            candidate: candidateCycles.snapshot(),
+            candidate: merged.cycleBuckets,
             into: &mismatch
         )
 
@@ -1636,16 +1679,18 @@ final class UsageService {
             : cycleInitialRebuildCompletedApps
         return RebuildCandidate(
             dayBuckets: candidateDay,
-            conversationInfos: conversationSnapshot.infos,
-            conversationBuckets: conversationSnapshot.buckets,
-            cycleBuckets: candidateCycles.snapshot(),
+            conversationInfos: merged.conversationInfos,
+            conversationBuckets: merged.conversationBuckets,
+            cycleBuckets: merged.cycleBuckets,
             cycleInitialRebuildCompletedAt: incomplete.isEmpty ? Date() : cycleInitialRebuildCompletedAt,
             cycleInitialRebuildCompletedApps: completedApps,
             dshContributions: freshDshContributions,
             dshRequiresRebuild: dshFrozen ? true : !dsh.isComplete,
             scanState: scanState,
             incompleteSources: incomplete.isEmpty ? nil : incomplete.joined(separator: ", "),
-            mismatch: mismatch
+            mismatch: mismatch,
+            preservedConversations: merged.preservedConversations,
+            skippedBuckets: merged.skippedBuckets
         )
     }
 

@@ -1013,13 +1013,14 @@ struct SettingsRootView: View {
     }
 
     /// 手动重算的结果提示。成功不提示（费用已在统计页可见）；被拒 / 失败必须说明
-    /// 「原历史保留」与下一步，和技术实现里的拒绝阈值一致。
+    /// 「原历史保留」与下一步。手动重算只会因来源读取不完整或写盘失败被拒。
     private func rebuildOutcomeHint(_ outcome: UsageRebuildOutcome?) -> String? {
         switch outcome {
         case .rejectedUsageChanged:
+            // 只有受限恢复的核对会产生，forceRescan 会把它转成 `.restrictedRecoveryRejected`。
             return tr(
-                "Not applied: logs changed during recalculation. Existing data kept.",
-                "未生效：重算期间日志有变化，原数据未改动"
+                "Not applied: recalculated usage did not match existing data. Existing data kept.",
+                "未生效：重算结果与已有数据不一致，原数据未改动"
             )
         case .rejectedIncompleteSources:
             return tr(
@@ -1041,12 +1042,8 @@ struct SettingsRootView: View {
                 "Verification failed. Existing data kept; new usage is paused. Restore the logs or fix disk read/write errors, then retry.",
                 "校验未通过：原数据保留，已暂停统计新用量。恢复日志或解决磁盘读写问题后再试"
             )
-        case .replaced(cycleVerified: false):
-            return tr(
-                "Costs updated; some usage could not be matched to its quota cycle.",
-                "费用已更新；部分用量未能确认所属额度周期"
-            )
-        case .replaced(cycleVerified: true), .recoveredFromRestrictedHistory, .none:
+        case .replaced, .recoveredFromRestrictedHistory, .none:
+            // 周期用量与重建前不同是预期结果（以现有日志为准），不再单独提示。
             return nil
         }
     }

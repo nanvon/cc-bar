@@ -93,7 +93,8 @@ nonisolated struct UsageRebuildMismatch: Sendable, Equatable {
     }
 }
 
-/// 重算对账。首版门槛只有一种通过方式：候选的完整用量向量与基准逐一相等。
+/// 受限恢复的核对：候选的完整用量向量必须与基准逐一相等才算通过。
+/// 手动重建不走这道门槛（见 `UsageRebuildMerge`），比较结果只作诊断记录。
 /// 不接受「总量不减少」「键集合是超集」「没有报错」这类弱证明。
 nonisolated enum UsageHistoryConsistency {
     nonisolated static func dayVector(_ buckets: [UsageBucket]) -> [UsageVectorKey: UsageVectorCounts] {
@@ -254,12 +255,192 @@ nonisolated enum UsageHistoryConsistency {
     }
 }
 
+/// 手动重建的合并规则：日志还在的对话以重扫结果为准（新解析规则、新价格都生效）；
+/// 日志已全部删除的对话保留原用量，只按当前价格表重新计算金额。
+/// 只处理 Claude / Codex / Pi：OpenCode、DSH 本来就按会话保留源库中已删除的历史，候选里已带着这部分。
+nonisolated enum UsageRebuildMerge {
+    struct Result: Sendable {
+        var dayBuckets: [UsageBucket]
+        var conversationInfos: [ConversationInfo]
+        var conversationBuckets: [ConversationUsageBucket]
+        var cycleBuckets: [CycleUsageBucket]
+        /// 保留下来的已删除对话数。
+        var preservedConversations = 0
+        /// 重扫结果在同一键上已不少于历史、因此没有叠加的对话桶 / 周期桶数。
+        var skippedBuckets = 0
+    }
+
+    static let preservedApps: Set<UsageApp> = [.claude, .codex, .pi]
+
+    /// - Parameters:
+    ///   - cycleStartByID: 周期起点，用作被保留周期桶的取价时间；找不到的周期桶保留原金额。
+    ///   - sourceExists: 判断对话档案里记录的日志路径是否仍在。
+    static func preserveDeletedConversations(
+        baselineDay: [UsageBucket],
+        baselineInfos: [ConversationInfo],
+        baselineConversation: [ConversationUsageBucket],
+        baselineCycles: [CycleUsageBucket],
+        candidateDay: [UsageBucket],
+        candidateInfos: [ConversationInfo],
+        candidateConversation: [ConversationUsageBucket],
+        candidateCycles: [CycleUsageBucket],
+        cycleStartByID: [String: Date],
+        sourceExists: (String) -> Bool
+    ) -> Result {
+        var result = Result(
+            dayBuckets: candidateDay,
+            conversationInfos: candidateInfos,
+            conversationBuckets: candidateConversation,
+            cycleBuckets: candidateCycles
+        )
+        let candidateKeys = Set(candidateInfos.map(\.key))
+            .union(candidateConversation.map(\.conversationKey))
+        // 重扫里没有、且记录的日志路径都已不存在，才算日志已删除。
+        // 文件还在却没有重扫出用量的对话（归属改变、解析规则变化）以重扫结果为准，不保留。
+        let deleted = baselineInfos.filter { info in
+            preservedApps.contains(info.app)
+                && !candidateKeys.contains(info.key)
+                && !info.sourcePaths.contains(where: sourceExists)
+        }
+        guard !deleted.isEmpty else { return result }
+        let deletedKeys = Set(deleted.map(\.key))
+
+        // 防重复计入：原对话日志被删、续接对话还在时，续接对话会在重扫里重新计入复制过去的消息。
+        // 某个键上重扫结果已不少于历史，说明被删对话的用量已经算在别处，不再叠加。
+        let baselineDayVector = UsageHistoryConsistency.dayVector(baselineDay)
+        let candidateDayVector = UsageHistoryConsistency.dayVector(candidateDay)
+        var dayBuckets: [UsageVectorKey: UsageBucket] = [:]
+        for bucket in candidateDay {
+            dayBuckets[UsageVectorKey(app: bucket.app, day: bucket.day, model: bucket.model, speed: bucket.speed)] = bucket
+        }
+        var keptKeys: Set<String> = []
+        for bucket in baselineConversation where deletedKeys.contains(bucket.conversationKey) {
+            let key = UsageVectorKey(app: bucket.app, day: bucket.day, model: bucket.model, speed: bucket.speed)
+            if covers(candidateDayVector[key], baselineDayVector[key]) {
+                result.skippedBuckets += 1
+                continue
+            }
+            let kept = repriced(bucket)
+            result.conversationBuckets.append(kept)
+            keptKeys.insert(kept.conversationKey)
+            if var day = dayBuckets[key] {
+                day.inputTokens += kept.inputTokens
+                day.outputTokens += kept.outputTokens
+                day.cacheReadTokens += kept.cacheReadTokens
+                day.cacheCreationTokens += kept.cacheCreationTokens
+                day.costUSD += kept.costUSD
+                day.requestCount += kept.requestCount
+                day.hasUnpricedUsage = day.hasUnpricedUsage || kept.hasUnpricedUsage
+                dayBuckets[key] = day
+            } else {
+                dayBuckets[key] = UsageBucket(
+                    app: kept.app, model: kept.model, speed: kept.speed, day: kept.day,
+                    inputTokens: kept.inputTokens, outputTokens: kept.outputTokens,
+                    cacheReadTokens: kept.cacheReadTokens, cacheCreationTokens: kept.cacheCreationTokens,
+                    costUSD: kept.costUSD, requestCount: kept.requestCount,
+                    hasUnpricedUsage: kept.hasUnpricedUsage
+                )
+            }
+        }
+        result.dayBuckets = Array(dayBuckets.values)
+        result.conversationInfos += deleted.filter { keptKeys.contains($0.key) }
+        result.preservedConversations = keptKeys.count
+
+        let baselineCycleVector = UsageHistoryConsistency.cycleVector(baselineCycles)
+        let candidateCycleVector = UsageHistoryConsistency.cycleVector(candidateCycles)
+        for bucket in baselineCycles {
+            guard let conversationKey = bucket.conversationKey, deletedKeys.contains(conversationKey) else { continue }
+            let key = CycleVectorKey(
+                cycleID: bucket.cycleID,
+                allowanceSegmentID: bucket.allowanceSegmentID,
+                app: bucket.app,
+                model: bucket.model,
+                speed: bucket.speed,
+                quality: bucket.quality
+            )
+            if covers(candidateCycleVector[key], baselineCycleVector[key]) {
+                result.skippedBuckets += 1
+                continue
+            }
+            var kept = bucket
+            if let at = cycleStartByID[bucket.cycleID], let cost = cost(
+                app: bucket.app, model: bucket.model, speed: bucket.speed,
+                input: bucket.inputTokens, output: bucket.outputTokens,
+                cacheRead: bucket.cacheReadTokens, cacheCreation: bucket.cacheCreationTokens,
+                requestCount: bucket.requestCount, at: at
+            ) {
+                kept.costUSD = cost.total
+                kept.hasUnpricedUsage = false
+            }
+            result.cycleBuckets.append(kept)
+        }
+        return result
+    }
+
+    private static func covers(_ candidate: UsageVectorCounts?, _ baseline: UsageVectorCounts?) -> Bool {
+        guard let baseline else { return true }
+        let candidate = candidate ?? .zero
+        return candidate.inputTokens >= baseline.inputTokens
+            && candidate.outputTokens >= baseline.outputTokens
+            && candidate.cacheReadTokens >= baseline.cacheReadTokens
+            && candidate.cacheCreationTokens >= baseline.cacheCreationTokens
+            && candidate.requestCount >= baseline.requestCount
+    }
+
+    private static func repriced(_ bucket: ConversationUsageBucket) -> ConversationUsageBucket {
+        guard let cost = cost(
+            app: bucket.app, model: bucket.model, speed: bucket.speed,
+            input: bucket.inputTokens, output: bucket.outputTokens,
+            cacheRead: bucket.cacheReadTokens, cacheCreation: bucket.cacheCreationTokens,
+            requestCount: bucket.requestCount, at: bucket.firstAt
+        ) else { return bucket }
+        var kept = bucket
+        kept.costUSD = cost.total
+        kept.inputCostUSD = cost.input
+        kept.outputCostUSD = cost.output
+        kept.cacheReadCostUSD = cost.cacheRead
+        kept.cacheCreationCostUSD = cost.cacheCreation
+        kept.hasUnpricedUsage = false
+        return kept
+    }
+
+    /// 汇总桶的估算计价。逐条明细已随日志删除：Claude 缓存写入全部按 5 分钟价，
+    /// 长上下文档位按桶内平均每次请求的输入量判断，取价时间用桶内最早一条的时间。
+    /// Pi 日志自带上游结算金额，按价格表重算会覆盖官方金额，保留原值（返回 nil）；
+    /// 当前价格表也查不到的模型同样保留原金额。
+    private static func cost(
+        app: UsageApp,
+        model: String,
+        speed: UsageSpeed,
+        input: Int,
+        output: Int,
+        cacheRead: Int,
+        cacheCreation: Int,
+        requestCount: Int,
+        at date: Date
+    ) -> CostBreakdown? {
+        guard app == .claude || app == .codex else { return nil }
+        let fullInput = input + cacheRead + cacheCreation
+        return Pricing.costBreakdown(
+            app: app,
+            model: model,
+            speed: speed,
+            input: input,
+            output: output,
+            cacheRead: cacheRead,
+            cacheCreation: cacheCreation,
+            at: date,
+            inputTotal: requestCount > 0 ? fullInput / requestCount : fullInput
+        )
+    }
+}
+
 /// 一次运行的结果状态。UI 与日志据此区分「成功」「保留旧历史的拒绝」「提交失败」「恢复受限」，
 /// 不靠字符串前缀判断。
 nonisolated enum UsageRebuildOutcome: Sendable, Equatable {
-    /// 用量向量与基准一致，新费用已提交。
+    /// 候选已提交。`cycleVerified` 表示周期用量与重建前是否一致，只作诊断。
     case replaced(cycleVerified: Bool)
-    /// 数据发生变化或覆盖无法确认，原历史原样保留。
+    /// 受限恢复核对时用量向量不一致，原历史原样保留。
     case rejectedUsageChanged
     /// 来源读取 / 解码不完整或 DSH 冲突，本轮不作为。
     case rejectedIncompleteSources(String)
