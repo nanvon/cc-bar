@@ -14,6 +14,7 @@ enum CommandCodeQuotaClient {
         var email: String?
         var orgID: String?
         var planType: String?
+        var userID: String? = nil
     }
 
     struct WhoamiResponse: Codable {
@@ -80,6 +81,7 @@ enum CommandCodeQuotaClient {
         let orgDict = whoamiDataDict?["org"] as? [String: Any]
 
         let login = userDict?["userName"] as? String
+        let userID = userDict?["id"] as? String
         let name = userDict?["name"] as? String
         let email = userDict?["email"] as? String
         let orgID = orgDict?["id"] as? String
@@ -125,7 +127,8 @@ enum CommandCodeQuotaClient {
             name: name,
             email: email,
             orgID: orgID,
-            planType: parsed.planType
+            planType: parsed.planType,
+            userID: userID
         )
 
         return .success(FetchResult(snapshot: parsed.snapshot, accountDetails: details))

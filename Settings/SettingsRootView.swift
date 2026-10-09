@@ -56,6 +56,8 @@ struct SettingsRootView: View {
     @State private var diagnosticsMessage: String?
     @State private var diagnosticsMessageIsError = false
     @State private var showDiagnosticsConfirm = false
+    @State private var showQuotaAlertRebuildConfirm = false
+    @State private var quotaNotificationSettingsOpened = false
 
     var body: some View {
         @Bindable var settings = SettingsStore.shared
@@ -86,6 +88,20 @@ struct SettingsRootView: View {
                 privacyAccountKey: "primary:codex",
                 fetchCredits: { await appState.fetchCodexResetCredits() }
             )
+        }
+        .confirmationDialog(
+            tr("Rebuild alert history?", "重建提醒记录？"),
+            isPresented: $showQuotaAlertRebuildConfirm, titleVisibility: .visible
+        ) {
+            Button(tr("Rebuild", "重建")) {
+                Task { await appState.quotaNotifications.rebuild(entries: appState.quotaAlertEntries) }
+            }
+            Button(tr("Cancel", "取消"), role: .cancel) {}
+        } message: {
+            Text(tr(
+                "Current low quotas will be recorded as already alerted. Alerts resume after recovery or reset. The original file is kept as a backup.",
+                "当前低额度先记录为已提醒，恢复或重置后再提醒。原记录文件保留为备份。"
+            ))
         }
         .onAppear {
             settings.syncLaunchAtLoginStatus()
@@ -582,6 +598,8 @@ struct SettingsRootView: View {
             }
         }
 
+        quotaAlertGroup(settings: settings)
+
         PrefsGroup(title: "Diagnostics", chinese: "诊断") {
             PrefsRow(
                 label: "Export diagnostics",
@@ -686,6 +704,131 @@ struct SettingsRootView: View {
     }
 
     // MARK: - Bindings & Actions Helpers
+
+    private func quotaAlertGroup(settings: SettingsStore) -> some View {
+        let service = appState.quotaNotifications
+        return PrefsGroup(
+            title: "Quota alerts", chinese: "额度提醒",
+            desc: "Checks enabled quota services and imported Codex accounts after successful refreshes.",
+            chineseDesc: "包含已启用的额度服务和导入 Codex 账号，成功刷新后检查"
+        ) {
+            PrefsRow(label: "Enable quota alerts", chinese: "开启额度提醒", detail: quotaAlertDetail) {
+                Toggle(tr("Enable quota alerts", "开启额度提醒"), isOn: Binding(
+                    get: { settings.quotaAlertsEnabled },
+                    set: { enabled in
+                        settings.quotaAlertsEnabled = enabled
+                        if enabled { Task { await service.requestPermissionIfNeeded() } }
+                    }
+                ))
+                .labelsHidden().toggleStyle(.switch).tint(.green)
+            }
+            InsetDivider()
+            PrefsRow(label: "Remaining below", chinese: "剩余低于") {
+                Picker(tr("Remaining below", "剩余低于"), selection: Binding(
+                    get: { settings.quotaAlertThresholdPercent },
+                    set: { settings.quotaAlertThresholdPercent = $0; service.settingsChanged() }
+                )) {
+                    ForEach(Array(stride(from: 5, through: 50, by: 5)), id: \.self) { value in
+                        Text("\(value)%").monospacedDigit().tag(value)
+                    }
+                }
+                .labelsHidden().pickerStyle(.menu).fixedSize()
+                .disabled(!settings.quotaAlertsEnabled)
+            }
+            InsetDivider()
+            PrefsRow(label: "5-hour / session quota", chinese: "5 小时／会话额度") {
+                Toggle(tr("5-hour / session quota", "5 小时／会话额度"), isOn: Binding(
+                    get: { settings.quotaAlertFiveHourEnabled },
+                    set: { settings.quotaAlertFiveHourEnabled = $0; service.settingsChanged() }
+                ))
+                .labelsHidden().toggleStyle(.switch).tint(.green)
+                .disabled(!settings.quotaAlertsEnabled || (!settings.quotaAlertWeeklyEnabled && !settings.quotaAlertBillingCycleEnabled))
+                .help(tr("Keep at least one quota window selected.", "至少保留一个额度窗口"))
+            }
+            InsetDivider()
+            PrefsRow(label: "Weekly quota", chinese: "周额度",
+                     desc: "Includes model-specific weekly quotas.", chineseDesc: "包含模型专属周额度") {
+                Toggle(tr("Weekly quota", "周额度"), isOn: Binding(
+                    get: { settings.quotaAlertWeeklyEnabled },
+                    set: { settings.quotaAlertWeeklyEnabled = $0; service.settingsChanged() }
+                ))
+                .labelsHidden().toggleStyle(.switch).tint(.green)
+                .disabled(!settings.quotaAlertsEnabled || (!settings.quotaAlertFiveHourEnabled && !settings.quotaAlertBillingCycleEnabled))
+                .help(tr("Keep at least one quota window selected.", "至少保留一个额度窗口"))
+            }
+            InsetDivider()
+            PrefsRow(label: "Billing cycle quota", chinese: "计费周期额度",
+                     desc: "Cursor Total / Auto / API and Command Code monthly credits.",
+                     chineseDesc: "Cursor Total／Auto／API 和 Command Code 月额度") {
+                Toggle(tr("Billing cycle quota", "计费周期额度"), isOn: Binding(
+                    get: { settings.quotaAlertBillingCycleEnabled },
+                    set: { settings.quotaAlertBillingCycleEnabled = $0; service.settingsChanged() }
+                ))
+                .labelsHidden().toggleStyle(.switch).tint(.green)
+                .disabled(!settings.quotaAlertsEnabled || (!settings.quotaAlertFiveHourEnabled && !settings.quotaAlertWeeklyEnabled))
+                .help(tr("Keep at least one quota window selected.", "至少保留一个额度窗口"))
+            }
+            InsetDivider()
+            PrefsRow(label: "Play sound", chinese: "播放声音", detail: quotaAlertSoundDetail) {
+                Toggle(tr("Play sound", "播放声音"), isOn: Binding(
+                    get: { settings.quotaAlertSoundEnabled },
+                    set: { enabled in
+                        settings.quotaAlertSoundEnabled = enabled
+                        service.settingsChanged()
+                        if enabled { Task { await service.requestPermissionIfNeeded() } }
+                    }
+                ))
+                .labelsHidden().toggleStyle(.switch).tint(.green)
+                .disabled(!settings.quotaAlertsEnabled)
+            }
+        }
+        .task { _ = await service.refreshPermission() }
+    }
+
+    private var quotaAlertDetail: AnyView? {
+        let service = appState.quotaNotifications
+        guard service.statusText != nil || quotaNotificationSettingsOpened else { return nil }
+        return AnyView(VStack(alignment: .leading, spacing: 6) {
+            if let status = service.statusText {
+                Text(status).foregroundStyle(.orange)
+            }
+            if SettingsStore.shared.quotaAlertsEnabled {
+                if service.permissionState?.canSubmit == false || service.authorizationFailed {
+                    Button(tr("Open notification settings", "打开系统通知设置")) {
+                        // 只用通知页面入口；不把未公开的 bundle 详情深链视为稳定协议。
+                        let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension")!
+                        if !NSWorkspace.shared.open(url) {
+                            NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/System Settings.app"))
+                        }
+                        quotaNotificationSettingsOpened = true
+                    }
+                    .buttonStyle(.bordered).controlSize(.small)
+                }
+                if service.permissionState?.authorization == .notDetermined || service.authorizationFailed || service.permissionReadFailed {
+                    Button(tr("Retry permission request", "重试申请权限")) {
+                        Task { await service.requestPermissionIfNeeded() }
+                    }
+                    .buttonStyle(.bordered).controlSize(.small).disabled(service.isRequestingAuthorization)
+                }
+            }
+            if service.storagePaused {
+                Button(tr("Rebuild alert history", "重建提醒记录")) { showQuotaAlertRebuildConfirm = true }
+                    .buttonStyle(.bordered).controlSize(.small).disabled(service.isRebuilding)
+            }
+            if quotaNotificationSettingsOpened {
+                Text(tr("Select CCBar in the notification list.", "在通知列表中选择 CCBar"))
+                    .foregroundStyle(.secondary)
+            }
+        }.font(.system(size: 11)))
+    }
+
+    private var quotaAlertSoundDetail: AnyView? {
+        let settings = SettingsStore.shared
+        guard settings.quotaAlertsEnabled, settings.quotaAlertSoundEnabled,
+              appState.quotaNotifications.permissionState?.sound == false else { return nil }
+        return AnyView(Text(tr("Notification sounds are disabled in System Settings.", "系统设置未允许通知声音"))
+            .font(.system(size: 11)).foregroundStyle(.secondary))
+    }
 
     /// 设置页「启用」开关：一个服务一个开关，同时管额度和用量（见 `SettingsStore.setServiceEnabled`）。
     private func serviceEnabledBinding(for app: QuotaApp, settings: SettingsStore) -> Binding<Bool> {

@@ -1,4 +1,5 @@
 import AppKit
+import UserNotifications
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -7,6 +8,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var terminationHandler: (@MainActor () async throws -> Void)?
     private var terminationFailureHandler: (@MainActor (Error) -> Bool)?
     private var terminationTask: Task<Void, Never>?
+    private var quotaNotificationDelegate: QuotaNotificationDelegate?
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        guard !AppRuntime.isRunningUnitTests else { return }
+        let delegate = QuotaNotificationDelegate { [weak self] in self?.requestOpenStatisticsWindow() }
+        quotaNotificationDelegate = delegate
+        UNUserNotificationCenter.current().delegate = delegate
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)

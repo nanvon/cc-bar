@@ -182,7 +182,12 @@ final class SettingsStore {
     // 主 Provider 的全局 / 菜单栏 / 悬浮窗显示配置。
     // 统一按 QuotaApp 索引，新增 Provider 时不再扩三组平行字段。
     var providerDisplaySettings: [QuotaApp: ProviderDisplaySettings] {
-        didSet { saveProviderDisplaySettings() }
+        didSet {
+            saveProviderDisplaySettings()
+            if QuotaApp.allCases.contains(where: { oldValue[$0]?.enabled != providerDisplaySettings[$0]?.enabled }) {
+                quotaAlertRuntimeVersion &+= 1
+            }
+        }
     }
 
     /// 全部服务的展示顺序（设置页拖拽写入）：额度服务与只有用量的 Pi / OpenCode / DSH 混排。
@@ -271,6 +276,45 @@ final class SettingsStore {
     /// 截图隐私模式：全局隐藏账号、项目及对话身份；保留真实用量统计。
     var privacyMode: Bool { didSet { defaults.set(privacyMode, forKey: Keys.privacyMode) } }
 
+    // 系统授权状态不持久化；此版本号仅用于丢弃设置变化前开始的额度请求。
+    private(set) var quotaAlertRuntimeVersion: UInt64 = 0
+    var quotaAlertsEnabled: Bool {
+        didSet { saveQuotaAlertPreference(quotaAlertsEnabled, key: "quotaAlertsEnabled") }
+    }
+    var quotaAlertThresholdPercent: Int {
+        didSet { saveQuotaAlertPreference(quotaAlertThresholdPercent, key: "quotaAlertThresholdPercent") }
+    }
+    var quotaAlertFiveHourEnabled: Bool {
+        didSet { saveQuotaAlertPreference(quotaAlertFiveHourEnabled, key: "quotaAlertFiveHourEnabled") }
+    }
+    var quotaAlertWeeklyEnabled: Bool {
+        didSet { saveQuotaAlertPreference(quotaAlertWeeklyEnabled, key: "quotaAlertWeeklyEnabled") }
+    }
+    var quotaAlertBillingCycleEnabled: Bool {
+        didSet { saveQuotaAlertPreference(quotaAlertBillingCycleEnabled, key: "quotaAlertBillingCycleEnabled") }
+    }
+    var quotaAlertSoundEnabled: Bool {
+        didSet { saveQuotaAlertPreference(quotaAlertSoundEnabled, key: "quotaAlertSoundEnabled") }
+    }
+    var quotaAlertStoreInitialized: Bool {
+        get { defaults.bool(forKey: "ccbar.settings.quotaAlertStoreInitialized.v1") }
+        set { defaults.set(newValue, forKey: "ccbar.settings.quotaAlertStoreInitialized.v1") }
+    }
+
+    var quotaAlertPreferences: QuotaAlertPreferences {
+        QuotaAlertPreferences(
+            enabled: quotaAlertsEnabled,
+            threshold: QuotaAlertPreferences.validThreshold(quotaAlertThresholdPercent),
+            fiveHour: quotaAlertFiveHourEnabled, weekly: quotaAlertWeeklyEnabled,
+            billingCycle: quotaAlertBillingCycleEnabled, sound: quotaAlertSoundEnabled
+        )
+    }
+
+    private func saveQuotaAlertPreference(_ value: Any, key: String) {
+        defaults.set(value, forKey: "ccbar.settings.\(key)")
+        quotaAlertRuntimeVersion &+= 1
+    }
+
     /// Sparkle 管理检查偏好；旧版开关只作为首次迁移的兜底，保留用户关闭的选择。
     var autoCheckForUpdates: Bool {
         defaults.object(forKey: "SUEnableAutomaticChecks") as? Bool
@@ -333,6 +377,18 @@ final class SettingsStore {
         appLanguage = AppLanguage(rawValue: langRaw) ?? .system
         launchAtLogin = Self.isLaunchAtLoginOn(SMAppService.mainApp.status)
         privacyMode = defaults.object(forKey: Keys.privacyMode) as? Bool ?? false
+        quotaAlertsEnabled = defaults.object(forKey: "ccbar.settings.quotaAlertsEnabled") as? Bool
+            ?? defaults.object(forKey: "ccbar.settings.codexQuotaAlertsEnabled") as? Bool ?? false
+        quotaAlertThresholdPercent = QuotaAlertPreferences.validThreshold(
+            defaults.object(forKey: "ccbar.settings.quotaAlertThresholdPercent") as? Int ?? 20
+        )
+        let alertFiveHour = defaults.object(forKey: "ccbar.settings.quotaAlertFiveHourEnabled") as? Bool ?? true
+        let alertWeekly = defaults.object(forKey: "ccbar.settings.quotaAlertWeeklyEnabled") as? Bool ?? true
+        let alertBillingCycle = defaults.object(forKey: "ccbar.settings.quotaAlertBillingCycleEnabled") as? Bool ?? true
+        quotaAlertFiveHourEnabled = alertFiveHour || (!alertWeekly && !alertBillingCycle)
+        quotaAlertWeeklyEnabled = alertWeekly
+        quotaAlertBillingCycleEnabled = alertBillingCycle
+        quotaAlertSoundEnabled = defaults.object(forKey: "ccbar.settings.quotaAlertSoundEnabled") as? Bool ?? false
         verboseLogging = defaults.object(forKey: Keys.verboseLogging) as? Bool ?? false
         didShowKeychainPrompt = defaults.object(forKey: Keys.didShowKeychainPrompt) as? Bool ?? false
         didCompleteOnboarding = defaults.object(forKey: Keys.didCompleteOnboarding) as? Bool ?? false

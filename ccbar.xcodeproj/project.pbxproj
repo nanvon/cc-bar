@@ -141,6 +141,12 @@
 		49C1BB03000000000001AABB /* ProjectUsageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BB03000000000001AAAA /* ProjectUsageTests.swift */; };
 		49C1B3F3000000000001AABB /* codex-fast-scan.jsonl in Resources */ = {isa = PBXBuildFile; fileRef = 49C1B3F0000000000001AAAA /* codex-fast-scan.jsonl */; };
 		49C1B3F4000000000001AABB /* claude-fast-scan.jsonl in Resources */ = {isa = PBXBuildFile; fileRef = 49C1B3F1000000000001AAAA /* claude-fast-scan.jsonl */; };
+		49C2AD01000000000001AABB /* QuotaAlertModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C2AD01000000000001AAAA /* QuotaAlertModels.swift */; };
+		49C2AD02000000000001AABB /* QuotaAlertPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C2AD02000000000001AAAA /* QuotaAlertPolicy.swift */; };
+		49C2AD03000000000001AABB /* QuotaNotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C2AD03000000000001AAAA /* QuotaNotificationService.swift */; };
+		49C2AD04000000000001AABB /* SystemNotificationClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C2AD04000000000001AAAA /* SystemNotificationClient.swift */; };
+		49C2AD05000000000001AABB /* QuotaAlertStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C2AD05000000000001AAAA /* QuotaAlertStore.swift */; };
+		49C2AD06000000000001AABB /* QuotaAlertTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C2AD06000000000001AAAA /* QuotaAlertTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -289,6 +295,12 @@
 		49C1B301000000000001AAAA /* CCBarTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = CCBarTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		49C1B3F0000000000001AAAA /* codex-fast-scan.jsonl */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "codex-fast-scan.jsonl"; sourceTree = "<group>"; };
 		49C1B3F1000000000001AAAA /* claude-fast-scan.jsonl */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "claude-fast-scan.jsonl"; sourceTree = "<group>"; };
+		49C2AD01000000000001AAAA /* QuotaAlertModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaAlertModels.swift; sourceTree = "<group>"; };
+		49C2AD02000000000001AAAA /* QuotaAlertPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaAlertPolicy.swift; sourceTree = "<group>"; };
+		49C2AD03000000000001AAAA /* QuotaNotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaNotificationService.swift; sourceTree = "<group>"; };
+		49C2AD04000000000001AAAA /* SystemNotificationClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemNotificationClient.swift; sourceTree = "<group>"; };
+		49C2AD05000000000001AAAA /* QuotaAlertStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaAlertStore.swift; sourceTree = "<group>"; };
+		49C2AD06000000000001AAAA /* QuotaAlertTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaAlertTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -345,6 +357,7 @@
 		4931AC432FC02A4200EE598C /* Core */ = {
 			isa = PBXGroup;
 			children = (
+				49C2AD10000000000001AAAA /* Notifications */,
 				4931AC422FC02A4200EE598C /* AppState.swift */,
 				49C1B131000000000001AAAA /* Scheduler.swift */,
 				49C1B132000000000001AAAA /* L10n.swift */,
@@ -415,6 +428,7 @@
 		49C1B111000000000001AAAA /* Storage */ = {
 			isa = PBXGroup;
 			children = (
+				49C2AD05000000000001AAAA /* QuotaAlertStore.swift */,
 				49C1B105000000000001AAAA /* Settings.swift */,
 				49C1B106000000000001AAAA /* QuotaCache.swift */,
 				49C1B108000000000001AAAA /* QuotaHistoryStore.swift */,
@@ -553,6 +567,7 @@
 		49C1B302000000000001AAAA /* CCBarTests */ = {
 			isa = PBXGroup;
 			children = (
+				49C2AD06000000000001AAAA /* QuotaAlertTests.swift */,
 				49C1B300000000000001AAAA /* QuotaParsingTests.swift */,
 				49C1BC12000000000001AAAA /* CursorAuthTests.swift */,
 				49C1BC15000000000001AAAA /* CursorUsageFetcherTests.swift */,
@@ -593,6 +608,17 @@
 				49C1B3F1000000000001AAAA /* claude-fast-scan.jsonl */,
 			);
 			path = Fixtures;
+			sourceTree = "<group>";
+		};
+		49C2AD10000000000001AAAA /* Notifications */ = {
+			isa = PBXGroup;
+			children = (
+				49C2AD01000000000001AAAA /* QuotaAlertModels.swift */,
+				49C2AD02000000000001AAAA /* QuotaAlertPolicy.swift */,
+				49C2AD03000000000001AAAA /* QuotaNotificationService.swift */,
+				49C2AD04000000000001AAAA /* SystemNotificationClient.swift */,
+			);
+			path = Notifications;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -723,6 +749,11 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				49C2AD01000000000001AABB /* QuotaAlertModels.swift in Sources */,
+				49C2AD02000000000001AABB /* QuotaAlertPolicy.swift in Sources */,
+				49C2AD03000000000001AABB /* QuotaNotificationService.swift in Sources */,
+				49C2AD04000000000001AABB /* SystemNotificationClient.swift in Sources */,
+				49C2AD05000000000001AABB /* QuotaAlertStore.swift in Sources */,
 				4931AC622FC02A4200EE598C /* MenuBarLabel.swift in Sources */,
 				4931AC632FC02A4200EE598C /* CCBarApp.swift in Sources */,
 				4931AC642FC02A4200EE598C /* SettingsRootView.swift in Sources */,
@@ -821,6 +852,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				49C2AD06000000000001AABB /* QuotaAlertTests.swift in Sources */,
 				49C1B300000000000001AABB /* QuotaParsingTests.swift in Sources */,
 				49C1BC12000000000001AABB /* CursorAuthTests.swift in Sources */,
 				49C1BC15000000000001AABB /* CursorUsageFetcherTests.swift in Sources */,

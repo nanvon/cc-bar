@@ -43,6 +43,16 @@ private struct MenuBarLabelRoot: View {
 
     var body: some View {
         MenuBarLabel()
+            .onChange(of: SettingsStore.shared.privacyMode) { _, enabled in
+                appState.quotaNotifications.settingsChanged(clearNotifications: enabled)
+            }
+            .onChange(of: SettingsStore.shared.quotaAlertsEnabled) { _, _ in
+                appState.quotaNotifications.settingsChanged()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+                guard !AppRuntime.isRunningUnitTests else { return }
+                Task { await appState.quotaNotifications.refreshPermission() }
+            }
             .onAppear {
                 appDelegate.installTerminationHandler {
                     try await appState.prepareForTermination()
@@ -62,6 +72,9 @@ private struct MenuBarLabelRoot: View {
                 // 单元测试宿主也会启动 App；此时绝不能触发真实 bootstrap，
                 // 它会读真实日志、写真实 rollup / 缓存。测试自己注入临时目录驱动 UsageService。
                 guard !AppRuntime.isRunningUnitTests else { return }
+                appState.quotaNotifications.settingsChanged(
+                    clearNotifications: SettingsStore.shared.privacyMode || !SettingsStore.shared.quotaAlertsEnabled
+                )
                 await appState.bootstrap()
                 AppUpdater.shared.start()
                 FloatingPanelController.shared.attach(appState: appState)

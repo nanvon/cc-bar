@@ -133,6 +133,17 @@ enum DiagnosticsBundle {
         settingsSection(&out)
         accountsSection(&out, appState: appState)
         quotaSection(&out, appState: appState)
+        let notifications = appState.quotaNotifications
+        out.section("Quota alerts")
+        let prefs = SettingsStore.shared.quotaAlertPreferences
+        out.row("preferences", "enabled=\(prefs.enabled) threshold=\(prefs.threshold) fiveHour=\(prefs.fiveHour) weekly=\(prefs.weekly) billingCycle=\(prefs.billingCycle) sound=\(prefs.sound)")
+        out.row("permission", notifications.permissionState?.authorization.rawValue ?? "not queried")
+        out.row("sound allowed", notifications.permissionState.map { String($0.sound) } ?? "not queried")
+        out.row("storage paused", String(notifications.storagePaused))
+        out.row("schema", "2")
+        out.row("records", String(notifications.recordCount))
+        out.row("file bytes", String(notifications.fileSize))
+        out.row("last error", Redact.message(notifications.lastError))
         usageSection(&out, appState: appState)
         return out.text
     }

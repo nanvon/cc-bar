@@ -22,16 +22,54 @@ nonisolated struct AppTerminationError: Error, LocalizedError {
 @Observable
 @MainActor
 final class AppState {
-    var codexAccount: CodexAccount?
-    var claudeAccount: ClaudeAccount?
-    var antigravityAccount: AntigravityAccount?
+    var codexAccount: CodexAccount? {
+        didSet {
+            // 正常 token 续期 / 身份回填不失效；切号、退出登录及已知 user 变化则失效。
+            let samePAT = oldValue?.isPersonalAccessToken == true && codexAccount?.isPersonalAccessToken == true
+                && oldValue?.accessToken == codexAccount?.accessToken
+            let enriched = oldValue != nil && codexAccount != nil
+                && (oldValue?.accountId == nil || oldValue?.accountId == codexAccount?.accountId)
+                && (oldValue?.chatgptUserId == nil || oldValue?.chatgptUserId == codexAccount?.chatgptUserId)
+            let usesPAT = oldValue?.isPersonalAccessToken == true || codexAccount?.isPersonalAccessToken == true
+            if (usesPAT && !samePAT) || (!usesPAT && !enriched) {
+                codexAlertEntryVersion &+= 1
+            }
+        }
+    }
+    var claudeAccount: ClaudeAccount? {
+        didSet {
+            if oldValue?.accountUuid != claudeAccount?.accountUuid || oldValue?.organizationUuid != claudeAccount?.organizationUuid
+                || oldValue?.email != claudeAccount?.email || oldValue?.accessToken != claudeAccount?.accessToken {
+                primaryAlertEntryVersions[.claude, default: 0] &+= 1
+            }
+        }
+    }
+    var antigravityAccount: AntigravityAccount? {
+        didSet {
+            if oldValue?.email != antigravityAccount?.email || oldValue?.accessToken != antigravityAccount?.accessToken
+                || oldValue?.refreshToken != antigravityAccount?.refreshToken {
+                primaryAlertEntryVersions[.antigravity, default: 0] &+= 1
+            }
+        }
+    }
     // 账号态同步给设置层：Cursor 未安装 / 未登录时统计页不再渲染空的 Cursor 服务行，
     // 用户的统计开关偏好本身保留，重新登录后自动恢复（见 SettingsStore.cursorAccountDetected）。
     var cursorAccount: CursorAuthSession? {
-        didSet { SettingsStore.shared.cursorAccountDetected = cursorAccount != nil }
+        didSet {
+            SettingsStore.shared.cursorAccountDetected = cursorAccount != nil
+            if oldValue?.userID != cursorAccount?.userID || oldValue?.accessToken != cursorAccount?.accessToken {
+                primaryAlertEntryVersions[.cursor, default: 0] &+= 1
+            }
+        }
     }
     var commandCodeAccount: CommandCodeAuthSession? {
-        didSet { SettingsStore.shared.commandCodeAccountDetected = commandCodeAccount != nil }
+        didSet {
+            SettingsStore.shared.commandCodeAccountDetected = commandCodeAccount != nil
+            if oldValue?.accountKey != commandCodeAccount?.accountKey || oldValue?.userID != commandCodeAccount?.userID
+                || oldValue?.accessToken != commandCodeAccount?.accessToken {
+                primaryAlertEntryVersions[.commandCode, default: 0] &+= 1
+            }
+        }
     }
     var codexError: String?
     var claudeError: String?
@@ -157,6 +195,103 @@ final class AppState {
 
     let usageService = UsageService()
     private let scheduler = Scheduler()
+    private var codexAlertEntryVersion: UInt64 = 0
+    private var primaryAlertEntryVersions: [QuotaApp: UInt64] = [:]
+    private var importedAlertEntryVersions: [String: UInt64] = [:]
+    private var importedAlertIdentities: [String: QuotaAlertIdentity] = [:]
+    @ObservationIgnored lazy var quotaNotifications = QuotaNotificationService(
+        client: SystemNotificationClient(), store: QuotaAlertStore(),
+        preferences: { SettingsStore.shared.quotaAlertPreferences },
+        context: { [weak self] in self?.quotaAlertContext($0) },
+        activeIdentities: { [weak self] in self?.quotaAlertIdentities ?? [] },
+        initialized: { SettingsStore.shared.quotaAlertStoreInitialized },
+        markInitialized: { SettingsStore.shared.quotaAlertStoreInitialized = true }
+    )
+
+    var quotaAlertEntries: [String] {
+        QuotaApp.allCases.map { "primary:\($0.rawValue)" } + importedCodexAccounts.map(\.id)
+    }
+
+    private func primaryQuotaAlertIdentity(for app: QuotaApp) -> QuotaAlertIdentity? {
+        // 仅使用可识别的账号资料；不以凭据或 token 片段构造持久化身份。
+        switch app {
+        case .codex:
+            return QuotaAlertIdentity(accountID: codexAccount?.accountId, userID: codexAccount?.chatgptUserId)
+        case .claude:
+            let account = claudeAccount
+            let id = nonEmpty(account?.accountUuid).map { "uuid:" + $0.lowercased() }
+            return QuotaAlertIdentity(app: app, accountID: id, userID: nonEmpty(account?.organizationUuid)?.lowercased())
+        case .antigravity:
+            return QuotaAlertIdentity(app: app, accountID: nonEmpty(antigravityAccount?.email)?.lowercased(), userID: nil)
+        case .cursor:
+            return QuotaAlertIdentity(app: app, accountID: nonEmpty(cursorAccount?.userID)?.lowercased(), userID: nil)
+        case .commandCode:
+            let account = commandCodeAccount
+            // user.id 是稳定身份；login / name / email 的变化不重置提醒机会。
+            return QuotaAlertIdentity(app: app, accountID: nonEmpty(account?.userID), userID: nonEmpty(account?.orgID))
+        }
+    }
+
+    private func primaryQuotaAlertName(for app: QuotaApp) -> String {
+        let name: String?
+        switch app {
+        case .codex: name = codexAccount?.email
+        case .claude: name = claudeAccount?.email
+        case .antigravity: name = antigravityAccount?.email
+        case .cursor: name = cursorAccount?.email
+        case .commandCode: name = commandCodeAccount?.login ?? commandCodeAccount?.email
+        }
+        return nonEmpty(name) ?? QuotaProviderDescriptor.descriptor(for: app)?.title ?? app.rawValue
+    }
+
+    private func primaryQuotaAlertVersion(for app: QuotaApp) -> UInt64 {
+        app == .codex ? codexAlertEntryVersion : primaryAlertEntryVersions[app, default: 0]
+    }
+
+    private var quotaAlertIdentities: [QuotaAlertIdentity] {
+        var result = importedCodexAccounts.compactMap { account in
+            importedAlertIdentities[account.id] ?? QuotaAlertIdentity(
+                accountID: account.chatgptAccountId, userID: importedCodexUserId(from: account)
+            )
+        }
+        result.append(contentsOf: QuotaApp.allCases.compactMap { primaryQuotaAlertIdentity(for: $0) })
+        return result
+    }
+
+    private func quotaAlertContext(_ observation: QuotaAlertObservation) -> QuotaAlertDisplayContext? {
+        let settings = SettingsStore.shared
+        guard !isPreparingForTermination, settings.quotaAlertRuntimeVersion == observation.settingsVersion else { return nil }
+        let app = observation.raw.app
+        if observation.entry == "primary:\(app.rawValue)" {
+            guard settings.isProviderEnabled(app), primaryQuotaAlertVersion(for: app) == observation.entryVersion,
+                  primaryQuotaAlertIdentity(for: app) == observation.identity else { return nil }
+            return QuotaAlertDisplayContext(name: primaryQuotaAlertName(for: app), privacyKey: observation.entry)
+        }
+        guard app == .codex else { return nil }
+        guard let account = importedCodexAccounts.first(where: { $0.id == observation.entry }),
+              account.visibleInPopover, importedAlertEntryVersions[account.id, default: 0] == observation.entryVersion,
+              importedAlertIdentities[account.id] == observation.identity else { return nil }
+        let alias = account.alias.trimmingCharacters(in: .whitespacesAndNewlines)
+        return QuotaAlertDisplayContext(name: alias.isEmpty ? (account.email ?? "Codex") : alias, privacyKey: account.id)
+    }
+
+    private func observeQuota(
+        raw: QuotaSnapshot, entry: String, identity: QuotaAlertIdentity?, entryVersion: UInt64, settingsVersion: UInt64
+    ) {
+        guard !AppRuntime.isRunningUnitTests, let identity else { return }
+        let display = entry == "primary:\(raw.app.rawValue)" ? quotaSnapshot(for: raw.app) : importedCodexQuotas[entry]
+        quotaNotifications.enqueue(QuotaAlertObservation(
+            id: UUID(), identity: identity, entry: entry, entryVersion: entryVersion,
+            settingsVersion: settingsVersion, observedAt: raw.fetchedAt, raw: raw, display: display ?? raw
+        ))
+    }
+
+    private func observePrimaryQuota(_ snapshot: QuotaSnapshot, settingsVersion: UInt64) {
+        observeQuota(raw: snapshot, entry: "primary:\(snapshot.app.rawValue)",
+                     identity: primaryQuotaAlertIdentity(for: snapshot.app),
+                     entryVersion: primaryQuotaAlertVersion(for: snapshot.app), settingsVersion: settingsVersion)
+    }
+
     private var didBootstrap = false
     private var quotaCache = QuotaCachePayload()
     private var claudeFallbackBackoffUntil: Date?
@@ -387,6 +522,7 @@ final class AppState {
     func prepareForTermination() async throws {
         guard !isPreparingForTermination else { throw AppTerminationError.busy }
         terminationRequested = true
+        quotaNotifications.suspendForTermination()
         scheduler.suspendForTermination()
         UsageLogWatcher.shared.suspendForTermination()
         usageService.suspendForTermination()
@@ -443,6 +579,7 @@ final class AppState {
     private func resumeAfterCancelledTermination() {
         // 已经开始的同步原子写入不能强杀；完成前继续暂停业务，避免与旧快照竞争。
         guard terminationSaveTask == nil else { return }
+        quotaNotifications.resumeAfterCancelledTermination()
         usageService.resumeAfterCancelledTermination()
         UsageLogWatcher.shared.resumeAfterCancelledTermination()
         scheduler.resumeAfterCancelledTermination()
@@ -569,7 +706,18 @@ final class AppState {
     /// 从磁盘读取元数据列表,移除内存中已经不存在的账号的运行时状态。
     /// 设置页增删账号后由调用方触发。
     func reloadImportedCodexAccounts() {
+        let previous = importedCodexAccounts
         importedCodexAccounts = ImportedCodexStore.loadAll()
+        for old in previous {
+            let current = importedCodexAccounts.first { $0.id == old.id }
+            if current == nil || current?.visibleInPopover != old.visibleInPopover {
+                importedAlertEntryVersions[old.id, default: 0] &+= 1
+            }
+            if current == nil {
+                quotaNotifications.removeNotifications(accountKey: QuotaAlertIdentity.digest([old.id]))
+                importedAlertIdentities.removeValue(forKey: old.id)
+            }
+        }
         let alive = Set(importedCodexAccounts.map(\.id))
         importedCodexQuotas = importedCodexQuotas.filter { alive.contains($0.key) }
         importedCodexSources = importedCodexSources.filter { alive.contains($0.key) }
@@ -616,6 +764,8 @@ final class AppState {
             ))
         }
         try ImportedCodexStore.saveAll(list)
+        importedAlertEntryVersions[parsed.id, default: 0] &+= 1
+        importedAlertIdentities.removeValue(forKey: parsed.id)
         reloadImportedCodexAccounts()
     }
 
@@ -625,6 +775,7 @@ final class AppState {
     func importCodexPersonalAccessToken(token: String, visibleInPopover: Bool) async throws {
         guard beginStateOperation() else { throw AppTerminationError.busy }
         defer { activeStateOperations -= 1 }
+        let alertSettingsVersion = SettingsStore.shared.quotaAlertRuntimeVersion
         let result = await CodexQuotaClient.fetch(accessToken: token, accountId: nil)
         let fetched: CodexQuotaClient.Fetched
         switch result {
@@ -666,10 +817,15 @@ final class AppState {
             ))
         }
         try ImportedCodexStore.saveAll(list)
+        importedAlertEntryVersions[compositeId, default: 0] &+= 1
         reloadImportedCodexAccounts()
         // 顺手存上刚拿到的快照，导入后立即可见，省一次请求。
         if visibleInPopover {
             storeImportedCodex(id: compositeId, snapshot: fetched.snapshot, source: .api)
+            let identity = QuotaAlertIdentity(accountID: fetched.accountId, userID: fetched.userId)
+            importedAlertIdentities[compositeId] = identity
+            observeQuota(raw: fetched.snapshot, entry: compositeId, identity: identity,
+                              entryVersion: importedAlertEntryVersions[compositeId, default: 0], settingsVersion: alertSettingsVersion)
         }
     }
 
@@ -783,6 +939,8 @@ final class AppState {
         }
 
         guard beginImportedCodexRefresh(id: account.id, reason: reason) else { return }
+        let alertEntryVersion = importedAlertEntryVersions[account.id, default: 0]
+        let alertSettingsVersion = SettingsStore.shared.quotaAlertRuntimeVersion
         defer { importedCodexRefreshStates[account.id]?.inFlight = false }
 
         guard let tokens = ImportedCodexStore.loadTokens(accountId: account.id) else {
@@ -814,7 +972,18 @@ final class AppState {
         )
         switch result {
         case .success(let fetched):
+            guard importedAlertEntryVersions[account.id, default: 0] == alertEntryVersion,
+                  importedCodexAccounts.contains(where: { $0.id == account.id && $0.visibleInPopover }) else { return }
             storeImportedCodex(id: account.id, snapshot: fetched.snapshot, source: .api)
+            let knownUser = importedCodexUserId(from: account)
+            let identity = QuotaAlertIdentity(accountID: fetched.accountId ?? account.chatgptAccountId,
+                                              userID: fetched.userId ?? knownUser)
+            if nonEmpty(fetched.accountId).map({ $0 == account.chatgptAccountId }) ?? true,
+               knownUser == nil || fetched.userId == nil || knownUser == nonEmpty(fetched.userId) {
+                importedAlertIdentities[account.id] = identity
+                observeQuota(raw: fetched.snapshot, entry: account.id, identity: identity,
+                                  entryVersion: alertEntryVersion, settingsVersion: alertSettingsVersion)
+            }
         case .failure(let err):
             markImportedCodexFailure(id: account.id, message: err.userMessage, error: err)
         }
@@ -1443,6 +1612,7 @@ final class AppState {
             next.email = next.email ?? prev.email
             next.orgID = next.orgID ?? prev.orgID
             next.planType = next.planType ?? prev.planType
+            next.userID = next.userID ?? prev.userID
         }
 
         let changedFromRuntime = commandCodeAccount.map {
@@ -1474,6 +1644,8 @@ final class AppState {
 
     private func loadCodexQuota(reason: QuotaRefreshReason) async {
         guard beginCodexRefresh(reason: reason) else { return }
+        let alertEntryVersion = codexAlertEntryVersion
+        let alertSettingsVersion = SettingsStore.shared.quotaAlertRuntimeVersion
         defer { codexRefreshState.inFlight = false }
 
         guard var account = codexAccount else {
@@ -1497,6 +1669,7 @@ final class AppState {
             )
             switch refreshed {
             case .success(let t):
+                guard codexAlertEntryVersion == alertEntryVersion else { return }
                 activeToken = t.accessToken
                 account.accessToken = t.accessToken
                 account.refreshToken = nonEmpty(t.refreshToken)
@@ -1515,6 +1688,7 @@ final class AppState {
         )
         switch result {
         case .success(let fetched):
+            guard codexAlertEntryVersion == alertEntryVersion else { return }
             if account.isPersonalAccessToken {
                 // 用 wham/usage 响应回填身份，供 UI 展示与额度历史 key 使用。
                 account.email = account.email ?? fetched.email
@@ -1524,6 +1698,15 @@ final class AppState {
                 codexAccount = account
             }
             storeCodex(snapshot: fetched.snapshot, source: .api)
+            // OAuth 缺少 user 时也采用接口回填；已知身份冲突则不产生提醒。
+            if nonEmpty(fetched.accountId).map({ $0 == account.accountId }) ?? true,
+               account.chatgptUserId == nil || fetched.userId == nil || account.chatgptUserId == nonEmpty(fetched.userId) {
+                account.chatgptUserId = account.chatgptUserId ?? nonEmpty(fetched.userId)
+                codexAccount = account
+                observeQuota(raw: fetched.snapshot, entry: "primary:codex",
+                                  identity: QuotaAlertIdentity(accountID: account.accountId, userID: account.chatgptUserId),
+                                  entryVersion: codexAlertEntryVersion, settingsVersion: alertSettingsVersion)
+            }
         case .failure(let err):
             markCodexFailure(err.userMessage, error: err)
         }
@@ -1531,6 +1714,7 @@ final class AppState {
 
     private func loadClaudeQuota(reason: QuotaRefreshReason) async {
         guard beginClaudeRefresh(reason: reason) else { return }
+        let alertSettingsVersion = SettingsStore.shared.quotaAlertRuntimeVersion
         defer { claudeRefreshState.inFlight = false }
 
         guard var account = claudeAccount else {
@@ -1559,10 +1743,15 @@ final class AppState {
             }
             return
         }
+        // 版本只决定是否提醒；token 轮换或切号期间取到的额度照常展示，与原有行为一致。
+        let alertEntryVersion = primaryQuotaAlertVersion(for: .claude)
         let result = await ClaudeQuotaClient.fetch(accessToken: activeToken)
         switch result {
         case .success(let snapshot):
             storeClaude(snapshot: snapshot, source: .api)
+            if primaryQuotaAlertVersion(for: .claude) == alertEntryVersion {
+                observePrimaryQuota(snapshot, settingsVersion: alertSettingsVersion)
+            }
         case .failure(let err):
             markClaudeFailure(err.userMessage, error: err)
             if reason == .userInitiated, claudeQuota == nil {
@@ -1573,6 +1762,7 @@ final class AppState {
 
     private func loadAntigravityQuota(reason: QuotaRefreshReason) async {
         guard beginAntigravityRefresh(reason: reason) else { return }
+        let alertSettingsVersion = SettingsStore.shared.quotaAlertRuntimeVersion
         defer { antigravityRefreshState.inFlight = false }
 
         guard var account = antigravityAccount else {
@@ -1595,6 +1785,8 @@ final class AppState {
             markAntigravityFailure(err.userMessage, error: err)
             return
         }
+        // 版本只决定是否提醒；token 轮换或切号期间取到的额度照常展示，与原有行为一致。
+        let alertEntryVersion = primaryQuotaAlertVersion(for: .antigravity)
         let result = await AntigravityQuotaClient.fetch(accessToken: activeToken)
         switch result {
         case .success(let fetched):
@@ -1604,6 +1796,8 @@ final class AppState {
             if email == nil {
                 email = await AntigravityQuotaClient.fetchAccountEmail(accessToken: activeToken)
             }
+            // 回填邮箱会递增版本，须在写回账号前判断。
+            let alertCurrent = primaryQuotaAlertVersion(for: .antigravity) == alertEntryVersion
             if let email {
                 account.email = email
             }
@@ -1611,6 +1805,7 @@ final class AppState {
             antigravityAccount = account
             let snapshot = fetched.snapshot
             storeAntigravity(snapshot: snapshot, source: .api)
+            if alertCurrent { observePrimaryQuota(snapshot, settingsVersion: alertSettingsVersion) }
         case .failure(let err):
             markAntigravityFailure(err.userMessage, error: err)
         }
@@ -1662,6 +1857,8 @@ final class AppState {
 
     private func loadCursorQuota(reason: QuotaRefreshReason) async {
         guard beginCursorRefresh(reason: reason) else { return }
+        let alertEntryVersion = primaryQuotaAlertVersion(for: .cursor)
+        let alertSettingsVersion = SettingsStore.shared.quotaAlertRuntimeVersion
         defer { cursorRefreshState.inFlight = false }
 
         guard let session = cursorAccount else {
@@ -1673,6 +1870,10 @@ final class AppState {
         switch initial {
         case .success(let snapshot):
             storeCursor(snapshot: snapshot, source: .api)
+            // 版本只决定是否提醒；token 轮换或切号期间取到的额度照常展示，与原有行为一致。
+            if primaryQuotaAlertVersion(for: .cursor) == alertEntryVersion {
+                observePrimaryQuota(snapshot, settingsVersion: alertSettingsVersion)
+            }
         // 代理 / 网关返回的 401 页面不是 Cursor 在说"登录失效",重读本地凭据没有意义,
         // 直接按原样报错(userMessage 会说明是被拦截)。
         case .failure(let error) where error.httpStatusCode == 401
@@ -1688,10 +1889,14 @@ final class AppState {
                 return
             }
 
+            let retryEntryVersion = primaryQuotaAlertVersion(for: .cursor)
             let retried = await CursorQuotaClient.fetch(cookieHeader: reloaded.cookieHeader)
             switch retried {
             case .success(let snapshot):
                 storeCursor(snapshot: snapshot, source: .api)
+                if primaryQuotaAlertVersion(for: .cursor) == retryEntryVersion {
+                    observePrimaryQuota(snapshot, settingsVersion: alertSettingsVersion)
+                }
             case .failure(let retryError):
                 markCursorFailure(retryError.userMessage, error: retryError)
             }
@@ -1721,6 +1926,8 @@ final class AppState {
 
     private func loadCommandCodeQuota(reason: QuotaRefreshReason) async {
         guard beginCommandCodeRefresh(reason: reason) else { return }
+        let alertEntryVersion = primaryQuotaAlertVersion(for: .commandCode)
+        let alertSettingsVersion = SettingsStore.shared.quotaAlertRuntimeVersion
         defer { commandCodeRefreshState.inFlight = false }
 
         guard let session = commandCodeAccount else {
@@ -1731,15 +1938,20 @@ final class AppState {
         let result = await CommandCodeQuotaClient.fetch(accessToken: session.accessToken)
         switch result {
         case .success(let response):
+            // 版本只决定是否提醒；token 轮换或切号期间取到的额度照常展示，与原有行为一致。
+            // 回填 userID 会递增版本，须在写回账号前判断。
+            let alertCurrent = primaryQuotaAlertVersion(for: .commandCode) == alertEntryVersion
             if var current = commandCodeAccount {
                 current.login = response.accountDetails.login
                 current.name = response.accountDetails.name
                 current.email = response.accountDetails.email
                 current.orgID = response.accountDetails.orgID
                 current.planType = response.accountDetails.planType
+                current.userID = response.accountDetails.userID
                 commandCodeAccount = current
             }
             storeCommandCode(snapshot: response.snapshot, source: .api)
+            if alertCurrent { observePrimaryQuota(response.snapshot, settingsVersion: alertSettingsVersion) }
         // 被代理 / 网关拦截时同样会拿到 401 / 403,但那说明请求根本没到 API,
         // 不能据此告诉用户"凭据已失效"让他去重新登录。
         case .failure(let error) where (error.httpStatusCode == 401 || error.httpStatusCode == 403)
@@ -1753,18 +1965,22 @@ final class AppState {
                 )
                 return
             }
+            let retryEntryVersion = primaryQuotaAlertVersion(for: .commandCode)
             let retried = await CommandCodeQuotaClient.fetch(accessToken: reloaded.accessToken)
             switch retried {
             case .success(let response):
+                let alertCurrent = primaryQuotaAlertVersion(for: .commandCode) == retryEntryVersion
                 if var current = commandCodeAccount {
                     current.login = response.accountDetails.login
                     current.name = response.accountDetails.name
                     current.email = response.accountDetails.email
                     current.orgID = response.accountDetails.orgID
                     current.planType = response.accountDetails.planType
+                    current.userID = response.accountDetails.userID
                     commandCodeAccount = current
                 }
                 storeCommandCode(snapshot: response.snapshot, source: .api)
+                if alertCurrent { observePrimaryQuota(response.snapshot, settingsVersion: alertSettingsVersion) }
             case .failure(let retryError):
                 markCommandCodeFailure(retryError.userMessage, error: retryError)
             }
@@ -1824,6 +2040,7 @@ final class AppState {
         switch result {
         case .success(let snapshot):
             storeClaude(snapshot: snapshot, source: .cliFallback)
+            // CLI 输出未携带可核实的账号身份，不能归给当前 API 账号产生提醒。
         case .failure(let err):
             // 同上:兜底自己为什么失败留在日志里,UI 只说最初的失败原因。
             AppLog.warn(.quota, "claude CLI fallback failed: \(Redact.message(err.description))")

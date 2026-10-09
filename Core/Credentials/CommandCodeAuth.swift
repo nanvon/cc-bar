@@ -27,6 +27,8 @@ struct CommandCodeAuthSession: Sendable, Equatable {
     var email: String?
     var orgID: String?
     var planType: String?
+    /// whoami 回填的稳定身份，仅用于通知；既有额度缓存账号键保持原规则。
+    var userID: String? = nil
 
     var accountKey: String {
         if let orgID, !orgID.isEmpty {
