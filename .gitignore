@@ -2,7 +2,8 @@
 .DS_Store
 
 # Local agent/tooling state
-.claude/
+.claude/*
+!.claude/settings.json
 .codex/
 .cursor/
 .vscode/
