@@ -192,6 +192,8 @@ SPARKLE_PUBLIC_ED_KEY="你的更新公钥" ./scripts/build.sh
 * [cockpit-tools](https://github.com/jlcodes99/cockpit-tools) — 多平台 AI 辅助看板，在额度计算与刷新机制上提供了参考
 * [CodexBar](https://github.com/steipete/CodexBar) — macOS 菜单栏用量监控，在本地日志解析与原生菜单栏交互上多有借鉴
 
+感谢 [LINUX DO](https://linux.do/) 社区的交流与反馈。
+
 ---
 
 ## 📄 许可证

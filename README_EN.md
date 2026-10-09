@@ -190,6 +190,8 @@ Architectural concepts and quota parsing strategies reference and build upon the
 * [cockpit-tools](https://github.com/jlcodes99/cockpit-tools) — Multi-platform AI assistant dashboard; referenced for quota polling and refresh strategies.
 * [CodexBar](https://github.com/steipete/CodexBar) — macOS menu bar AI usage monitor; referenced for local log parsing and menu bar interactions.
 
+Thanks to the [LINUX DO](https://linux.do/) community for the discussions and feedback.
+
 ---
 
 ## 📄 License
