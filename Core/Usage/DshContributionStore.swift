@@ -14,6 +14,10 @@ nonisolated enum DshContributionStore {
         /// 是否有会话的用量或元数据发生变化。调用方据此决定这轮要不要落盘
         /// （未落盘就不能把结果计入内存聚合，否则下一轮重扫会重复计费）。
         var changed: Bool
+        /// 本轮整体替换（换 generation、替换 / 截断重扫或新建）的会话 id；周期桶据此按会话替换而不是累加。
+        var replacedSessionIDs: Set<String> = []
+        /// 本轮实际合入贡献的条目，供周期统计按同一口径归集。
+        var entries: [UsageEntry] = []
     }
 
     /// - Parameter contributions: 上一轮的贡献缓存。
@@ -24,6 +28,8 @@ nonisolated enum DshContributionStore {
     ) -> Update {
         var updated = contributions
         var changed = false
+        var replacedSessionIDs: Set<String> = []
+        var entries: [UsageEntry] = []
 
         for (path, state) in scan.newState {
             guard let id = state.conversationID else { continue }
@@ -51,6 +57,9 @@ nonisolated enum DshContributionStore {
             if generationChanged || restarted {
                 contribution.usage = []
             }
+            if previous == nil || generationChanged || restarted {
+                replacedSessionIDs.insert(id)
+            }
 
             contribution.sourcePath = path
             contribution.fileIdentity = state.fileIdentity
@@ -64,11 +73,17 @@ nonisolated enum DshContributionStore {
                 contribution.needsVerification = false
             }
             contribution.merge(scan.entriesByPath[path] ?? [])
+            entries += scan.entriesByPath[path] ?? []
             updated[id] = contribution
             if contribution != previous { changed = true }
         }
 
-        return Update(contributions: updated, changed: changed)
+        return Update(
+            contributions: updated,
+            changed: changed,
+            replacedSessionIDs: replacedSessionIDs,
+            entries: entries
+        )
     }
 
     /// 从现存日志从零重建：调用方必须以**空扫描状态**跑一轮全量扫描，

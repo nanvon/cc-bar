@@ -386,6 +386,24 @@ final class DshSessionScannerTests: XCTestCase {
         XCTAssertEqual(result.entries.first?.model, "deepseek/deepseek-v4.1-flash")
     }
 
+    func testMinimumMtimeSkipsOlderLogs() throws {
+        let now = Date()
+        try logs.write(
+            project: "p", session: "old", file: "session.v1.jsonl.zstd",
+            bytes: try DshTestFixtures.log(lines: [DshTestFixtures.session(id: "old"), DshTestFixtures.assistant(time: DshTestFixtures.baseTime)]),
+            modified: now.addingTimeInterval(-10 * 86_400)
+        )
+        try logs.write(
+            project: "p", session: "new", file: "session.v1.jsonl.zstd",
+            bytes: try DshTestFixtures.log(lines: [DshTestFixtures.session(id: "new"), DshTestFixtures.assistant(time: DshTestFixtures.baseTime)]),
+            modified: now
+        )
+        let result = DshSessionScanner.scan(previous: [:], root: logs.root, minimumMtime: now.addingTimeInterval(-86_400))
+        XCTAssertEqual(result.filesScanned, 1)
+        XCTAssertEqual(Set(result.entries.map(\.conversationKey)), ["dsh:new"])
+        XCTAssertTrue(result.isComplete)
+    }
+
     func testLaterSettlementReplacesSameSlotAcrossScans() throws {
         let attempt: [String: Any] = [
             "type": "assistant/attempt", "time": DshTestFixtures.baseTime, "data": [

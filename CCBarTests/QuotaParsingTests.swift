@@ -2223,6 +2223,9 @@ final class QuotaParsingTests: XCTestCase {
                 // Pi 的 `openai/` 是 API Key，不消耗订阅额度。
                 entry(.pi, "pi:b", "openai/gpt-5.6", input: 1_000),
                 entry(.pi, "pi:c", "deepseek/deepseek-v4", input: 1_000),
+                // DSH 的模型标签是 `provider/model`，只有 `openai-codex` 渠道走 Codex 订阅。
+                entry(.dsh, "dsh:a", "openai-codex/gpt-6.1-sol", input: 3),
+                entry(.dsh, "dsh:b", "commandcode/deepseek/deepseek-v4.1-flash", input: 1_000),
             ],
             cycles: [cycle],
             accountSegments: segments
@@ -2244,7 +2247,7 @@ final class QuotaParsingTests: XCTestCase {
             ).first?.totals.inputTokens
         }
         XCTAssertEqual(totalInput(includeOtherAgents: false), 100)
-        XCTAssertEqual(totalInput(includeOtherAgents: true), 115)
+        XCTAssertEqual(totalInput(includeOtherAgents: true), 118)
 
         // OpenCode 刷新会话给出完整用量，按会话替换而不是累加。
         aggregator.replaceConversations(
@@ -2254,7 +2257,7 @@ final class QuotaParsingTests: XCTestCase {
             cycles: [cycle],
             accountSegments: segments
         )
-        XCTAssertEqual(totalInput(includeOtherAgents: true), 117)
+        XCTAssertEqual(totalInput(includeOtherAgents: true), 120)
 
         // 只重建 Pi 时不动 Codex 与 OpenCode 的桶。
         aggregator.rebuildRange(
@@ -2265,7 +2268,17 @@ final class QuotaParsingTests: XCTestCase {
             sourceApps: [.pi]
         )
         XCTAssertEqual(totalInput(includeOtherAgents: false), 100)
-        XCTAssertEqual(totalInput(includeOtherAgents: true), 127)
+        XCTAssertEqual(totalInput(includeOtherAgents: true), 130)
+
+        // DSH 换 generation / 重扫时按会话替换，其余会话不受影响。
+        aggregator.replaceConversations(
+            app: .dsh,
+            conversationKeys: ["dsh:a"],
+            entries: [entry(.dsh, "dsh:a", "openai-codex/gpt-6.1-sol", input: 4)],
+            cycles: [cycle],
+            accountSegments: segments
+        )
+        XCTAssertEqual(totalInput(includeOtherAgents: true), 131)
     }
 
     func testCycleForecastStartsWithAnyObservedUsage() {
@@ -2784,10 +2797,10 @@ final class QuotaParsingTests: XCTestCase {
 
         let completedApps = UsageService.updatedInitialCycleRebuildApps(
             completedApps: [],
-            requestedApps: [.codex, .claude, .pi, .opencode],
+            requestedApps: [.codex, .claude, .pi, .opencode, .dsh],
             failedApps: [.claude]
         )
-        XCTAssertEqual(completedApps, [.codex, .pi, .opencode])
+        XCTAssertEqual(completedApps, [.codex, .pi, .opencode, .dsh])
         XCTAssertEqual(
             UsageService.pendingInitialCycleRebuildApps(
                 cycles: [claudeCycle, codexCycle],

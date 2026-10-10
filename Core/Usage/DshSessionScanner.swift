@@ -85,9 +85,11 @@ enum DshSessionScanner {
     }
 
     /// 可注入日志根目录，供脱敏 fixture 测试真实字节偏移扫描链路。
+    /// - Parameter minimumMtime: 非 nil 时只扫修改时间不早于该时刻的规范日志（周期受限重建用）。
     nonisolated static func scan(
         previous: [String: ScanFileState],
         root: URL,
+        minimumMtime: Date? = nil,
         onProgress: ScanProgressCallback? = nil
     ) -> Result {
         var result = Result(
@@ -107,7 +109,9 @@ enum DshSessionScanner {
         )
 
         let selection = selectedLogs(under: root, hadPreviousLogs: !previous.isEmpty)
-        let logs = selection.logs
+        let logs = minimumMtime.map { minimum in
+            selection.logs.filter { $0.modificationTime >= minimum.timeIntervalSince1970 }
+        } ?? selection.logs
         result.failedDirectoryCount = selection.failedPrefixes.count
         var linesParsed = 0
         let total = logs.count

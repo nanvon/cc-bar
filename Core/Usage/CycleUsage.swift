@@ -268,20 +268,25 @@ final class CycleUsageAggregator {
     private var buckets: [BucketKey: CycleUsageBucket] = [:]
 
     /// 可归入 Codex 周期的其他 Agent。桶的 `app` 记来源 Agent，展示层按设置决定是否计入。
-    nonisolated static let otherAgentSourceApps: Set<UsageApp> = [.pi, .opencode]
+    nonisolated static let otherAgentSourceApps: Set<UsageApp> = [.pi, .opencode, .dsh]
 
     /// 请求归属的额度周期服务；nil 表示不进入周期统计。
-    /// Pi 只认订阅渠道 `openai-codex/`（`openai/` 是 API Key）；OpenCode 的订阅和 API Key
+    /// Pi / DSH 只认订阅渠道 `openai-codex/`（Pi 的 `openai/` 是 API Key）；OpenCode 的订阅和 API Key
     /// 都记作 `openai/`，日志无法区分，一律视为订阅。
     nonisolated static func cycleApp(for entry: UsageEntry) -> UsageApp? {
-        switch entry.app {
+        cycleApp(app: entry.app, model: entry.model)
+    }
+
+    /// 同 `cycleApp(for:)`，供只有 (app, model) 的日桶复用（弹出面板的订阅花费）。
+    nonisolated static func cycleApp(app: UsageApp, model: String) -> UsageApp? {
+        switch app {
         case .codex, .claude:
-            return entry.app
-        case .pi:
-            return entry.model.lowercased().hasPrefix("openai-codex/") ? .codex : nil
+            return app
+        case .pi, .dsh:
+            return model.lowercased().hasPrefix("openai-codex/") ? .codex : nil
         case .opencode:
-            return entry.model.lowercased().hasPrefix("openai/") ? .codex : nil
-        case .cursor, .dsh:
+            return model.lowercased().hasPrefix("openai/") ? .codex : nil
+        case .cursor:
             return nil
         }
     }
@@ -377,7 +382,8 @@ final class CycleUsageAggregator {
         )
     }
 
-    /// 按会话整体替换某个来源的周期桶（OpenCode 每轮给出刷新会话的完整用量，不能累加）。
+    /// 按会话整体替换某个来源的周期桶（OpenCode 每轮给出刷新会话的完整用量，不能累加；
+    /// DSH 换 generation、文件被替换或截断时同理）。
     @discardableResult
     func replaceConversations(
         app: UsageApp,

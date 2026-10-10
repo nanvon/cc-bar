@@ -9,15 +9,25 @@ struct QuotaCycleCardsSection: View {
     let apps: [UsageApp]
     let isWide: Bool
 
+    /// 只有显示 Codex 卡时才需要交代其他 Agent 的口径。
+    private var includesOtherAgents: Bool {
+        apps.contains(.codex) && SettingsStore.shared.cycleIncludesOtherAgents
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(tr("Full-quota estimate", "额度用满预估"))
                     .font(.system(size: 13, weight: .semibold))
-                Text(tr(
-                    "Estimated from local usage and the official used percentage. For reference only.",
-                    "按本机用量和官方已用比例估算，仅供参考。"
-                ))
+                Text(includesOtherAgents
+                    ? tr(
+                        "Estimated from local usage (including Codex subscription usage in other agents) and the official used percentage. For reference only.",
+                        "按本机用量（含其他 Agent 的 Codex 订阅用量）和官方已用比例估算，仅供参考。"
+                    )
+                    : tr(
+                        "Estimated from local usage and the official used percentage. For reference only.",
+                        "按本机用量和官方已用比例估算，仅供参考。"
+                    ))
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)

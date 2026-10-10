@@ -74,6 +74,41 @@ final class DshContributionTests: XCTestCase {
         XCTAssertEqual(contributions["s1"]?.sourcePath.hasSuffix("session.v3.jsonl.zstd"), true)
     }
 
+    /// 周期桶按贡献同一口径归集：新会话、换 generation 报告整体替换，普通追加只报告新条目。
+    func testUpdateReportsReplacedSessionsAndAppliedEntries() throws {
+        let url = try logs.write(project: "p", session: "s", file: "session.v1.jsonl.zstd", bytes: try log(session: "s", inputs: [10]))
+        let round1 = scan()
+        let first = DshContributionStore.apply(scan: round1, to: [:])
+        XCTAssertEqual(first.replacedSessionIDs, ["s"])
+        XCTAssertEqual(first.entries.map(\.inputTokens), [10])
+
+        let handle = try FileHandle(forWritingTo: url)
+        _ = try handle.seekToEnd()
+        try handle.write(contentsOf: DshTestFixtures.log(lines: [
+            DshTestFixtures.assistant(
+                time: DshTestFixtures.baseTime + 5_000,
+                provider: "openai-codex",
+                model: "gpt-6.1-sol",
+                input: 7,
+                output: 0,
+                cacheRead: 0
+            )
+        ]))
+        try handle.close()
+        let round2 = scan(round1.newState)
+        let second = DshContributionStore.apply(scan: round2, to: first.contributions)
+        XCTAssertTrue(second.replacedSessionIDs.isEmpty)
+        XCTAssertEqual(second.entries.map(\.inputTokens), [7])
+        XCTAssertEqual(second.entries.first.flatMap(CycleUsageAggregator.cycleApp(for:)), .codex)
+        XCTAssertNil(first.entries.first.flatMap(CycleUsageAggregator.cycleApp(for:)))
+
+        try logs.write(project: "p", session: "s", file: "session.v3.jsonl.zstd", bytes: try log(session: "s", inputs: [10, 7]))
+        let round3 = scan(round2.newState)
+        let third = DshContributionStore.apply(scan: round3, to: second.contributions)
+        XCTAssertEqual(third.replacedSessionIDs, ["s"])
+        XCTAssertEqual(third.entries.map(\.inputTokens), [10, 7])
+    }
+
     func testInPlaceReplacementRestartsFromZero() throws {
         let original = try log(session: "s", inputs: [10])
         let url = try logs.write(project: "p", session: "s", file: "session.v1.jsonl.zstd", bytes: original)

@@ -957,6 +957,8 @@ final class UsageService {
         let codexRoots = roots.codexRoots
         let piRoot = roots.piRoot
         let opencodeDatabaseURL = roots.opencodeDatabaseURL
+        let dshRoot = roots.dshRoot
+        let dshFrozen = isDshHistoryFrozen
         async let claudeTask = Task.detached(priority: .utility) {
             ClaudeJSONLScanner.scan(
                 previous: [:],
@@ -968,7 +970,7 @@ final class UsageService {
                 onProgress: progress
             )
         }.value
-        // Pi / OpenCode 里的 Codex 订阅用量同样归入 Codex 周期，要一起重灌。
+        // Pi / OpenCode / DSH 里的 Codex 订阅用量同样归入 Codex 周期，要一起重灌。
         // OpenCode 是 SQLite 库，没有按文件时间过滤的入口，只能整库读取。
         async let piTask = Task.detached(priority: .utility) {
             PiJSONLScanner.scan(
@@ -985,6 +987,17 @@ final class UsageService {
                 databaseURL: opencodeDatabaseURL,
                 onProgress: progress
             )
+        }.value
+        // DSH 冻结时常规扫描不采集新用量，这里也不重灌，保留其旧桶。
+        async let dshTask = Task.detached(priority: .utility) { () -> DshSessionScanner.Result? in
+            dshFrozen
+                ? nil
+                : DshSessionScanner.scan(
+                    previous: [:],
+                    root: dshRoot,
+                    minimumMtime: dateFrom,
+                    onProgress: progress
+                )
         }.value
         async let codexTask = Task.detached(priority: .utility) {
             await CodexJSONLScanner.scan(
@@ -1004,6 +1017,7 @@ final class UsageService {
         if usesLegacyCodexModels { codex = Self.legacyCodexResult(codex) }
         let pi = await piTask
         let opencode = await opencodeTask
+        let dsh = await dshTask
         let affectedCycles = cycles.filter { affectedCycleIDs.contains($0.id) }
         let failedApps = Self.cycleSourceFailedApps(
             Self.cycleRebuildFailedApps(
@@ -1012,7 +1026,8 @@ final class UsageService {
                 cycles: affectedCycles
             ),
             opencode: opencode,
-            opencodeDatabaseURL: opencodeDatabaseURL
+            opencodeDatabaseURL: opencodeDatabaseURL,
+            dshFailed: dsh.map { !$0.isComplete } ?? false
         )
         let rebuildableCycleIDs = Self.cycleRebuildableCycleIDs(
             cycles: affectedCycles,
@@ -1020,7 +1035,7 @@ final class UsageService {
             failedApps: failedApps
         )
         await commitCycleAggregation(
-            exactEntries: (claude.entries + codex.entries + pi.entries + opencode.entries)
+            exactEntries: (claude.entries + codex.entries + pi.entries + opencode.entries + (dsh?.entries ?? []))
                 .filter { !failedApps.contains($0.app) },
             cycles: cycles,
             accountSegments: accountSegments,
@@ -1029,6 +1044,7 @@ final class UsageService {
             sourceApps: Set<UsageApp>([.claude, .codex])
                 .union(CycleUsageAggregator.otherAgentSourceApps)
                 .subtracting(failedApps)
+                .subtracting(dshFrozen ? [.dsh] : [])
         )
     }
 
@@ -1075,16 +1091,21 @@ final class UsageService {
     }
 
     /// 周期重建的来源失败集合。OpenCode 库从未存在（本机没装）是正常状态，库在却读不全才算失败；
+    /// DSH 由调用方判定（扫描不完整、冻结等），默认目录从未创建时扫描本身就是完整的。
     /// 其他 Agent 只归入 Codex 周期，Codex 周期本轮不能重建时它们也不能算完成。
     nonisolated static func cycleSourceFailedApps(
         _ failedApps: Set<UsageApp>,
         opencode: OpencodeScanner.Result?,
-        opencodeDatabaseURL: URL
+        opencodeDatabaseURL: URL,
+        dshFailed: Bool = false
     ) -> Set<UsageApp> {
         var result = failedApps
         if let opencode, opencode.error != nil || !opencode.isComplete,
            FileManager.default.fileExists(atPath: opencodeDatabaseURL.path) {
             result.insert(.opencode)
+        }
+        if dshFailed {
+            result.insert(.dsh)
         }
         if result.contains(.codex) {
             result.formUnion(CycleUsageAggregator.otherAgentSourceApps)
@@ -1092,7 +1113,7 @@ final class UsageService {
         return result
     }
 
-    /// 周期统计需要覆盖的来源。有 Codex 周期时，Pi / OpenCode 里的 Codex 订阅用量也要归集。
+    /// 周期统计需要覆盖的来源。有 Codex 周期时，Pi / OpenCode / DSH 里的 Codex 订阅用量也要归集。
     nonisolated static func requiredCycleSourceApps(cycles: [QuotaCycleRecord]) -> Set<UsageApp> {
         let apps = Set(cycles.map(\.app)).intersection([.codex, .claude])
         return apps.contains(.codex) ? apps.union(CycleUsageAggregator.otherAgentSourceApps) : apps
@@ -1208,12 +1229,13 @@ final class UsageService {
         await cycleReadyForTesting?()
         #endif
         // Pi 自身不会读取失败，只会随 Codex 一起推迟，不单独列名。
-        let failedProviderNames = [UsageApp.codex, .claude, .opencode]
+        let failedProviderNames = [UsageApp.codex, .claude, .opencode, .dsh]
             .filter { failedApps.contains($0) }
             .map { app -> String in
                 switch app {
                 case .codex: return "Codex"
                 case .claude: return "Claude Code"
+                case .dsh: return "DSH"
                 default: return "OpenCode"
                 }
             }
@@ -1379,11 +1401,19 @@ final class UsageService {
                 )
             }
             : nil
+        // 从零扫描与逐会话贡献无关，DSH 冻结时也能补算一次现存日志。
+        let dshRoot = roots.dshRoot
+        let dshTask: Task<DshSessionScanner.Result, Never>? = pendingApps.contains(.dsh)
+            ? Task.detached(priority: .utility) {
+                DshSessionScanner.scan(previous: [:], root: dshRoot, onProgress: progress)
+            }
+            : nil
         let claude = await claudeTask?.value
         var codex = await codexTask?.value
         if usesLegacyCodexModels { codex = codex.map(Self.legacyCodexResult) }
         let pi = await piTask?.value
         let opencode = await opencodeTask?.value
+        let dsh = await dshTask?.value
         let pendingCycles = Self.cyclesToRebuild(cycles, for: pendingApps)
         let failedApps = Self.cycleSourceFailedApps(
             Self.cycleRebuildFailedApps(
@@ -1392,7 +1422,8 @@ final class UsageService {
                 cycles: pendingCycles
             ),
             opencode: opencode,
-            opencodeDatabaseURL: opencodeDatabaseURL
+            opencodeDatabaseURL: opencodeDatabaseURL,
+            dshFailed: dsh.map { !$0.isComplete } ?? false
         )
         let pendingCycleIDs = Set(pendingCycles.map(\.id))
         let rebuildableCycleIDs = Self.cycleRebuildableCycleIDs(
@@ -1401,7 +1432,7 @@ final class UsageService {
             failedApps: failedApps
         )
         let entries = (claude?.entries ?? []) + (codex?.entries ?? [])
-            + (pi?.entries ?? []) + (opencode?.entries ?? [])
+            + (pi?.entries ?? []) + (opencode?.entries ?? []) + (dsh?.entries ?? [])
         await commitCycleAggregation(
             exactEntries: entries.filter { !failedApps.contains($0.app) },
             cycles: cycles,
@@ -1812,8 +1843,9 @@ final class UsageService {
             entries: claude.entries + codex.entries + pi.entries,
             seeds: claude.conversationSeeds + codex.conversationSeeds + pi.conversationSeeds
         )
-        // OpenCode 从空状态扫描，给出的是库中现存会话的完整用量。
+        // OpenCode / DSH 从空状态扫描，给出的是现存会话的完整用量；DSH 冻结时不重灌。
         let cycleEntries = claude.entries + codex.entries + pi.entries + opencode.entries
+            + (dshFrozen ? [] : dsh.entries)
         let freshDshContributions = dshFrozen
             ? dshContributions
             : DshContributionStore.apply(scan: dsh, to: dshContributions).contributions
@@ -1836,13 +1868,22 @@ final class UsageService {
                 cycles: cycles,
                 accountSegments: accountSegments
             )
-            // 与日桶一致：源库中已删除的 OpenCode 会话保留原周期桶。
+            // 与日桶一致：源库中已删除的 OpenCode 会话、日志已删除的 DSH 会话保留原周期桶；
+            // DSH 冻结时整份保留。
             let refreshedOpencodeKeys = Set(opencode.refreshedSessionIDs.map { "opencode:\($0)" })
-            let preservedOpencode = baselineCycles.filter {
-                $0.app == .opencode && !refreshedOpencodeKeys.contains($0.conversationKey ?? "")
+            let refreshedDshKeys = Set(dsh.newState.values.compactMap(\.conversationID).map { "dsh:\($0)" })
+            let preserved = baselineCycles.filter {
+                switch $0.app {
+                case .opencode:
+                    return !refreshedOpencodeKeys.contains($0.conversationKey ?? "")
+                case .dsh:
+                    return dshFrozen || !refreshedDshKeys.contains($0.conversationKey ?? "")
+                default:
+                    return false
+                }
             }
-            if !preservedOpencode.isEmpty {
-                candidateCycles.load(from: candidateCycles.snapshot() + preservedOpencode)
+            if !preserved.isEmpty {
+                candidateCycles.load(from: candidateCycles.snapshot() + preserved)
             }
         }
 
@@ -2068,7 +2109,9 @@ final class UsageService {
         mergeImportedBackfill()
 
         let cycles = appState?.quotaCycles.records ?? []
-        let cycleChanged: Bool
+        var cycleChanged: Bool
+        // 本轮初始重建已用 DSH 完整扫描重灌周期桶时，落盘阶段不再按贡献更新归集一次。
+        var dshCycleRebuilt = false
         if prev.generationID.isEmpty, !cycles.isEmpty {
             let initialApps = Self.pendingInitialCycleRebuildApps(
                 cycles: cycles,
@@ -2082,7 +2125,9 @@ final class UsageService {
                     cycles: initialCycles
                 ),
                 opencode: opencode,
-                opencodeDatabaseURL: opencodeDatabaseURL
+                opencodeDatabaseURL: opencodeDatabaseURL,
+                // DSH 只有从零完整扫描才能直接灌入；冻结或带旧 watermark 时留给补算。
+                dshFailed: dshFrozen || !dsh.isComplete || !dshPrevious.isEmpty
             )
             let initialCycleIDs = Set(initialCycles.map(\.id))
             let rebuildableCycleIDs = Self.cycleRebuildableCycleIDs(
@@ -2090,9 +2135,11 @@ final class UsageService {
                 requestedCycleIDs: initialCycleIDs,
                 failedApps: failedApps
             )
-            // 从零扫描时 OpenCode 给出的是全部会话的完整用量，可以直接灌入。
+            dshCycleRebuilt = initialApps.contains(.dsh) && !failedApps.contains(.dsh)
+            // 从零扫描时 OpenCode / DSH 给出的是全部会话的完整用量，可以直接灌入。
             cycleAggregator.rebuildRange(
-                exactEntries: (cycleEntries + opencode.entries).filter { !failedApps.contains($0.app) },
+                exactEntries: (cycleEntries + opencode.entries + dsh.entries)
+                    .filter { !failedApps.contains($0.app) },
                 cycles: cycles,
                 accountSegments: appState?.quotaCycles.accountSegments ?? [],
                 affectedCycleIDs: rebuildableCycleIDs,
@@ -2150,6 +2197,14 @@ final class UsageService {
             // 贡献有变化就整体重归并并替换 DSH 分区：日桶、对话桶与档案只换 DSH 那一份，
             // 其他服务分区原样保留（§3.3）。父子归属变化也在这里生效。
             if canCommitDsh {
+                // 周期桶与贡献同步提交：未落盘的一轮不归集，否则下一轮重扫会重复计入。
+                if !dshCycleRebuilt, applyDshCycleUpdate(
+                    dshUpdate,
+                    cycles: cycles,
+                    accountSegments: appState?.quotaCycles.accountSegments ?? []
+                ) {
+                    cycleChanged = true
+                }
                 dshContributions = dshUpdate.contributions
                 dshNeedsFullRescan = false
                 let dshRollup = DshContributionRollup.reduce(dshContributions)
@@ -2275,6 +2330,30 @@ final class UsageService {
             unreadable=\(failedFileCount); elapsed=\(elapsed)
             """)
         return true
+    }
+
+    /// DSH 的 Codex 订阅用量按逐会话贡献同一口径归入周期桶：贡献被整体替换的会话
+    /// （换 generation、替换 / 截断重扫、新建）按会话替换周期桶，其余会话追加本轮新条目。
+    private func applyDshCycleUpdate(
+        _ update: DshContributionStore.Update,
+        cycles: [QuotaCycleRecord],
+        accountSegments: [QuotaCycleAccountSegment]
+    ) -> Bool {
+        guard !cycles.isEmpty else { return false }
+        let replacedKeys = Set(update.replacedSessionIDs.map { "dsh:\($0)" })
+        let appended = cycleAggregator.ingest(
+            entries: update.entries.filter { !replacedKeys.contains($0.conversationKey) },
+            cycles: cycles,
+            accountSegments: accountSegments
+        )
+        let replaced = cycleAggregator.replaceConversations(
+            app: .dsh,
+            conversationKeys: replacedKeys,
+            entries: update.entries,
+            cycles: cycles,
+            accountSegments: accountSegments
+        )
+        return appended || replaced
     }
 
     // MARK: - 提交与回滚
