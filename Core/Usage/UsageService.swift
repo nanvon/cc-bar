@@ -1431,8 +1431,8 @@ final class UsageService {
             requestedCycleIDs: pendingCycleIDs,
             failedApps: failedApps
         )
-        let entries = (claude?.entries ?? []) + (codex?.entries ?? [])
-            + (pi?.entries ?? []) + (opencode?.entries ?? []) + (dsh?.entries ?? [])
+        let entries: [UsageEntry] = [claude?.entries, codex?.entries, pi?.entries, opencode?.entries, dsh?.entries]
+            .compactMap { $0 }.flatMap { $0 }
         await commitCycleAggregation(
             exactEntries: entries.filter { !failedApps.contains($0.app) },
             cycles: cycles,
