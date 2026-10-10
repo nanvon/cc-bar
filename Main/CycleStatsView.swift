@@ -212,7 +212,8 @@ struct QuotaCycleCardsSection: View {
         appState.usageService.cycleAggregator.summaries(
             cycles: appState.quotaCycles.records,
             kind: kind,
-            app: app
+            app: app,
+            includeOtherAgents: SettingsStore.shared.cycleIncludesOtherAgents
         )
     }
 

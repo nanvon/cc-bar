@@ -267,6 +267,25 @@ final class CycleUsageAggregator {
 
     private var buckets: [BucketKey: CycleUsageBucket] = [:]
 
+    /// 可归入 Codex 周期的其他 Agent。桶的 `app` 记来源 Agent，展示层按设置决定是否计入。
+    nonisolated static let otherAgentSourceApps: Set<UsageApp> = [.pi, .opencode]
+
+    /// 请求归属的额度周期服务；nil 表示不进入周期统计。
+    /// Pi 只认订阅渠道 `openai-codex/`（`openai/` 是 API Key）；OpenCode 的订阅和 API Key
+    /// 都记作 `openai/`，日志无法区分，一律视为订阅。
+    nonisolated static func cycleApp(for entry: UsageEntry) -> UsageApp? {
+        switch entry.app {
+        case .codex, .claude:
+            return entry.app
+        case .pi:
+            return entry.model.lowercased().hasPrefix("openai-codex/") ? .codex : nil
+        case .opencode:
+            return entry.model.lowercased().hasPrefix("openai/") ? .codex : nil
+        case .cursor, .dsh:
+            return nil
+        }
+    }
+
     func load(from snapshot: [CycleUsageBucket]) {
         buckets.removeAll(keepingCapacity: true)
         for bucket in snapshot {
@@ -286,16 +305,17 @@ final class CycleUsageAggregator {
         quality: CycleUsageQuality = .exact
     ) -> Bool {
         var changed = false
-        for entry in entries where entry.app == .codex || entry.app == .claude {
-            guard let accountKey = accountKey(
-                for: entry.timestamp,
-                app: entry.app,
-                segments: accountSegments
-            ) else { continue }
+        for entry in entries {
+            guard let cycleApp = Self.cycleApp(for: entry),
+                  let accountKey = accountKey(
+                      for: entry.timestamp,
+                      app: cycleApp,
+                      segments: accountSegments
+                  ) else { continue }
             for kind in [QuotaLimitKind.weekly, .fiveHour] {
                 guard let cycle = bestCycle(
                     for: entry.timestamp,
-                    app: entry.app,
+                    app: cycleApp,
                     accountKey: accountKey,
                     kind: kind,
                     cycles: cycles
@@ -336,26 +356,55 @@ final class CycleUsageAggregator {
     /// 用于周期窗口滚动后的增量修正——窗口外的历史归属早已固化，不需要重扫，
     /// 只需把受影响周期内已聚合的数据清掉，用最近窗口扫描出的 entries 重新灌入。
     /// 注意：`exactEntries` 只应包含能归属到受影响周期的条目（调用方按时间范围过滤扫描）。
+    /// - Parameter sourceApps: 非 nil 时只清除并重灌这些来源 Agent 的桶；本轮没有重扫的来源原样保留。
     func rebuildRange(
         exactEntries: [UsageEntry],
         cycles: [QuotaCycleRecord],
         accountSegments: [QuotaCycleAccountSegment],
-        affectedCycleIDs: Set<String>
+        affectedCycleIDs: Set<String>,
+        sourceApps: Set<UsageApp>? = nil
     ) {
         guard !affectedCycleIDs.isEmpty else { return }
-        buckets = buckets.filter { !affectedCycleIDs.contains($0.value.cycleID) }
+        buckets = buckets.filter {
+            !affectedCycleIDs.contains($0.value.cycleID)
+                || !(sourceApps?.contains($0.value.app) ?? true)
+        }
         let affectedCycles = cycles.filter { affectedCycleIDs.contains($0.id) }
         _ = ingest(
-            entries: exactEntries,
+            entries: sourceApps.map { apps in exactEntries.filter { apps.contains($0.app) } } ?? exactEntries,
             cycles: affectedCycles,
             accountSegments: accountSegments
         )
     }
 
+    /// 按会话整体替换某个来源的周期桶（OpenCode 每轮给出刷新会话的完整用量，不能累加）。
+    @discardableResult
+    func replaceConversations(
+        app: UsageApp,
+        conversationKeys: Set<String>,
+        entries: [UsageEntry],
+        cycles: [QuotaCycleRecord],
+        accountSegments: [QuotaCycleAccountSegment]
+    ) -> Bool {
+        guard !conversationKeys.isEmpty else { return false }
+        let before = buckets
+        buckets = buckets.filter {
+            $0.value.app != app || !conversationKeys.contains($0.value.conversationKey ?? "")
+        }
+        _ = ingest(
+            entries: entries.filter { $0.app == app && conversationKeys.contains($0.conversationKey) },
+            cycles: cycles,
+            accountSegments: accountSegments
+        )
+        return buckets != before
+    }
+
+    /// - Parameter includeOtherAgents: false 时只计周期服务自己的日志（如 Codex 周期只算 Codex CLI）。
     func summaries(
         cycles: [QuotaCycleRecord],
         kind: QuotaLimitKind,
         app: UsageApp?,
+        includeOtherAgents: Bool = false,
         now: Date = Date()
     ) -> [CycleUsageSummary] {
         let grouped = Dictionary(grouping: buckets.values, by: \.cycleID)
@@ -366,7 +415,8 @@ final class CycleUsageAggregator {
                 var totals = UsageTotals.zero
                 var currentAllowanceTotals = UsageTotals.zero
                 var quality: CycleUsageQuality = cycle.boundaryQuality == .observed ? .exact : .estimated
-                for bucket in grouped[cycle.id] ?? [] {
+                for bucket in grouped[cycle.id] ?? []
+                    where includeOtherAgents || bucket.app == cycle.app {
                     totals.add(bucket.usageTotals)
                     if bucket.allowanceSegmentID == cycle.latestAllowanceSegment?.id {
                         currentAllowanceTotals.add(bucket.usageTotals)

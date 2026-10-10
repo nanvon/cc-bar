@@ -266,6 +266,12 @@ final class SettingsStore {
     /// 统计页排行口径（默认 Tokens），见 `StatsRankMetric`。
     var statsRankMetric: StatsRankMetric { didSet { defaults.set(statsRankMetric.rawValue, forKey: Keys.statsRankMetric) } }
 
+    /// 额度用满预估是否计入 Pi / OpenCode 里使用 Codex 订阅的用量（默认只算 Codex CLI）。
+    /// 只影响展示：周期桶始终按来源 Agent 分别归集，切换不需要重建。
+    var cycleIncludesOtherAgents: Bool {
+        didSet { defaults.set(cycleIncludesOtherAgents, forKey: Keys.cycleIncludesOtherAgents) }
+    }
+
     /// 是否在 Popover 中显示 OpenAI / Anthropic 服务状态圆点
     var showServiceStatus: Bool { didSet { defaults.set(showServiceStatus, forKey: Keys.showServiceStatus) } }
 
@@ -371,6 +377,7 @@ final class SettingsStore {
         resetTimeDisplay = ResetTimeDisplay(rawValue: rtdRaw) ?? .relative
         let srmRaw = defaults.string(forKey: Keys.statsRankMetric) ?? StatsRankMetric.tokens.rawValue
         statsRankMetric = StatsRankMetric(rawValue: srmRaw) ?? .tokens
+        cycleIncludesOtherAgents = defaults.object(forKey: Keys.cycleIncludesOtherAgents) as? Bool ?? false
         showServiceStatus = defaults.object(forKey: Keys.showServiceStatus) as? Bool ?? true
         // 通用：launchAtLogin 以系统当前注册状态为准
         let langRaw = defaults.string(forKey: Keys.appLanguage) ?? AppLanguage.system.rawValue
@@ -746,6 +753,7 @@ final class SettingsStore {
         static let usageInterval = "ccbar.settings.usageInterval"
         static let resetTimeDisplay = "ccbar.settings.resetTimeDisplay"
         static let statsRankMetric = "ccbar.settings.statsRankMetric"
+        static let cycleIncludesOtherAgents = "ccbar.settings.cycleIncludesOtherAgents"
         static let showServiceStatus = "ccbar.settings.showServiceStatus"
         static let launchAtLogin = "ccbar.settings.launchAtLogin"
         static let appLanguage = "ccbar.settings.appLanguage"

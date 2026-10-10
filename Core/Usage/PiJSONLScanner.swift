@@ -46,15 +46,17 @@ enum PiJSONLScanner {
 
     /// 可注入日志根目录，供脱敏 JSONL fixture 测试真实 byte-offset 扫描链路。
     /// - Parameter knownIDs: 消息账本里已计入的去重键摘要，与 `seenEntryIds` 一起去重。
+    /// - Parameter minimumMtime: 非 nil 时只扫修改时间不早于该时刻的文件（周期受限重建用）。
     /// - Parameter onProgress: 非 nil 时按约每 50 个文件回报一次扫描进度。
     nonisolated static func scan(
         previous: [String: ScanFileState],
         seenEntryIds: [String],
         knownIDs: Set<UInt64> = [],
         root: URL,
+        minimumMtime: Date? = nil,
         onProgress: ScanProgressCallback? = nil
     ) -> Result {
-        let files = JSONLDirectoryEnumerator.files(at: root)
+        let files = JSONLDirectoryEnumerator.files(at: root, minimumMtime: minimumMtime)
 
         var newState: [String: ScanFileState] = previous
         var entries: [UsageEntry] = []

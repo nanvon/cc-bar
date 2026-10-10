@@ -404,6 +404,21 @@ struct SettingsRootView: View {
                 .pickerStyle(.menu)
                 .fixedSize()
             }
+            InsetDivider()
+            PrefsRow(
+                label: "Include other agents in estimate",
+                chinese: "预估计入其他 Agent",
+                desc: "Adds Codex subscription usage from Pi and OpenCode to the full-quota estimate, all counted toward the current Codex account. OpenCode API key usage can't be told apart and is included.",
+                chineseDesc: "额度用满预估同时计入 Pi、OpenCode 里的 Codex 订阅用量，都算到当前 Codex 账号。OpenCode 分不出 API Key 用量，会一并计入"
+            ) {
+                Toggle("", isOn: Binding(
+                    get: { settings.cycleIncludesOtherAgents },
+                    set: { settings.cycleIncludesOtherAgents = $0 }
+                ))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .tint(.green)
+            }
         }
     }
 

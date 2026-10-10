@@ -2182,6 +2182,92 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertEqual(aggregator.snapshot().reduce(0) { $0 + $1.inputTokens }, 20)
     }
 
+    @MainActor
+    func testOtherAgentCodexSubscriptionUsageCountsOnlyWhenIncluded() {
+        let start = Date(timeIntervalSince1970: 300_000)
+        let cycle = cycleRecord(
+            id: "codex-weekly",
+            accountKey: "codex:primary:a",
+            app: .codex,
+            start: start,
+            end: start.addingTimeInterval(3_600)
+        )
+        let segments = [QuotaCycleAccountSegment(
+            id: "a",
+            accountKey: cycle.accountKey,
+            app: .codex,
+            startAt: start,
+            endAt: nil
+        )]
+        func entry(_ app: UsageApp, _ conversationKey: String, _ model: String, input: Int) -> UsageEntry {
+            UsageEntry(
+                app: app,
+                conversationKey: conversationKey,
+                model: model,
+                speed: .standard,
+                day: UsageDay.startOfDay(for: start),
+                timestamp: start.addingTimeInterval(60),
+                inputTokens: input,
+                outputTokens: 0,
+                cacheReadTokens: 0,
+                cacheCreationTokens: 0,
+                costUSD: 1,
+                costBreakdown: nil
+            )
+        }
+        let aggregator = CycleUsageAggregator()
+        aggregator.ingest(
+            entries: [
+                entry(.codex, "codex:a", "gpt-5.6", input: 100),
+                entry(.pi, "pi:a", "openai-codex/gpt-5.6", input: 10),
+                // Pi 的 `openai/` 是 API Key，不消耗订阅额度。
+                entry(.pi, "pi:b", "openai/gpt-5.6", input: 1_000),
+                entry(.pi, "pi:c", "deepseek/deepseek-v4", input: 1_000),
+            ],
+            cycles: [cycle],
+            accountSegments: segments
+        )
+        aggregator.replaceConversations(
+            app: .opencode,
+            conversationKeys: ["opencode:a"],
+            entries: [entry(.opencode, "opencode:a", "openai/gpt-5.6", input: 5)],
+            cycles: [cycle],
+            accountSegments: segments
+        )
+
+        func totalInput(includeOtherAgents: Bool) -> Int? {
+            aggregator.summaries(
+                cycles: [cycle],
+                kind: .weekly,
+                app: .codex,
+                includeOtherAgents: includeOtherAgents
+            ).first?.totals.inputTokens
+        }
+        XCTAssertEqual(totalInput(includeOtherAgents: false), 100)
+        XCTAssertEqual(totalInput(includeOtherAgents: true), 115)
+
+        // OpenCode 刷新会话给出完整用量，按会话替换而不是累加。
+        aggregator.replaceConversations(
+            app: .opencode,
+            conversationKeys: ["opencode:a"],
+            entries: [entry(.opencode, "opencode:a", "openai/gpt-5.6", input: 7)],
+            cycles: [cycle],
+            accountSegments: segments
+        )
+        XCTAssertEqual(totalInput(includeOtherAgents: true), 117)
+
+        // 只重建 Pi 时不动 Codex 与 OpenCode 的桶。
+        aggregator.rebuildRange(
+            exactEntries: [entry(.pi, "pi:a", "openai-codex/gpt-5.6", input: 20)],
+            cycles: [cycle],
+            accountSegments: segments,
+            affectedCycleIDs: [cycle.id],
+            sourceApps: [.pi]
+        )
+        XCTAssertEqual(totalInput(includeOtherAgents: false), 100)
+        XCTAssertEqual(totalInput(includeOtherAgents: true), 127)
+    }
+
     func testCycleForecastStartsWithAnyObservedUsage() {
         let cycle = cycleRecord(
             id: "forecast",
@@ -2698,10 +2784,10 @@ final class QuotaParsingTests: XCTestCase {
 
         let completedApps = UsageService.updatedInitialCycleRebuildApps(
             completedApps: [],
-            requestedApps: [.codex, .claude],
+            requestedApps: [.codex, .claude, .pi, .opencode],
             failedApps: [.claude]
         )
-        XCTAssertEqual(completedApps, [.codex])
+        XCTAssertEqual(completedApps, [.codex, .pi, .opencode])
         XCTAssertEqual(
             UsageService.pendingInitialCycleRebuildApps(
                 cycles: [claudeCycle, codexCycle],

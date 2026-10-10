@@ -955,6 +955,8 @@ final class UsageService {
 
         let claudeRoot = roots.claudeRoot
         let codexRoots = roots.codexRoots
+        let piRoot = roots.piRoot
+        let opencodeDatabaseURL = roots.opencodeDatabaseURL
         async let claudeTask = Task.detached(priority: .utility) {
             ClaudeJSONLScanner.scan(
                 previous: [:],
@@ -963,6 +965,24 @@ final class UsageService {
                 // 重建只需要 entries，跳过标题索引构建（省一次索引文件解析）
                 conversationIndex: ConversationTitleIndex.ClaudeIndex(titles: [:], projects: [:]),
                 minimumMtime: dateFrom,
+                onProgress: progress
+            )
+        }.value
+        // Pi / OpenCode 里的 Codex 订阅用量同样归入 Codex 周期，要一起重灌。
+        // OpenCode 是 SQLite 库，没有按文件时间过滤的入口，只能整库读取。
+        async let piTask = Task.detached(priority: .utility) {
+            PiJSONLScanner.scan(
+                previous: [:],
+                seenEntryIds: [],
+                root: piRoot,
+                minimumMtime: dateFrom,
+                onProgress: progress
+            )
+        }.value
+        async let opencodeTask = Task.detached(priority: .utility) {
+            OpencodeScanner.scan(
+                previous: nil,
+                databaseURL: opencodeDatabaseURL,
                 onProgress: progress
             )
         }.value
@@ -982,11 +1002,17 @@ final class UsageService {
         let claude = await claudeTask
         var codex = await codexTask
         if usesLegacyCodexModels { codex = Self.legacyCodexResult(codex) }
+        let pi = await piTask
+        let opencode = await opencodeTask
         let affectedCycles = cycles.filter { affectedCycleIDs.contains($0.id) }
-        let failedApps = Self.cycleRebuildFailedApps(
-            claude: claude,
-            codex: codex,
-            cycles: affectedCycles
+        let failedApps = Self.cycleSourceFailedApps(
+            Self.cycleRebuildFailedApps(
+                claude: claude,
+                codex: codex,
+                cycles: affectedCycles
+            ),
+            opencode: opencode,
+            opencodeDatabaseURL: opencodeDatabaseURL
         )
         let rebuildableCycleIDs = Self.cycleRebuildableCycleIDs(
             cycles: affectedCycles,
@@ -994,11 +1020,15 @@ final class UsageService {
             failedApps: failedApps
         )
         await commitCycleAggregation(
-            exactEntries: (claude.entries + codex.entries).filter { !failedApps.contains($0.app) },
+            exactEntries: (claude.entries + codex.entries + pi.entries + opencode.entries)
+                .filter { !failedApps.contains($0.app) },
             cycles: cycles,
             accountSegments: accountSegments,
             failedApps: failedApps,
-            rebuildRange: rebuildableCycleIDs
+            rebuildRange: rebuildableCycleIDs,
+            sourceApps: Set<UsageApp>([.claude, .codex])
+                .union(CycleUsageAggregator.otherAgentSourceApps)
+                .subtracting(failedApps)
         )
     }
 
@@ -1044,13 +1074,44 @@ final class UsageService {
         return failedApps
     }
 
+    /// 周期重建的来源失败集合。OpenCode 库从未存在（本机没装）是正常状态，库在却读不全才算失败；
+    /// 其他 Agent 只归入 Codex 周期，Codex 周期本轮不能重建时它们也不能算完成。
+    nonisolated static func cycleSourceFailedApps(
+        _ failedApps: Set<UsageApp>,
+        opencode: OpencodeScanner.Result?,
+        opencodeDatabaseURL: URL
+    ) -> Set<UsageApp> {
+        var result = failedApps
+        if let opencode, opencode.error != nil || !opencode.isComplete,
+           FileManager.default.fileExists(atPath: opencodeDatabaseURL.path) {
+            result.insert(.opencode)
+        }
+        if result.contains(.codex) {
+            result.formUnion(CycleUsageAggregator.otherAgentSourceApps)
+        }
+        return result
+    }
+
+    /// 周期统计需要覆盖的来源。有 Codex 周期时，Pi / OpenCode 里的 Codex 订阅用量也要归集。
+    nonisolated static func requiredCycleSourceApps(cycles: [QuotaCycleRecord]) -> Set<UsageApp> {
+        let apps = Set(cycles.map(\.app)).intersection([.codex, .claude])
+        return apps.contains(.codex) ? apps.union(CycleUsageAggregator.otherAgentSourceApps) : apps
+    }
+
+    /// 重建这些来源时要清桶重灌的周期：来源本身的周期，加上其他 Agent 归入的 Codex 周期。
+    nonisolated static func cyclesToRebuild(
+        _ cycles: [QuotaCycleRecord],
+        for sourceApps: Set<UsageApp>
+    ) -> [QuotaCycleRecord] {
+        let includesOtherAgents = !sourceApps.isDisjoint(with: CycleUsageAggregator.otherAgentSourceApps)
+        return cycles.filter { sourceApps.contains($0.app) || (includesOtherAgents && $0.app == .codex) }
+    }
+
     nonisolated static func pendingInitialCycleRebuildApps(
         cycles: [QuotaCycleRecord],
         completedApps: Set<UsageApp>
     ) -> Set<UsageApp> {
-        Set(cycles.map(\.app))
-            .intersection([.codex, .claude])
-            .subtracting(completedApps)
+        requiredCycleSourceApps(cycles: cycles).subtracting(completedApps)
     }
 
     nonisolated static func updatedInitialCycleRebuildApps(
@@ -1126,13 +1187,15 @@ final class UsageService {
     /// - Parameter initialRebuildApps: 本轮执行初始重建的 Provider；成功侧会独立置位，
     ///   失败侧保持待重试，不会让已完成 Provider 在下次启动重复全量扫描。
     /// - Parameter rebuildRange: 非 nil 表示受限重建，只重算这些周期内的桶。
+    /// - Parameter sourceApps: 受限重建时只清除并重灌这些来源的桶。
     private func commitCycleAggregation(
         exactEntries: [UsageEntry],
         cycles: [QuotaCycleRecord],
         accountSegments: [QuotaCycleAccountSegment],
         initialRebuildApps: Set<UsageApp> = [],
         failedApps: Set<UsageApp> = [],
-        rebuildRange affectedCycleIDs: Set<String>? = nil
+        rebuildRange affectedCycleIDs: Set<String>? = nil,
+        sourceApps: Set<UsageApp>? = nil
     ) async {
         guard !storeWriteDisabled, historyRecoveryState == .complete,
               let scanState = cachedScanState,
@@ -1144,9 +1207,16 @@ final class UsageService {
         #if DEBUG
         await cycleReadyForTesting?()
         #endif
-        let failedProviderNames = [UsageApp.codex, .claude]
+        // Pi 自身不会读取失败，只会随 Codex 一起推迟，不单独列名。
+        let failedProviderNames = [UsageApp.codex, .claude, .opencode]
             .filter { failedApps.contains($0) }
-            .map { $0 == .codex ? "Codex" : "Claude Code" }
+            .map { app -> String in
+                switch app {
+                case .codex: return "Codex"
+                case .claude: return "Claude Code"
+                default: return "OpenCode"
+                }
+            }
             .joined(separator: ", ")
         let rebuildWarning = failedApps.isEmpty
             ? nil
@@ -1162,7 +1232,8 @@ final class UsageService {
                 exactEntries: exactEntries,
                 cycles: cycles,
                 accountSegments: accountSegments,
-                affectedCycleIDs: affectedCycleIDs
+                affectedCycleIDs: affectedCycleIDs,
+                sourceApps: sourceApps
             )
         } else {
             cycleAggregator.rebuild(
@@ -1177,7 +1248,7 @@ final class UsageService {
             requestedApps: initialRebuildApps,
             failedApps: failedApps
         )
-        let requiredApps = Set(cycles.map(\.app)).intersection([.codex, .claude])
+        let requiredApps = Self.requiredCycleSourceApps(cycles: cycles)
         let completedInitialRebuild = !initialRebuildApps.isEmpty
             && !requiredApps.isEmpty
             && completedApps.isSuperset(of: requiredApps)
@@ -1287,14 +1358,41 @@ final class UsageService {
                 )
             }
             : nil
+        let piRoot = roots.piRoot
+        let opencodeDatabaseURL = roots.opencodeDatabaseURL
+        let piTask: Task<PiJSONLScanner.Result, Never>? = pendingApps.contains(.pi)
+            ? Task.detached(priority: .utility) {
+                PiJSONLScanner.scan(
+                    previous: [:],
+                    seenEntryIds: [],
+                    root: piRoot,
+                    onProgress: progress
+                )
+            }
+            : nil
+        let opencodeTask: Task<OpencodeScanner.Result, Never>? = pendingApps.contains(.opencode)
+            ? Task.detached(priority: .utility) {
+                OpencodeScanner.scan(
+                    previous: nil,
+                    databaseURL: opencodeDatabaseURL,
+                    onProgress: progress
+                )
+            }
+            : nil
         let claude = await claudeTask?.value
         var codex = await codexTask?.value
         if usesLegacyCodexModels { codex = codex.map(Self.legacyCodexResult) }
-        let pendingCycles = cycles.filter { pendingApps.contains($0.app) }
-        let failedApps = Self.cycleRebuildFailedApps(
-            claude: claude,
-            codex: codex,
-            cycles: pendingCycles
+        let pi = await piTask?.value
+        let opencode = await opencodeTask?.value
+        let pendingCycles = Self.cyclesToRebuild(cycles, for: pendingApps)
+        let failedApps = Self.cycleSourceFailedApps(
+            Self.cycleRebuildFailedApps(
+                claude: claude,
+                codex: codex,
+                cycles: pendingCycles
+            ),
+            opencode: opencode,
+            opencodeDatabaseURL: opencodeDatabaseURL
         )
         let pendingCycleIDs = Set(pendingCycles.map(\.id))
         let rebuildableCycleIDs = Self.cycleRebuildableCycleIDs(
@@ -1302,14 +1400,16 @@ final class UsageService {
             requestedCycleIDs: pendingCycleIDs,
             failedApps: failedApps
         )
+        let entries = (claude?.entries ?? []) + (codex?.entries ?? [])
+            + (pi?.entries ?? []) + (opencode?.entries ?? [])
         await commitCycleAggregation(
-            exactEntries: ((claude?.entries ?? []) + (codex?.entries ?? []))
-                .filter { !failedApps.contains($0.app) },
+            exactEntries: entries.filter { !failedApps.contains($0.app) },
             cycles: cycles,
             accountSegments: appState.quotaCycles.accountSegments,
             initialRebuildApps: pendingApps,
             failedApps: failedApps,
-            rebuildRange: rebuildableCycleIDs
+            rebuildRange: rebuildableCycleIDs,
+            sourceApps: pendingApps.subtracting(failedApps)
         )
     }
 
@@ -1712,7 +1812,8 @@ final class UsageService {
             entries: claude.entries + codex.entries + pi.entries,
             seeds: claude.conversationSeeds + codex.conversationSeeds + pi.conversationSeeds
         )
-        let cycleEntries = claude.entries + codex.entries
+        // OpenCode 从空状态扫描，给出的是库中现存会话的完整用量。
+        let cycleEntries = claude.entries + codex.entries + pi.entries + opencode.entries
         let freshDshContributions = dshFrozen
             ? dshContributions
             : DshContributionStore.apply(scan: dsh, to: dshContributions).contributions
@@ -1735,6 +1836,14 @@ final class UsageService {
                 cycles: cycles,
                 accountSegments: accountSegments
             )
+            // 与日桶一致：源库中已删除的 OpenCode 会话保留原周期桶。
+            let refreshedOpencodeKeys = Set(opencode.refreshedSessionIDs.map { "opencode:\($0)" })
+            let preservedOpencode = baselineCycles.filter {
+                $0.app == .opencode && !refreshedOpencodeKeys.contains($0.conversationKey ?? "")
+            }
+            if !preservedOpencode.isEmpty {
+                candidateCycles.load(from: candidateCycles.snapshot() + preservedOpencode)
+            }
         }
 
         let conversationSnapshot = candidateConversations.snapshot()
@@ -1808,7 +1917,7 @@ final class UsageService {
             opencode: opencode.newState,
             dsh: dshFrozen ? preservedDshState : dsh.newState
         )
-        let requiredApps = Set(cycles.map(\.app)).intersection([.codex, .claude])
+        let requiredApps = Self.requiredCycleSourceApps(cycles: cycles)
         let completedApps = incomplete.isEmpty
             ? cycleInitialRebuildCompletedApps.union(requiredApps)
             : cycleInitialRebuildCompletedApps
@@ -1944,7 +2053,7 @@ final class UsageService {
         messageLedger.record(claude.ledger, app: .claude)
         messageLedger.record(codex.ledger, app: .codex)
         messageLedger.record(pi.ledger, app: .pi)
-        let cycleEntries = claude.entries + codex.entries
+        let cycleEntries = claude.entries + codex.entries + pi.entries
         let opencodeChanged = Self.applyOpenCodeScan(
             opencode, aggregator: aggregator, conversations: conversationAggregator
         )
@@ -1965,11 +2074,15 @@ final class UsageService {
                 cycles: cycles,
                 completedApps: cycleInitialRebuildCompletedApps
             )
-            let initialCycles = cycles.filter { initialApps.contains($0.app) }
-            let failedApps = Self.cycleRebuildFailedApps(
-                claude: claude,
-                codex: codex,
-                cycles: initialCycles
+            let initialCycles = Self.cyclesToRebuild(cycles, for: initialApps)
+            let failedApps = Self.cycleSourceFailedApps(
+                Self.cycleRebuildFailedApps(
+                    claude: claude,
+                    codex: codex,
+                    cycles: initialCycles
+                ),
+                opencode: opencode,
+                opencodeDatabaseURL: opencodeDatabaseURL
             )
             let initialCycleIDs = Set(initialCycles.map(\.id))
             let rebuildableCycleIDs = Self.cycleRebuildableCycleIDs(
@@ -1977,28 +2090,39 @@ final class UsageService {
                 requestedCycleIDs: initialCycleIDs,
                 failedApps: failedApps
             )
+            // 从零扫描时 OpenCode 给出的是全部会话的完整用量，可以直接灌入。
             cycleAggregator.rebuildRange(
-                exactEntries: cycleEntries.filter { !failedApps.contains($0.app) },
+                exactEntries: (cycleEntries + opencode.entries).filter { !failedApps.contains($0.app) },
                 cycles: cycles,
                 accountSegments: appState?.quotaCycles.accountSegments ?? [],
-                affectedCycleIDs: rebuildableCycleIDs
+                affectedCycleIDs: rebuildableCycleIDs,
+                sourceApps: initialApps.subtracting(failedApps)
             )
             cycleInitialRebuildCompletedApps = Self.updatedInitialCycleRebuildApps(
                 completedApps: cycleInitialRebuildCompletedApps,
                 requestedApps: initialApps,
                 failedApps: failedApps
             )
-            let requiredApps = Set(cycles.map(\.app)).intersection([.codex, .claude])
+            let requiredApps = Self.requiredCycleSourceApps(cycles: cycles)
             if cycleInitialRebuildCompletedApps.isSuperset(of: requiredApps) {
                 cycleInitialRebuildCompletedAt = Date()
             }
             cycleChanged = true
         } else {
-            cycleChanged = cycleAggregator.ingest(
+            let ingested = cycleAggregator.ingest(
                 entries: cycleEntries,
                 cycles: cycles,
                 accountSegments: appState?.quotaCycles.accountSegments ?? []
             )
+            // OpenCode 刷新会话给出的是完整用量，按会话替换，不能累加。
+            let opencodeReplaced = opencode.isComplete && cycleAggregator.replaceConversations(
+                app: .opencode,
+                conversationKeys: Set(opencode.refreshedSessionIDs.map { "opencode:\($0)" }),
+                entries: opencode.entries,
+                cycles: cycles,
+                accountSegments: appState?.quotaCycles.accountSegments ?? []
+            )
+            cycleChanged = ingested || opencodeReplaced
         }
 
         // DSH 不像其他扫描器那样靠 seen 集合兜底去重：本轮若不落盘，watermark 会一并压住，
