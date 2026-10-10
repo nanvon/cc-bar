@@ -266,7 +266,8 @@ final class SettingsStore {
     /// 统计页排行口径（默认 Tokens），见 `StatsRankMetric`。
     var statsRankMetric: StatsRankMetric { didSet { defaults.set(statsRankMetric.rawValue, forKey: Keys.statsRankMetric) } }
 
-    /// 额度用满预估是否计入 Pi / OpenCode 里使用 Codex 订阅的用量（默认只算 Codex CLI）。
+    /// 额度用满预估的 Codex 卡与弹出面板的 Codex 花费是否计入 Pi / OpenCode / DSH 里使用 Codex 订阅的用量
+    /// （默认只算 Codex 自己的日志）。
     /// 只影响展示：周期桶始终按来源 Agent 分别归集，切换不需要重建。
     var cycleIncludesOtherAgents: Bool {
         didSet { defaults.set(cycleIncludesOtherAgents, forKey: Keys.cycleIncludesOtherAgents) }

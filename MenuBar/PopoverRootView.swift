@@ -258,13 +258,7 @@ struct PopoverRootView: View {
             periodIsBillingCycle: cursorCycleBounds(for: provider.app) != nil,
             todayCost: todayCost(for: provider.app),
             serviceStatus: serviceStatus(for: provider.app),
-            showsCost: provider.showsCost,
-            costHelp: includesOtherAgentSubscription(provider.app)
-                ? tr(
-                    "Includes Codex subscription usage from Pi, OpenCode and DSH",
-                    "含 Pi、OpenCode、DSH 里的 Codex 订阅用量"
-                )
-                : nil
+            showsCost: provider.showsCost
         )
     }
 
@@ -483,8 +477,6 @@ private struct ServiceBlockView: View {
     let todayCost: Decimal?
     let serviceStatus: ServiceStatus?
     let showsCost: Bool
-    /// 非 nil 时悬停花费显示该说明（Codex 花费计入其他 Agent 时）。
-    let costHelp: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -621,7 +613,6 @@ private struct ServiceBlockView: View {
                                     chinese: periodIsBillingCycle ? "本期" : "本周"
                                 )
                             }
-                            .help(costHelp ?? "")
                         }
                     }
 

@@ -406,10 +406,10 @@ struct SettingsRootView: View {
             }
             InsetDivider()
             PrefsRow(
-                label: "Count Codex subscription usage in other agents",
-                chinese: "计入其他 Agent 的 Codex 订阅用量",
-                desc: "The full-quota estimate and the Codex spend in the popover also count Codex subscription usage from Pi, OpenCode and DSH, all toward the current Codex account. OpenCode API key usage can't be told apart and is included.",
-                chineseDesc: "额度用满预估和弹出面板的 Codex 花费同时计入 Pi、OpenCode、DSH 里的 Codex 订阅用量，都算到当前 Codex 账号。OpenCode 分不出 API Key 用量，会一并计入"
+                label: "Include Codex subscription usage in other agents",
+                chinese: "包含其他 Agent 中的 Codex 订阅用量",
+                desc: "When on, the Codex cards in the full-quota estimate and the Codex spend in the popover add Codex subscription usage in Pi, OpenCode and DSH on top of Codex's own usage, all toward the Codex primary account.",
+                chineseDesc: "打开后，额度用满预估的 Codex 卡和弹出面板的 Codex 花费，除了 Codex 本身的用量，还会加上在 Pi、OpenCode、DSH 中使用 Codex 订阅产生的用量，一律算到 Codex 主账号"
             ) {
                 Toggle("", isOn: Binding(
                     get: { settings.cycleIncludesOtherAgents },

@@ -405,7 +405,7 @@ final class CycleUsageAggregator {
         return buckets != before
     }
 
-    /// - Parameter includeOtherAgents: false 时只计周期服务自己的日志（如 Codex 周期只算 Codex CLI）。
+    /// - Parameter includeOtherAgents: false 时只计周期服务自己的日志（如 Codex 周期只算 Codex 自己的日志）。
     func summaries(
         cycles: [QuotaCycleRecord],
         kind: QuotaLimitKind,
