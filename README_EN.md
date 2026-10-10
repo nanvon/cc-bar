@@ -37,6 +37,11 @@
 
 ## ✨ Features
 
+cc-bar shows two kinds of data:
+
+* **Subscription quotas** — Remaining percentages and reset times come from each service's API and are shown per subscription and account in the menu bar, floating HUD, popover, and Quota page.
+* **Local usage** — Tokens and costs are read from local session logs and counted per agent on the Overview, Conversations, and Projects pages. The popover's today / this week costs and the Quota page's cycle usage are estimated from the matching agent's local usage; they are not subscription bills.
+
 ### ⚡ Multi-Service Quota Monitoring
 
 * **Five quota services** — Codex, Claude Code, Antigravity, Cursor, and Command Code:
@@ -55,7 +60,7 @@
   * **Overview**: Total tokens, costs, per-service costs, and changes from the previous period; stacked usage charts, token breakdowns, and cache hit rate. Switch usage composition between service, provider, model, and project, or open a top conversation directly. Usage composition, top conversations, and project rankings sort by tokens by default; switch to cost in Settings → Appearance & Display → Statistics. A single-period selection expands the daily chart to 30 days, or weekly / monthly charts to 14 periods; totals still cover only the selected range.
   * **Conversations**: Filter by service or project, search titles or projects, and sort by recent activity, tokens, or cost. Details cover the conversation's entire history: input, output, cache writes and reads, requests, cache hit rate, models, Standard / Fast tiers, and cost breakdowns.
   * **Projects**: Tokens, costs, conversation counts, and active days by project, with daily trends, tools and models, branches, and top conversations. Recognized Git worktrees roll up into their main repository, with individual worktree details. Cursor remote usage, backfills, and early daily-only history appear separately as Unattributed.
-  * **Quota**: Current Codex and Claude Code 5-hour / weekly local usage, projected full-quota usage, official quota usage percentages, and reset countdowns on one page. Quota history below shows today in the 5-hour view, or the current and previous cycles based on official reset times in the weekly view, with separate sections for each account.
+  * **Quota**: Current Codex and Claude Code 5-hour / weekly local usage, projected full-quota usage, official quota usage percentages, and reset countdowns on one page. Quota history below shows today in the 5-hour view, or the current and previous cycles based on official reset times in the weekly view, with separate sections for each account. Cycle usage counts only Codex's and Claude Code's own local logs by default; turn on Settings → Appearance & Display → Statistics → Include Codex subscription usage in other agents to also count Codex subscription usage in Pi, OpenCode, and DSH toward Codex cycle usage and the popover's Codex costs.
 * **Cost estimates and pricing** — Local costs use recorded log costs or model-based estimates to compare consumption; they are not subscription bills. Cursor uses service-side metered costs. Pricing supports Codex Standard / Fast and long-context tiers, Claude cache TTLs and advisor usage. The built-in catalog includes GPT-6.1 Sol, Claude Haiku 5.5, DeepSeek, Gemini, GLM, MiniMax, and Command Code model variants, supplemented by LiteLLM / models.dev. Price updates do not reprice history automatically; use Recalculate usage in Settings.
 * **History protection and verified recalculation** — Daily totals, conversations, cycle usage, and scan progress are saved together. A damaged current snapshot can fall back to the previous complete snapshot. Recalculation checks against preserved history first; incomplete reads, usage mismatches, or save failures retain the original data and display a warning. Incomplete results from cleaned-up source logs do not directly overwrite history.
 
