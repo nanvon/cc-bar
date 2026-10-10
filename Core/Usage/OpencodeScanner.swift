@@ -54,11 +54,37 @@ enum OpencodeScanner {
         guard FileManager.default.fileExists(atPath: databaseURL.path) else {
             return Result(newState: previous)
         }
+        let attempt = scan(previous: previous, databaseURL: databaseURL, immutable: false, onProgress: onProgress)
+        // OpenCode 退出时会 checkpoint 并删除 -wal / -shm；系统 SQLite 的只读连接打开
+        // 没有 sidecar 的 WAL 库会报 SQLITE_CANTOPEN。此时没有写入方，改用 immutable 重读。
+        guard attempt.sqliteCode.map({ $0 & 0xff }) == SQLITE_CANTOPEN,
+              walSidecarsAreMissing(databaseURL) else {
+            return attempt.result
+        }
+        return scan(previous: previous, databaseURL: databaseURL, immutable: true, onProgress: onProgress).result
+    }
+
+    private nonisolated static func walSidecarsAreMissing(_ databaseURL: URL) -> Bool {
+        !FileManager.default.fileExists(atPath: databaseURL.path + "-wal")
+            && !FileManager.default.fileExists(atPath: databaseURL.path + "-shm")
+    }
+
+    /// `sqliteCode` 只在 SQLite 调用失败时携带，供外层判断是否改用 immutable 重试。
+    private nonisolated static func scan(
+        previous: State?,
+        databaseURL: URL,
+        immutable: Bool,
+        onProgress: ScanProgressCallback?
+    ) -> (result: Result, sqliteCode: Int32?) {
         var opened: OpaquePointer?
-        guard sqlite3_open_v2(databaseURL.path, &opened, SQLITE_OPEN_READONLY, nil) == SQLITE_OK,
-              let db = opened else {
+        let filename = immutable
+            ? "\(databaseURL.absoluteURL.absoluteString)?immutable=1"
+            : databaseURL.path
+        let flags = immutable ? SQLITE_OPEN_READONLY | SQLITE_OPEN_URI : SQLITE_OPEN_READONLY
+        let openResult = sqlite3_open_v2(filename, &opened, flags, nil)
+        guard openResult == SQLITE_OK, let db = opened else {
             if let opened { sqlite3_close(opened) }
-            return Result(newState: previous, error: "OpenCode database could not be opened")
+            return (Result(newState: previous, error: "OpenCode database could not be opened"), openResult)
         }
         defer { sqlite3_close(db) }
         sqlite3_busy_timeout(db, 2000)
@@ -167,10 +193,11 @@ enum OpencodeScanner {
             }
             result.newState = state
             result.isComplete = true
-            return result
+            return (result, nil)
         } catch {
             // 部分查询成功也不能提交部分贡献或签名；下轮从原状态重试。
-            return Result(newState: previous, error: "OpenCode database read failed: \(error)")
+            return (Result(newState: previous, error: "OpenCode database read failed: \(error)"),
+                    (error as? ReadFailure)?.code)
         }
     }
 
@@ -184,6 +211,8 @@ enum OpencodeScanner {
 
     private nonisolated struct ReadFailure: Error, CustomStringConvertible {
         var detail: String
+        /// SQLite 错误码；数据内容不合法等非 SQLite 失败为 nil。
+        var code: Int32?
         var description: String { detail }
     }
 
@@ -249,19 +278,19 @@ enum OpencodeScanner {
     ) throws {
         guard let stmt = prepare(db, sql: sql, bind: { stmt in
             if let sessionID { sqlite3_bind_text(stmt, 1, sessionID, -1, sqliteTransient) }
-        }) else { throw ReadFailure(detail: String(cString: sqlite3_errmsg(db))) }
+        }) else { throw ReadFailure(detail: String(cString: sqlite3_errmsg(db)), code: sqlite3_errcode(db)) }
         defer { sqlite3_finalize(stmt) }
         var status = sqlite3_step(stmt)
         while status == SQLITE_ROW {
             try autoreleasepool { try body(stmt) }
             status = sqlite3_step(stmt)
         }
-        guard status == SQLITE_DONE else { throw ReadFailure(detail: String(cString: sqlite3_errmsg(db))) }
+        guard status == SQLITE_DONE else { throw ReadFailure(detail: String(cString: sqlite3_errmsg(db)), code: sqlite3_errcode(db)) }
     }
 
     private nonisolated static func execute(_ db: OpaquePointer, sql: String) throws {
         guard sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK else {
-            throw ReadFailure(detail: String(cString: sqlite3_errmsg(db)))
+            throw ReadFailure(detail: String(cString: sqlite3_errmsg(db)), code: sqlite3_errcode(db))
         }
     }
 

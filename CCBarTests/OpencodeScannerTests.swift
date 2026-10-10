@@ -626,4 +626,21 @@ final class OpencodeScannerTests: XCTestCase {
         XCTAssertEqual(result.newState, previous)
         XCTAssertNotNil(result.error)
     }
+
+    /// OpenCode 退出后 WAL 库只剩主文件；系统 SQLite 只读打开会报 SQLITE_CANTOPEN，需回退 immutable。
+    func testCheckpointedWALDatabaseWithoutSidecarsIsReadable() throws {
+        let db = try createV2Schema()
+        XCTAssertEqual(sqlite3_exec(db, "PRAGMA journal_mode=WAL", nil, nil, nil), SQLITE_OK)
+        insertV2Message(db, id: "msg-a1", data: v2Assistant())
+        XCTAssertEqual(sqlite3_exec(db, "PRAGMA wal_checkpoint(TRUNCATE)", nil, nil, nil), SQLITE_OK)
+        sqlite3_close(db)
+        try? FileManager.default.removeItem(atPath: dbURL.path + "-wal")
+        try? FileManager.default.removeItem(atPath: dbURL.path + "-shm")
+
+        let result = scan()
+        XCTAssertNil(result.error)
+        XCTAssertTrue(result.isComplete)
+        XCTAssertEqual(result.entries.count, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dbURL.path + "-wal"))
+    }
 }
