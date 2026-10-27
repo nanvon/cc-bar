@@ -146,6 +146,9 @@ final class AppState {
     /// 主窗口当前 tab,允许 ⌘1 / ⌘, 等命令从外部驱动切换
     var mainTab: MainTab = .stats
 
+    /// Popover「最近对话」点击后要在统计页对话视图里选中的对话；StatsView 消费后清空。
+    var pendingStatsConversation: PendingStatsConversation?
+
     /// 首次启动时由 bootstrap 设为 true,触发 Onboarding 窗口
     var shouldShowOnboarding: Bool = false
 

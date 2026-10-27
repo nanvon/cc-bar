@@ -22,6 +22,10 @@ struct PopoverRootView: View {
 
             content
 
+            if SettingsStore.shared.showRecentConversations {
+                RecentConversationsSection(onOpen: openConversation)
+            }
+
             if let version = AppUpdater.shared.availableVersion {
                 HStack(spacing: 8) {
                     Spacer()
@@ -420,6 +424,12 @@ struct PopoverRootView: View {
         openWindow(id: "main")
     }
 
+    /// 「最近对话」行：打开统计页对话视图并选中该对话。
+    private func openConversation(_ summary: ConversationSummary) {
+        appState.pendingStatsConversation = PendingStatsConversation(key: summary.info.key, app: summary.info.app)
+        activateAndOpenMain(tab: .stats)
+    }
+
     // MARK: Refresh
 
     /// 用户点刷新按钮的处理:
@@ -812,5 +822,133 @@ private struct ServiceBlockView: View {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if oneLine.count <= 110 { return oneLine }
         return String(oneLine.prefix(107)) + "..."
+    }
+}
+
+// MARK: - RecentConversationsSection
+//
+// 见 docs/界面布局.md §1.4.6。Popover 底部列出今天有活动的本机对话，条数按设置（3～10，默认 5），
+// 按最近活动倒序；没有时整块不渲染。用量按对话全部时间汇总，与对话详情口径一致。
+
+private struct RecentConversationsSection: View {
+    @Environment(AppState.self) private var appState
+    let onOpen: (ConversationSummary) -> Void
+
+    var body: some View {
+        // 每分钟重算一次，过了零点后换成新一天的对话。日志更新另由聚合器的 revision 驱动。
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            let rows = recentRows(now: context.date)
+            if !rows.isEmpty {
+                VStack(spacing: 0) {
+                    Divider().padding(.horizontal, 16)
+                    sectionHeader
+                    VStack(spacing: 0) {
+                        ForEach(rows) { summary in
+                            RecentConversationRow(summary: summary) { onOpen(summary) }
+                        }
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.bottom, 8)
+                }
+            }
+        }
+    }
+
+    /// Cursor 没有本机会话 ID，不进对话聚合；其余按统计服务开关过滤。
+    private func recentRows(now: Date) -> [ConversationSummary] {
+        let apps = Set(SettingsStore.shared.visibleUsageApps.filter { $0 != .cursor })
+        guard !apps.isEmpty else { return [] }
+        // 起点固定为今天 0 点，同一天内重复渲染直接命中聚合器缓存。
+        return appState.usageService.conversationAggregator.recentConversations(
+            since: Calendar.current.startOfDay(for: now),
+            apps: apps,
+            limit: SettingsStore.shared.recentConversationLimit
+        )
+    }
+
+    /// 辅助模块，标题只用一行 tertiary 小字，不加条数，视觉重点留给上方额度。
+    private var sectionHeader: some View {
+        Text(tr("Recent conversations", "最近对话"))
+            .font(.system(size: 11))
+            .foregroundStyle(.tertiary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .padding(.top, 10)
+            .padding(.bottom, 2)
+    }
+}
+
+private struct RecentConversationRow: View {
+    let summary: ConversationSummary
+    let action: () -> Void
+
+    @State private var hovering = false
+
+    private var hasTitle: Bool { !(summary.info.title ?? "").isEmpty }
+
+    private var title: String {
+        if PrivacyDisplay.isEnabled || hasTitle { return PrivacyDisplay.conversation(summary.info) }
+        return tr("Untitled", "（无标题）")
+    }
+
+    var body: some View {
+        Button(action: action) {
+            // 左侧服务图标、右侧速度都在两行文字之间垂直居中。
+            HStack(alignment: .center, spacing: 8) {
+                ServiceTile(app: summary.info.app, size: 16)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    // 标题接近黑色但不压过上方额度：primary 降一点不透明度，regular 字重。
+                    Text(title)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(hasTitle || PrivacyDisplay.isEnabled
+                            ? AnyShapeStyle(Color.primary.opacity(0.85))
+                            : AnyShapeStyle(.tertiary))
+                        .lineLimit(1)
+
+                    // Tokens、费用、缓存命中率合成一句 tertiary 元信息，常驻显示；命中率不加文字标签。
+                    Text(metaLine)
+                        .font(.system(size: 10.5))
+                        .monospacedDigit()
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                // 数字里只突出速度（secondary .medium）。
+                Text("\(speedValue) t/s")
+                    .font(.system(size: 11.5, weight: .medium))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .fixedSize()
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.primary.opacity(hovering ? 0.04 : 0))
+            )
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+    }
+
+    private var metaLine: String {
+        let tokens = StatsFormatter.compactToken(summary.totals.totalTokens)
+        let cost = StatsFormatter.cost(summary.costs.total)
+        let cache = StatsFormatter.percent(summary.totals.cacheHitRate)
+        return "\(tokens) Tokens · \(cost) · \(cache)"
+    }
+
+    /// 输出速度只取数字，单位 `t/s` 由调用处拼接；口径同 `StatsFormatter.outputSpeed(_:)`（含 Pi 近似值时前缀 ≈）。
+    private var speedValue: String {
+        let timing = summary.totals.timing
+        let includingEstimated = SettingsStore.shared.piEstimatedOutputSpeed
+        guard let speed = timing.outputTokensPerSecond(includingEstimated: includingEstimated), speed.isFinite else {
+            return "—"
+        }
+        let prefix = timing.usesEstimatedSpeed(includingEstimated: includingEstimated) ? "≈" : ""
+        return "\(prefix)\(Int(speed.rounded()))"
     }
 }

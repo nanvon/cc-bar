@@ -296,6 +296,18 @@ final class SettingsStore {
     /// 是否在 Popover 中显示 OpenAI / Anthropic 服务状态圆点
     var showServiceStatus: Bool { didSet { defaults.set(showServiceStatus, forKey: Keys.showServiceStatus) } }
 
+    /// 是否在 Popover 底部显示「最近对话」（今天有活动的本机对话）
+    var showRecentConversations: Bool {
+        didSet { defaults.set(showRecentConversations, forKey: Keys.showRecentConversations) }
+    }
+
+    static let recentConversationLimitRange = 3...10
+
+    /// Popover「最近对话」最多显示几条，3～10，默认 5
+    var recentConversationLimit: Int {
+        didSet { defaults.set(recentConversationLimit, forKey: Keys.recentConversationLimit) }
+    }
+
     // 网络代理。key 与 `NetworkProxy.Keys` 共用：取数在后台直接读 UserDefaults，改完下一次请求即生效。
     var proxyMode: ProxyMode { didSet { defaults.set(proxyMode.rawValue, forKey: NetworkProxy.Keys.mode) } }
     var proxyType: ProxyType { didSet { defaults.set(proxyType.rawValue, forKey: NetworkProxy.Keys.type) } }
@@ -408,6 +420,12 @@ final class SettingsStore {
         cycleIncludesOtherAgents = defaults.object(forKey: Keys.cycleIncludesOtherAgents) as? Bool ?? false
         piEstimatedOutputSpeed = defaults.object(forKey: Keys.piEstimatedOutputSpeed) as? Bool ?? false
         showServiceStatus = defaults.object(forKey: Keys.showServiceStatus) as? Bool ?? true
+        showRecentConversations = defaults.object(forKey: Keys.showRecentConversations) as? Bool ?? true
+        let storedRecentLimit = defaults.object(forKey: Keys.recentConversationLimit) as? Int ?? 5
+        recentConversationLimit = min(
+            max(storedRecentLimit, Self.recentConversationLimitRange.lowerBound),
+            Self.recentConversationLimitRange.upperBound
+        )
         proxyMode = defaults.string(forKey: NetworkProxy.Keys.mode).flatMap(ProxyMode.init(rawValue:)) ?? .system
         proxyType = defaults.string(forKey: NetworkProxy.Keys.type).flatMap(ProxyType.init(rawValue:)) ?? .http
         proxyHost = defaults.string(forKey: NetworkProxy.Keys.host) ?? ""
@@ -794,6 +812,8 @@ final class SettingsStore {
         static let cycleIncludesOtherAgents = "ccbar.settings.cycleIncludesOtherAgents"
         static let piEstimatedOutputSpeed = "ccbar.settings.piEstimatedOutputSpeed"
         static let showServiceStatus = "ccbar.settings.showServiceStatus"
+        static let showRecentConversations = "ccbar.settings.showRecentConversations"
+        static let recentConversationLimit = "ccbar.settings.recentConversationLimit"
         static let launchAtLogin = "ccbar.settings.launchAtLogin"
         static let appLanguage = "ccbar.settings.appLanguage"
         static let privacyMode = "ccbar.settings.privacyMode"

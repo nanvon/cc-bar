@@ -378,6 +378,14 @@ struct StatsNavigationRequest: Equatable {
     let target: Target
 }
 
+/// 从统计页之外（Popover「最近对话」）跳到对话页的请求，经 `AppState.pendingStatsConversation` 传递。
+/// 带上服务，侧栏筛选的是别的服务时先切回全部，否则目标对话不在列表里。
+struct PendingStatsConversation: Equatable {
+    let id = UUID()
+    let key: String
+    let app: UsageApp
+}
+
 private struct CursorHistoryRequest: Hashable {
     let accountID: String
     let from: Date
@@ -466,7 +474,11 @@ struct StatsView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
-        .onAppear { reconcileServiceFilter() }
+        .onAppear {
+            reconcileServiceFilter()
+            consumePendingConversation()
+        }
+        .onChange(of: appState.pendingStatsConversation) { _, _ in consumePendingConversation() }
         .onChange(of: SettingsStore.shared.usageServiceVisibility) { _, _ in
             reconcileServiceFilter()
         }
@@ -568,6 +580,30 @@ struct StatsView: View {
         guard overviewTopHeight > 0, overviewBottomHeight > 0 else { return Self.overviewUsageRowMinHeight }
         let remaining = canvasHeight - 20 - overviewTopHeight - overviewBottomHeight - 12 * 2
         return min(Self.overviewUsageRowMaxHeight, max(Self.overviewUsageRowMinHeight, remaining.rounded(.down)))
+    }
+
+    private func consumePendingConversation() {
+        guard let request = appState.pendingStatsConversation else { return }
+        appState.pendingStatsConversation = nil
+        if serviceFilter != .all && serviceFilter != filter(for: request.app) {
+            serviceFilter = .all
+        }
+        let bounds = range.bounds(customFrom: customFrom, customTo: customTo)
+        let aggregator = appState.usageService.conversationAggregator
+        let rows = aggregator.query(ConversationQueryRequest(
+            revision: aggregator.revision,
+            app: request.app,
+            projectKey: nil,
+            from: bounds.from,
+            to: bounds.to,
+            search: "",
+            sort: .recent
+        )).rows
+        if !rows.contains(where: { $0.id == request.key }) {
+            granularity = .day
+            range = .today
+        }
+        navigate(.conversation(request.key))
     }
 
     private func navigate(_ target: StatsNavigationRequest.Target) {

@@ -303,11 +303,13 @@ struct ConversationStatsView: View {
 
     private func applyNavigation() {
         guard let request = navigation else { return }
+        visibleLimit = 200
         switch request.target {
         case .conversation(let key):
             search = ""
             projectKey = nil
             selection = key
+            includeSelectionInVisibleRows()
         case .conversationsByRank:
             search = ""
             projectKey = nil
@@ -318,7 +320,6 @@ struct ConversationStatsView: View {
         case .projectsList, .project, .unattributed:
             return
         }
-        visibleLimit = 200
         navigation = nil
     }
 
@@ -329,6 +330,7 @@ struct ConversationStatsView: View {
         }
         visibleLimit = 200
         reconcileSelection()
+        includeSelectionInVisibleRows()
     }
 
     /// 没有选中、或选中项已不在列表里时，默认选中列表第一条；列表为空时清空选中。
@@ -336,6 +338,11 @@ struct ConversationStatsView: View {
         let rows = queryResult.rows
         if let selection, rows.contains(where: { $0.id == selection }) { return }
         selection = rows.first?.id
+    }
+
+    private func includeSelectionInVisibleRows() {
+        guard let selection, let index = queryResult.rows.firstIndex(where: { $0.id == selection }) else { return }
+        visibleLimit = max(visibleLimit, index + 1)
     }
 }
 

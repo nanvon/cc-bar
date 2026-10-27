@@ -717,9 +717,16 @@ struct StatsSelectionList<Item: Identifiable, Row: View, Trailing: View>: View w
             .focusEffectDisabled()
             .onKeyPress(.upArrow) { move(-1) }
             .onKeyPress(.downArrow) { move(1) }
+            .onAppear {
+                if let selection { proxy.scrollTo(selection) }
+            }
             .onChange(of: selection) { _, id in
                 guard let id else { return }
                 withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(id) }
+            }
+            .onChange(of: items.map(\.id)) { oldIDs, newIDs in
+                guard let selection, !oldIDs.contains(selection), newIDs.contains(selection) else { return }
+                proxy.scrollTo(selection)
             }
         }
     }

@@ -325,6 +325,53 @@ struct SettingsRootView: View {
         }
 
         PrefsGroup(
+            title: "Popover",
+            chinese: "弹出面板"
+        ) {
+            PrefsRow(
+                label: "Official status dot",
+                chinese: "官方状态圆点"
+            ) {
+                Toggle("", isOn: Binding(get: { settings.showServiceStatus }, set: { settings.showServiceStatus = $0 }))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .tint(.green)
+            }
+            InsetDivider()
+            // 条数下拉与开关同一行：关掉开关时下拉隐藏，看得出两者是一组。
+            PrefsRow(
+                label: "Recent conversations",
+                chinese: "最近对话",
+                desc: "Conversations active today, most recent first.",
+                chineseDesc: "今天有活动的对话，按最近活动排序"
+            ) {
+                HStack(spacing: 8) {
+                    if settings.showRecentConversations {
+                        Picker("", selection: Binding(
+                            get: { settings.recentConversationLimit },
+                            set: { settings.recentConversationLimit = $0 }
+                        )) {
+                            ForEach(Array(SettingsStore.recentConversationLimitRange), id: \.self) { count in
+                                Text(tr("\(count)", "\(count) 条")).tag(count)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .fixedSize()
+                        .help(tr("Maximum shown", "最多显示条数"))
+                    }
+                    Toggle("", isOn: Binding(
+                        get: { settings.showRecentConversations },
+                        set: { settings.showRecentConversations = $0 }
+                    ))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .tint(.green)
+                }
+            }
+        }
+
+        PrefsGroup(
             title: "Floating HUD",
             chinese: "桌面悬浮窗"
         ) {
@@ -344,49 +391,6 @@ struct SettingsRootView: View {
                 .labelsHidden()
                 .toggleStyle(.switch)
                 .tint(.green)
-            }
-        }
-
-        PrefsGroup(
-            title: "Display Details",
-            chinese: "显示细节"
-        ) {
-            PrefsRow(
-                label: "Reset time",
-                chinese: "重置时间"
-            ) {
-                Picker("", selection: Binding(
-                    get: { settings.resetTimeDisplay },
-                    set: { settings.resetTimeDisplay = $0 }
-                )) {
-                    Text(tr("Remaining", "剩余时长")).tag(ResetTimeDisplay.relative)
-                    Text(tr("Exact time", "具体时间")).tag(ResetTimeDisplay.absolute)
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
-                .fixedSize()
-            }
-            InsetDivider()
-            PrefsRow(
-                label: "Official status dot",
-                chinese: "官方状态圆点"
-            ) {
-                Toggle("", isOn: Binding(get: { settings.showServiceStatus }, set: { settings.showServiceStatus = $0 }))
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-                    .tint(.green)
-            }
-            InsetDivider()
-            PrefsRow(
-                label: "Privacy mode",
-                chinese: "隐私模式",
-                desc: "Hide account, project, and conversation names for screenshots. Usage numbers stay visible.",
-                chineseDesc: "隐藏账号、项目和对话名称，用量数据照常显示，便于截图分享"
-            ) {
-                Toggle("", isOn: Binding(get: { settings.privacyMode }, set: { settings.privacyMode = $0 }))
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-                    .tint(.green)
             }
         }
 
@@ -441,6 +445,39 @@ struct SettingsRootView: View {
                 .labelsHidden()
                 .toggleStyle(.switch)
                 .tint(.green)
+            }
+        }
+
+        PrefsGroup(
+            title: "Time and Privacy",
+            chinese: "时间与隐私"
+        ) {
+            PrefsRow(
+                label: "Reset time",
+                chinese: "重置时间"
+            ) {
+                Picker("", selection: Binding(
+                    get: { settings.resetTimeDisplay },
+                    set: { settings.resetTimeDisplay = $0 }
+                )) {
+                    Text(tr("Remaining", "剩余时长")).tag(ResetTimeDisplay.relative)
+                    Text(tr("Exact time", "具体时间")).tag(ResetTimeDisplay.absolute)
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .fixedSize()
+            }
+            InsetDivider()
+            PrefsRow(
+                label: "Privacy mode",
+                chinese: "隐私模式",
+                desc: "Hide account, project, and conversation names for screenshots. Usage numbers stay visible.",
+                chineseDesc: "隐藏账号、项目和对话名称，用量数据照常显示，便于截图分享"
+            ) {
+                Toggle("", isOn: Binding(get: { settings.privacyMode }, set: { settings.privacyMode = $0 }))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .tint(.green)
             }
         }
     }

@@ -13,6 +13,7 @@ final class ConversationAggregator {
     @ObservationIgnored private var cachedDetail: (revision: UInt64, key: String, metric: StatsRankMetric, detail: ConversationDetail)?
     @ObservationIgnored private var cachedOverview: (request: ConversationOverviewRequest, result: ConversationOverviewResult)?
     @ObservationIgnored private var cachedProjectDetail: (request: ProjectDetailRequest, detail: ProjectDetail?)?
+    @ObservationIgnored private var cachedRecent: (request: RecentRequest, rows: [ConversationSummary])?
     /// worktree → 主仓库的只读识别，按路径缓存；只影响统计口径，不改写已保存的项目身份。
     @ObservationIgnored private let worktreeResolver: ProjectWorktreeResolver
     @ObservationIgnored private var identityCache: [IdentityCacheKey: ResolvedIdentity] = [:]
@@ -34,6 +35,13 @@ final class ConversationAggregator {
         let day: Date
         let model: String
         let speed: UsageSpeed
+    }
+
+    private struct RecentRequest: Equatable {
+        let revision: UInt64
+        let since: Date
+        let apps: Set<UsageApp>
+        let limit: Int
     }
 
     private struct ProjectAccumulator {
@@ -280,6 +288,49 @@ final class ConversationAggregator {
         )
         cachedQuery = (request, result)
         return result
+    }
+
+    /// 弹出面板「最近对话」：最近活动不早于 `since` 的对话（子任务 / 续接并入根对话），按最近活动倒序取前 `limit` 条。
+    /// 用量按对话全部时间汇总，与对话详情口径一致；`rangeLastAt` 是最近一次活动时间。
+    /// Popover 传今天 0 点，同一天内命中缓存。
+    func recentConversations(since: Date, apps: Set<UsageApp>, limit: Int) -> [ConversationSummary] {
+        let request = RecentRequest(revision: revision, since: since, apps: apps, limit: limit)
+        if let cachedRecent, cachedRecent.request == request { return cachedRecent.rows }
+
+        let subtasks = subtaskGrouping()
+        var latest: [String: Date] = [:]
+        for bucket in buckets.values where bucket.lastAt >= since && apps.contains(bucket.app) {
+            let key = subtasks.rootKey(bucket.conversationKey)
+            latest[key] = max(latest[key] ?? .distantPast, bucket.lastAt)
+        }
+        let picked = latest
+            .filter { (subtasks.rootInfos[$0.key] ?? infos[$0.key]) != nil }
+            .sorted { $0.value == $1.value ? $0.key < $1.key : $0.value > $1.value }
+            .prefix(limit)
+        let pickedKeys = Set(picked.map(\.key))
+
+        var grouped: [String: [ConversationUsageBucket]] = [:]
+        if !pickedKeys.isEmpty {
+            for bucket in buckets.values {
+                let key = subtasks.rootKey(bucket.conversationKey)
+                if pickedKeys.contains(key) { grouped[key, default: []].append(bucket) }
+            }
+        }
+        let rows: [ConversationSummary] = picked.compactMap { entry in
+            guard let info = subtasks.rootInfos[entry.key] ?? infos[entry.key],
+                  let values = grouped[entry.key] else { return nil }
+            let item = aggregate(values)
+            return ConversationSummary(
+                info: info,
+                totals: item.totals,
+                costs: item.costs,
+                speed: item.speed,
+                models: Set(values.map(\.model)).sorted(),
+                rangeLastAt: entry.value
+            )
+        }
+        cachedRecent = (request, rows)
+        return rows
     }
 
     /// 概览「用量构成 · 项目」「高消耗对话」与项目列表共用的汇总。范围内的桶只遍历一次。
@@ -768,6 +819,7 @@ final class ConversationAggregator {
         cachedDetail = nil
         cachedOverview = nil
         cachedProjectDetail = nil
+        cachedRecent = nil
         cachedSubtaskGrouping = nil
         // 路径状态（worktree 新建 / 删除）可能随扫描变化；身份映射随数据版本一起重算。
         identityCache.removeAll(keepingCapacity: true)
