@@ -184,6 +184,64 @@ final class AntigravityScannerTests: XCTestCase {
 
     // MARK: - 生成行、重试与 step 去重
 
+    func testGUITitleUsesAnnotationsAndUpdatesWithoutDatabaseChanges() throws {
+        let app = root("antigravity")
+        let db = try createDatabase(root: app, id: "gui-conversation")
+        insertGeneration(db, idx: 0, model: "gemini-3.8-flash", usage: PB.usage(input: 100, output: 50), time: baseTime)
+        sqlite3_close(db)
+        let annotation = app.appendingPathComponent("annotations/gui-conversation.pbtxt")
+        try FileManager.default.createDirectory(at: annotation.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(#"title: "GUI 对话标题""#.utf8).write(to: annotation)
+        let first = AntigravityScanner.scan(previous: nil, roots: [app])
+        XCTAssertEqual(first.conversationSeeds.first?.title, "GUI 对话标题")
+        let unchanged = AntigravityScanner.scan(previous: first.newState, roots: [app])
+        XCTAssertTrue(unchanged.entries.isEmpty)
+
+        try Data(#"title: "GUI 中修改后的标题""#.utf8).write(to: annotation)
+        let updated = AntigravityScanner.scan(previous: first.newState, roots: [app])
+        XCTAssertEqual(updated.refreshedConversationIDs, ["gui-conversation"])
+        XCTAssertEqual(updated.conversationSeeds.first?.title, "GUI 中修改后的标题")
+        XCTAssertEqual(sum(updated.entries, \.inputTokens), 100, "标题变化只替换原会话贡献")
+    }
+
+    func testGUIAnnotationTitleSupportsUnicodeAndProtobufEscapes() {
+        XCTAssertEqual(AntigravityScanner.parseAnnotationTitle(Data(#"title: "修复 \"登录\"\n问题""#.utf8)), "修复 \"登录\" 问题")
+        XCTAssertEqual(AntigravityScanner.parseAnnotationTitle(Data(#"title: "\344\270\255\346\226\207""#.utf8)), "中文")
+        XCTAssertNil(AntigravityScanner.parseAnnotationTitle(Data(#"title: "\777""#.utf8)))
+        XCTAssertNil(AntigravityScanner.parseAnnotationTitle(Data(#"archived: true"#.utf8)))
+    }
+
+    func testGUITitleWritesTriggerUsageRefreshWithoutWatchingSQLiteSharedMemory() {
+        let matcher = UsageLogPathMatcher.standard()
+        let app = AntigravityScanner.defaultRoots()[0]
+        for path in ["annotations/conversation.pbtxt", "agyhub_summaries_proto.pb", "conversation_summaries.db-wal"] {
+            XCTAssertTrue(matcher.matches(app.appendingPathComponent(path).path))
+        }
+        XCTAssertFalse(matcher.matches(app.appendingPathComponent("conversation_summaries.db-shm").path))
+        XCTAssertFalse(matcher.matches(app.appendingPathComponent("settings.json").path))
+    }
+
+    func testGUIAutomaticSummaryTitlesDoNotRequireCLIAndOnlyChangedTitleIsRescanned() throws {
+        let app = root("antigravity")
+        for id in ["gui-a", "gui-b"] {
+            let db = try createDatabase(root: app, id: id)
+            insertGeneration(db, idx: 0, usage: PB.usage(input: 10, output: 5), time: baseTime)
+            sqlite3_close(db)
+        }
+        func summary(_ title: String) -> Data {
+            Data(PB.bytes(1, PB.text(1, "gui-a") + PB.bytes(2, PB.text(1, title)))
+                 + PB.bytes(1, PB.text(1, "gui-b") + PB.bytes(2, PB.text(1, "另一个 GUI 对话"))))
+        }
+        let url = app.appendingPathComponent("agyhub_summaries_proto.pb")
+        try summary("GUI 自动标题").write(to: url)
+        let first = AntigravityScanner.scan(previous: nil, roots: [app])
+        XCTAssertEqual(first.conversationSeeds.first { $0.id == "gui-a" }?.title, "GUI 自动标题")
+        try summary("已更新的 GUI 自动标题").write(to: url)
+        let updated = AntigravityScanner.scan(previous: first.newState, roots: [app])
+        XCTAssertEqual(updated.refreshedConversationIDs, ["gui-a"])
+        XCTAssertEqual(updated.conversationSeeds.first?.title, "已更新的 GUI 自动标题")
+    }
+
     func testGenerationRetriesAndStepOnlyRetriesCountOnce() throws {
         let app = root("antigravity-cli")
         let db = try createDatabase(root: app, id: "conv-1")

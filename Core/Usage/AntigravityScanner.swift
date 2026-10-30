@@ -1,5 +1,6 @@
 import Foundation
 import SQLite3
+import CryptoKit
 
 /// 只读 Antigravity（2.0 App / IDE / agy CLI）的本机对话库 `<数据根>/conversations/<对话 ID>.db`。
 ///
@@ -25,6 +26,8 @@ nonisolated enum AntigravityScanner {
         var version = Self.currentVersion
         /// 对话 ID → 库文件路径 → 读取时的签名。
         var conversations: [String: [String: FileSignature]] = [:]
+        /// 标题独立变化时只刷新对应会话；旧状态缺少该字段时兼容。
+        var titleHashes: [String: String]?
     }
 
     nonisolated struct Result: Sendable {
@@ -66,6 +69,13 @@ nonisolated enum AntigravityScanner {
         var result = Result()
         let files = conversationFiles(roots: roots)
 
+        var titles = loadTitles(roots: roots)
+        for id in files.keys {
+            if let title = annotationTitle(id: id, roots: roots) { titles[id] = title }
+        }
+        let titleHashes = Dictionary(uniqueKeysWithValues: files.keys.map { id in
+            (id, SHA256.hash(data: Data((titles[id] ?? "").utf8)).map { String(format: "%02x", $0) }.joined())
+        })
         var changed: [(id: String, signatures: [String: FileSignature], urls: [URL])] = []
         for id in files.keys.sorted() {
             guard let urls = files[id] else { continue }
@@ -74,8 +84,9 @@ nonisolated enum AntigravityScanner {
                 if let signature = signature(of: url) { signatures[url.path] = signature }
             }
             let old = baseline?.conversations[id] ?? [:]
-            // 只删除了某个副本时不重读：其余副本未变，保留旧贡献。
-            guard signatures.contains(where: { old[$0.key] != $0.value }) else { continue }
+            // 删除了副本但其余副本未变化时保留旧贡献；标题单独改变时仍刷新。
+            guard signatures.contains(where: { old[$0.key] != $0.value })
+                    || baseline?.titleHashes?[id] != titleHashes[id] else { continue }
             changed.append((id, signatures, urls))
         }
         guard !changed.isEmpty else {
@@ -84,7 +95,6 @@ nonisolated enum AntigravityScanner {
             return result
         }
 
-        let titles = loadTitles(roots: roots)
         var projectResolver = ConversationProjectResolver()
         for (index, item) in changed.enumerated() {
             onProgress?(ScanProgress(app: .antigravity, filesCompleted: index,
@@ -111,6 +121,8 @@ nonisolated enum AntigravityScanner {
             }
             // 只记读成功的副本：读失败的副本下一轮仍算变化，会重试。
             state.conversations[item.id] = item.signatures.filter { read.readPaths.contains($0.key) }
+            if state.titleHashes == nil { state.titleHashes = [:] }
+            state.titleHashes?[item.id] = titleHashes[item.id]
         }
         result.newState = state
         result.isComplete = true
@@ -153,10 +165,21 @@ nonisolated enum AntigravityScanner {
         )
     }
 
-    /// 只有 CLI 写 `conversation_summaries.db`；读不出时没有标题，不影响用量。
+    /// 有标题库时兼容读取；GUI 的权威自定义标题优先取 annotations/<id>.pbtxt。
     private static func loadTitles(roots: [URL]) -> [String: String] {
         var titles: [String: String] = [:]
         for root in roots {
+            // GUI 自动标题：SummariesState 的 map<string, CascadeTrajectorySummary>。
+            let summary = root.appendingPathComponent("agyhub_summaries_proto.pb")
+            if let size = (try? FileManager.default.attributesOfItem(atPath: summary.path))?[.size] as? NSNumber,
+               size.intValue <= 32 * 1_048_576, let data = try? Data(contentsOf: summary),
+               let state = Proto.fields(Array(data)) {
+                for bytes in state.allBytes(1) {
+                    guard let entry = Proto.fields(bytes), let id = entry.text(1), titles[id] == nil,
+                          let title = ConversationTitleIndex.clean(entry.message(2)?.text(1)) else { continue }
+                    titles[id] = title
+                }
+            }
             let url = root.appendingPathComponent("conversation_summaries.db", isDirectory: false)
             guard FileManager.default.fileExists(atPath: url.path) else { continue }
             try? withDatabase(url) { db in
@@ -170,6 +193,55 @@ nonisolated enum AntigravityScanner {
             }
         }
         return titles
+    }
+
+    private static func annotationTitle(id: String, roots: [URL]) -> String? {
+        for root in roots {
+            let url = root.appendingPathComponent("annotations/\(id).pbtxt")
+            guard let size = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? NSNumber,
+                  size.intValue <= 1_048_576, let data = try? Data(contentsOf: url),
+                  let title = parseAnnotationTitle(data) else { continue }
+            return title
+        }
+        return nil
+    }
+
+    /// Protobuf text string 与 JSON 的常规转义兼容，另外允许 UTF-8 字节的八进制转义。
+    static func parseAnnotationTitle(_ data: Data) -> String? {
+        guard let text = String(data: data, encoding: .utf8),
+              let expression = try? NSRegularExpression(pattern: #"(?m)^\s*title\s*:\s*\"((?:\\.|[^\"\\])*)\""#),
+              let match = expression.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let range = Range(match.range(at: 1), in: text) else { return nil }
+        let quoted = "\"" + text[range] + "\""
+        if let value = try? JSONDecoder().decode(String.self, from: Data(quoted.utf8)) {
+            return ConversationTitleIndex.clean(value)
+        }
+        let bytes = Array(text[range].utf8)
+        var result: [UInt8] = []
+        var index = 0
+        let escapes: [UInt8: UInt8] = [97: 7, 98: 8, 102: 12, 110: 10, 114: 13, 116: 9, 118: 11,
+                                      92: 92, 34: 34, 39: 39, 63: 63]
+        while index < bytes.count {
+            let value = bytes[index]
+            index += 1
+            guard value == 92 else { result.append(value); continue }
+            guard index < bytes.count else { return nil }
+            if (48...55).contains(bytes[index]) {
+                var octal = 0
+                var count = 0
+                while index < bytes.count, count < 3, (48...55).contains(bytes[index]) {
+                    octal = octal * 8 + Int(bytes[index] - 48)
+                    index += 1
+                    count += 1
+                }
+                guard octal <= 255 else { return nil }
+                result.append(UInt8(octal))
+            } else if let escaped = escapes[bytes[index]] {
+                result.append(escaped)
+                index += 1
+            } else { return nil }
+        }
+        return String(bytes: result, encoding: .utf8).flatMap(ConversationTitleIndex.clean)
     }
 
     // MARK: - 读取

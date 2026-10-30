@@ -49,13 +49,17 @@ nonisolated struct UsageLogPathMatcher: Sendable {
 
     static func standard(roots: UsageScanRoots = .production) -> UsageLogPathMatcher {
         let directories = [roots.claudeRoot] + roots.codexRoots + [roots.piRoot, roots.dshRoot]
+            + roots.antigravityRoots.map { $0.appendingPathComponent("annotations", isDirectory: true) }
         // 只认数据库本体和 WAL；`-shm` 读者也会写，不代表有新数据。
         let database = roots.opencodeDatabaseURL
         let files = [
             database,
             database.deletingLastPathComponent()
                 .appendingPathComponent(database.lastPathComponent + "-wal", isDirectory: false),
-        ]
+        ] + roots.antigravityRoots.flatMap { root in
+            ["agyhub_summaries_proto.pb", "conversation_summaries.db", "conversation_summaries.db-wal"]
+                .map { root.appendingPathComponent($0) }
+        }
         // FSEvents 上报的是解析过符号链接的真实路径，两种写法都收下。
         func variants(_ urls: [URL]) -> [String] {
             Array(Set(urls.flatMap { [$0.path, $0.resolvingSymlinksInPath().path] }))

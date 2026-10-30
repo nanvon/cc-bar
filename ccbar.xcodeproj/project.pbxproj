@@ -145,6 +145,7 @@
 		49C1B31000000000000FAABB /* PiJSONLScannerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B31000000000000FAAAA /* PiJSONLScannerTests.swift */; };
 		49C1B91000000000000FAABB /* OpencodeScannerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B91000000000000FAAAA /* OpencodeScannerTests.swift */; };
 		A6A1B90000000000000FBABB /* AntigravityScannerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6A1B90000000000000FBAAA /* AntigravityScannerTests.swift */; };
+		A6130000000000000001AABB /* AntigravityCredentialsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6130000000000000001AAAA /* AntigravityCredentialsTests.swift */; };
 		49C1BF0A000000000001AABB /* ConversationProjectResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BF0A000000000001AAAA /* ConversationProjectResolverTests.swift */; };
 		49C1BB03000000000001AABB /* ProjectUsageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BB03000000000001AAAA /* ProjectUsageTests.swift */; };
 		49C1B3F3000000000001AABB /* codex-fast-scan.jsonl in Resources */ = {isa = PBXBuildFile; fileRef = 49C1B3F0000000000001AAAA /* codex-fast-scan.jsonl */; };
@@ -306,6 +307,7 @@
 		49C1B31000000000000FAAAA /* PiJSONLScannerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiJSONLScannerTests.swift; sourceTree = "<group>"; };
 		49C1B91000000000000FAAAA /* OpencodeScannerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpencodeScannerTests.swift; sourceTree = "<group>"; };
 		A6A1B90000000000000FBAAA /* AntigravityScannerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AntigravityScannerTests.swift; sourceTree = "<group>"; };
+		A6130000000000000001AAAA /* AntigravityCredentialsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AntigravityCredentialsTests.swift; sourceTree = "<group>"; };
 		49C1BF0A000000000001AAAA /* ConversationProjectResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationProjectResolverTests.swift; sourceTree = "<group>"; };
 		49C1BB03000000000001AAAA /* ProjectUsageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectUsageTests.swift; sourceTree = "<group>"; };
 		49C1B301000000000001AAAA /* CCBarTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = CCBarTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -605,6 +607,7 @@
 				49C1B31000000000000FAAAA /* PiJSONLScannerTests.swift */,
 				49C1B91000000000000FAAAA /* OpencodeScannerTests.swift */,
 				A6A1B90000000000000FBAAA /* AntigravityScannerTests.swift */,
+				A6130000000000000001AAAA /* AntigravityCredentialsTests.swift */,
 				49C1BE08000000000001AAAA /* DshZstdFrameScannerTests.swift */,
 				49C1BE0D000000000001AAAA /* DshSessionScannerTests.swift */,
 				49C1BE0E000000000001AAAA /* DshTestFixtures.swift */,
@@ -899,6 +902,7 @@
 				49C1B31000000000000FAABB /* PiJSONLScannerTests.swift in Sources */,
 				49C1B91000000000000FAABB /* OpencodeScannerTests.swift in Sources */,
 				A6A1B90000000000000FBABB /* AntigravityScannerTests.swift in Sources */,
+				A6130000000000000001AABB /* AntigravityCredentialsTests.swift in Sources */,
 				49C1BE0B000000000001AAAA /* DshZstdFrameScannerTests.swift in Sources */,
 				49C1BE10000000000001AAAA /* DshSessionScannerTests.swift in Sources */,
 				49C1BE11000000000001AAAA /* DshTestFixtures.swift in Sources */,

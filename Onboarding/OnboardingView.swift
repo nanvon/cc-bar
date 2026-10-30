@@ -191,7 +191,8 @@ private struct DetectAccountsStep: View {
                     subtitle: "Google",
                     plan: appState.antigravityQuota?.planType ?? appState.antigravityAccount?.planType,
                     email: appState.antigravityAccount?.email,
-                    source: "~/.gemini/jetski-standalone-oauth-token",
+                    source: appState.antigravityAccount?.source == .keychain
+                        ? tr("System Keychain", "系统钥匙串") : "~/.gemini",
                     tint: .antigravityAccent,
                     logoName: "antigravity",
                     fallback: "A",

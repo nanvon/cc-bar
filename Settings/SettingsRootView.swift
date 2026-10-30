@@ -1392,8 +1392,8 @@ struct SettingsRootView: View {
             tr("Quota: reads the sign-in from Claude Code CLI or Claude Desktop and asks Anthropic for remaining quota. Read-only; your sign-in is not changed.",
                "额度：读取 Claude Code CLI 或 Claude 桌面版的登录状态，向 Anthropic 查询剩余额度。只读取，不改动登录。")
         case .antigravity:
-            tr("Quota: reads the sign-in in ~/.gemini (agy CLI / IDE plugin) and asks Google for remaining quota. Read-only; your sign-in is not changed.",
-               "额度：读取 ~/.gemini 中的登录状态（agy CLI / IDE 插件登录），向 Google 查询剩余额度。只读取，不改动登录。")
+            tr("Quota: reuses your Antigravity app sign-in to query Google. No agy required. Renewed tokens are saved in CCBar’s own Keychain; the app’s sign-in is read-only. Legacy sign-in files remain supported.",
+               "额度：复用 Antigravity 桌面端登录向 Google 查询，无需 agy。续期令牌存 CCBar 自己的钥匙串，不改动桌面端登录；兼容旧凭据文件。")
         case .cursor:
             tr("Quota: reads the sign-in from the Cursor app (decrypted with the Cursor Safe Storage key in Keychain when Cursor encrypts it) and asks Cursor for remaining quota. Read-only; your sign-in is not changed.",
                "额度：读取 Cursor 应用的登录状态（Cursor 加密保存时，用钥匙串里的 Cursor Safe Storage 密钥解密），向 Cursor 查询剩余额度。只读取，不改动登录。")
@@ -1414,7 +1414,7 @@ struct SettingsRootView: View {
         case .claude:
             tr("Sign in to Claude Code CLI or Claude Desktop to detect it", "登录 Claude Code CLI 或 Claude 桌面版后自动识别")
         case .antigravity:
-            tr("Sign in to Antigravity (agy CLI or IDE plugin) to detect it", "登录 Antigravity（agy CLI 或 IDE 插件）后自动识别")
+            tr("Sign in to the Antigravity app to detect it", "登录 Antigravity 桌面端后自动识别")
         case .cursor:
             tr("Sign in to the Cursor app to detect it", "登录 Cursor 应用后自动识别")
         case .commandCode:

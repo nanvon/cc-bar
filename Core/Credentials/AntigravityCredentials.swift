@@ -1,16 +1,12 @@
 import CryptoKit
 import Foundation
+import Security
+import LocalAuthentication
 
 /// Antigravity（Google Antigravity / Gemini Code Assist）凭据管理。
 ///
-/// 与旧版 `ps` / `lsof` 本地端口探测不同，本版采用 **OpenUsage 模式**：
-/// 读取本机 `~/.gemini/jetski-standalone-oauth-token`（优先，Antigravity 生态：
-/// agy CLI / IDE 插件登录即写此文件），`~/.gemini/oauth_creds.json` 仅兜底。
-/// 直连 Google Cloud Code 配额端点。无需打开 VSCode / Antigravity App 即可刷新额度。
-///
-/// 产品定位：cc-bar 的 Antigravity 额度 = agy 生态登录的账号（与 Codex / Claude 同构）。
-/// 旧版 Gemini CLI 已被 Google 弃用（登录即被拒），oauth_creds.json 不再是 Antigravity
-/// 的凭据真源，仅作为 jetski 不存在时的兜底。
+/// 优先复用桌面端 / agy 共用的系统钥匙串，兼容旧版凭据文件。
+/// 仅安装并登录 GUI 即可直查云端额度，不要求安装或运行 agy。
 ///
 /// 详细架构见 `docs/草案-Antigravity支持-设计方案.md` §1。
 nonisolated struct AntigravityAccount: Sendable, Equatable {
@@ -22,13 +18,29 @@ nonisolated struct AntigravityAccount: Sendable, Equatable {
     /// `oauth_creds.json` 的 `expiry_date`（毫秒）或 jetski 的 `expiry`（ISO8601）。
     var expiryDate: Date?
     var idToken: String?
-    /// 凭据来源，便于写回时定位文件。
+    /// 原始登录凭据的指纹；续期不会改变它，GUI 切号 / 退出后必须重新识别。
+    var credentialSignature: String?
+    /// 凭据来源，避免把 GUI 的令牌写进旧 CLI 文件。
     var source: CredentialFileSource = .jetski
+
+    var refreshKey: String {
+        let identity = credentialSignature ?? refreshToken ?? accessToken ?? ""
+        return source.rawValue + ":" + SHA256.hash(data: Data(identity.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    func belongsToSameLogin(as other: AntigravityAccount) -> Bool {
+        guard source == other.source else { return false }
+        if let signature = credentialSignature, signature == other.credentialSignature { return true }
+        if let a = refreshToken, let b = other.refreshToken { return a == b }
+        return accessToken != nil && accessToken == other.accessToken
+    }
 }
 
 nonisolated enum CredentialFileSource: String, Sendable, Equatable {
     case oauthCreds
     case jetski
+    case cliToken
+    case keychain
 }
 
 nonisolated enum AntigravityCredentials {
@@ -45,12 +57,20 @@ nonisolated enum AntigravityCredentials {
     ///
     /// `client_secret` **不在源码硬编码**（开源仓库 + 分发的二进制不应携带官方客户端密钥）：
     /// 刷新时按需从本机已安装的官方组件中提取——Gemini CLI（npm 包 bundle）与
-    /// Antigravity App（`~/.gemini/bin/agy` 二进制）各自内置了自己的 client secret，
+    /// Antigravity 桌面端 / agy 各自内置了自己的 client secret，
     /// 这些 secret 属于官方客户端、对安装者公开，从本机读取等于“读取自己机器上的官方组件”，
     /// 且永远与官方客户端同步，不受 Google 轮换影响。
-    private static func extractClientSecretsFromLocalTools() -> [String: String] {
+    static func extractClientSecretsFromLocalTools(
+        homeDirectory home: URL = FileManager.default.homeDirectoryForCurrentUser,
+        applicationRoots: [URL]? = nil
+    ) -> [String: String] {
         var result: [String: String] = [:]
-        let home = FileManager.default.homeDirectoryForCurrentUser
+
+        // GUI 自带 OAuth 配置；不依赖另装 Gemini CLI / agy。只读，不启动桌面端。
+        for path in desktopOAuthArtifacts(homeDirectory: home, applicationRoots: applicationRoots) {
+            guard let data = try? Data(contentsOf: path, options: [.mappedIfSafe]) else { continue }
+            extractSecrets(fromData: data, into: &result)
+        }
 
         // 1. Gemini CLI：npm 包 bundle（~/.gemini/… 或 /opt/homebrew/… 或 /usr/local/…）
         let candidateDirs: [URL] = [
@@ -80,6 +100,34 @@ nonisolated enum AntigravityCredentials {
         return result
     }
 
+    static func desktopOAuthArtifacts(homeDirectory: URL, applicationRoots: [URL]? = nil) -> [URL] {
+        let roots = applicationRoots ?? [URL(fileURLWithPath: "/Applications", isDirectory: true),
+                                         homeDirectory.appendingPathComponent("Applications", isDirectory: true)]
+        let relativePaths = [
+            "Contents/Resources/bin/language_server",
+            "Contents/Resources/bin/language_server_macos",
+            "Contents/Resources/app/extensions/antigravity/bin/language_server_macos_arm",
+            "Contents/Resources/app/extensions/antigravity/bin/language_server_macos_x64",
+            "Contents/Resources/app/extensions/antigravity/bin/language_server_macos",
+            "Contents/Resources/app/out/main.js",
+            "Contents/MacOS/Gemini",
+        ]
+        var bundles: [URL] = []
+        for root in roots {
+            bundles.append(root.appendingPathComponent("Antigravity.app", isDirectory: true))
+            for url in (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []
+            where url.pathExtension == "app" {
+                if let id = Bundle(url: url)?.bundleIdentifier,
+                   ["com.google.antigravity", "com.google.antigravity-ide", "com.google.GeminiMacOS"].contains(id) {
+                    bundles.append(url)
+                }
+            }
+        }
+        var seen = Set<String>()
+        return bundles.filter { seen.insert($0.standardizedFileURL.path).inserted }
+            .flatMap { bundle in relativePaths.map { bundle.appendingPathComponent($0) } }
+    }
+
     /// 从二进制数据中按块解码 ASCII 段并扫描 secret。
     private static func extractSecrets(fromData data: Data, into result: inout [String: String]) {
         if let text = String(data: data, encoding: .utf8) {
@@ -92,83 +140,47 @@ nonisolated enum AntigravityCredentials {
         extractSecrets(from: text, into: &result)
     }
 
-    /// 从文本中扫描 `GOCSPX-` 开头的 OAuth client secret 及其邻近的 client ID，写入 result。
-    /// 注意：bundle 中 client ID 与 secret 通常相邻出现（同一变量赋值对），
-    /// 二进制中则可能相距很远且多个 secret 粘连。策略：
-    /// 1. 正则匹配 `GOCSPX-` 打头的 token，若同一 match 内出现多次 `GOCSPX` 则拆分；
-    /// 2. 近距（512 字符内）优先就近配对；
-    /// 3. 剩余按出现顺序平摊（适用于二进制分离布局）。
+    /// 官方 OAuth secret 是固定长度字符串；二进制字符串池不保证 ID 与 secret 相邻。
+    /// 近邻配对只作为优先候选，所有 secret 都保留，刷新时逐一核实，不按字符串池顺序硬配对。
     private static func extractSecrets(from text: String, into result: inout [String: String]) {
         let idPattern = #"[0-9]{10,}-[a-z0-9]+\.apps\.googleusercontent\.com"#
-        let secretPattern = #"GOCSPX-[A-Za-z0-9_-]{20,}"#
-        guard let idRegex = try? NSRegularExpression(pattern: idPattern),
-              let secretRegex = try? NSRegularExpression(pattern: secretPattern) else { return }
+        let secretPattern = #"GOCSPX-[A-Za-z0-9_-]{28}"#
+        guard let ids = try? NSRegularExpression(pattern: idPattern),
+              let secrets = try? NSRegularExpression(pattern: secretPattern) else { return }
         let ns = text as NSString
         let range = NSRange(location: 0, length: ns.length)
-
-        var idRanges: [(loc: Int, val: String)] = []
-        idRegex.enumerateMatches(in: text, range: range) { m, _, _ in
-            guard let m, m.range.location != NSNotFound else { return }
-            idRanges.append((m.range.location, ns.substring(with: m.range)))
-        }
-
-        // 拆分裂：一个 match 可能含多个粘连的 secret（如 "K58F..9YQW..https"）
-        var secrets: [(loc: Int, val: String)] = []
-        secretRegex.enumerateMatches(in: text, range: range) { m, _, _ in
-            guard let m, m.range.location != NSNotFound else { return }
-            let matched = ns.substring(with: m.range)
-            let parts = matched.components(separatedBy: "GOCSPX-")
-            var offset = m.range.location
-            // 每个分片（除第一个空串）本身以 "GOCSPX-" 开头；offset 必须按真实字节位置累进，
-            // 否则后续分片的配对定位漂移，导致多个 secret 都就近错配到同一个 client id。
-            var consumed = 0
-            for part in parts.dropFirst() {
-                offset = m.range.location + consumed + 7 // 跳过本次 "GOCSPX-" 前缀
-                let token = "GOCSPX-" + part
-                secrets.append((offset, token))
-                consumed += 7 + part.count
+        let idMatches = ids.matches(in: text, range: range)
+        for match in secrets.matches(in: text, range: range) {
+            let secret = ns.substring(with: match.range)
+            let key = SHA256.hash(data: Data(secret.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
+            result["candidate-" + key] = secret
+            if let nearest = idMatches.min(by: {
+                abs($0.range.location - match.range.location) < abs($1.range.location - match.range.location)
+            }), abs(nearest.range.location - match.range.location) < 512 {
+                result[ns.substring(with: nearest.range)] = secret
             }
-        }
-        let pairingWindow = 512
-        var usedIDs = Set<Int>()
-        var usedSecrets = Set<Int>()
-        for (sLoc, secret) in secrets {
-            // 截掉粘连的尾缀（如 "...ZtsXhttps"）
-            let clean = secret.split(separator: "http", maxSplits: 1).first.map(String.init) ?? secret
-            var best: Int?
-            var bestDist = Int.max
-            for (idx, (loc, _)) in idRanges.enumerated() where !usedIDs.contains(idx) {
-                let dist = abs(loc - sLoc)
-                if dist < pairingWindow && dist < bestDist {
-                    bestDist = dist
-                    best = idx
-                }
-            }
-            if let best {
-                result[idRanges[best].val] = clean
-                usedIDs.insert(best)
-                usedSecrets.insert(sLoc)
-            }
-        }
-        // 窗口内未配对的 secret：保留在全集里（返回给调用方做多候选遍历）。
-        // 不再「平摊」到远处 client id——二进制里 secret 与 id 可能相距甚远（>512 字符），
-        // 按顺序硬配对会把 s1/s2 错配给错误的 client，导致刷新 401/unauthorized。
-        // 调用方已对所有内置 clientID 依次尝试（含无 secret 兜底），
-        // 这里只需保证每个 secret 都保留。
-        for (sLoc, secret) in secrets where !usedSecrets.contains(sLoc) {
-            let clean = secret.split(separator: "http", maxSplits: 1).first.map(String.init) ?? secret
-            result["unmatched-\(sLoc)"] = clean
         }
     }
 
-    /// 优先读取 `~/.gemini/jetski-standalone-oauth-token`（Antigravity 生态真源），
-    /// `~/.gemini/oauth_creds.json` 仅作兜底（旧 Gemini CLI 遗留，已弃用）。
+    /// 钥匙串是 GUI / 新版 agy 的当前登录态，优先于可能已过期的遗留文件。
+    /// 钥匙串存在但读不出时直接报错，不借用另一份可能属于旧账号的登录。
     /// 未登录时返回 `nil`，由调用方展示“未配置/未登录”引导。
     nonisolated static func load(
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        keychainLoader: () -> CLITokenLoad = { loadCLITokenFromKeychain() }
     ) throws -> AntigravityAccount? {
+        switch keychainLoader() {
+        case .found(let token): return token.account
+        case .unreadable(let error): throw error
+        case .missing: break
+        }
         if let account = try loadJetskiToken(homeDirectory: homeDirectory) {
             return account
+        }
+        switch loadCLITokenFile(homeDirectory: homeDirectory) {
+        case .found(let token): return token.account
+        case .unreadable(let error): throw error
+        case .missing: break
         }
         if let account = try loadOAuthCreds(homeDirectory: homeDirectory) {
             return account
@@ -200,6 +212,17 @@ nonisolated enum AntigravityCredentials {
         var expiryDate: Date?
         /// 凭据的指纹，用来判断用户是否重新登录过（agy 自己续期后也会变）。
         var signature: String
+        var source: CredentialFileSource = .cliToken
+        var idToken: String?
+
+        var account: AntigravityAccount {
+            let claims = idToken.flatMap { JWT.decodePayload($0) }
+            return AntigravityAccount(
+                email: claims?["email"] as? String, displayName: claims?["name"] as? String,
+                accessToken: accessToken, refreshToken: refreshToken, expiryDate: expiryDate,
+                idToken: idToken, credentialSignature: signature, source: source
+            )
+        }
 
         /// access_token 是否还在有效期内（留 5 分钟余量）。
         var isValid: Bool { accessToken != nil && !AntigravityCredentials.isExpired(expiryDate: expiryDate) }
@@ -213,22 +236,33 @@ nonisolated enum AntigravityCredentials {
         case unreadable(QuotaError)
     }
 
-    /// 读取 agy 的登录凭据：凭据文件优先，文件不存在时读钥匙串。
+    /// 读取 GUI / agy 共用的登录凭据：钥匙串优先，缺失时读旧 CLI 文件。
     /// 钥匙串与 Claude 凭据一样经 `/usr/bin/security` 读取。agy 也是经 `security` 写入的，条目只信任 `security`，
     /// 所以读取不弹授权框，cc-bar 升级也不受影响；agy 改变写入方式时才可能询问。会阻塞，调用方放到后台执行。
     nonisolated static func loadCLIToken(
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        keychainLoader: () -> CLITokenLoad = { loadCLITokenFromKeychain() }
     ) -> CLITokenLoad {
+        switch keychainLoader() {
+        case .missing: return loadCLITokenFile(homeDirectory: homeDirectory)
+        case let result: return result
+        }
+    }
+
+    private static func loadCLITokenFile(homeDirectory: URL) -> CLITokenLoad {
         let url = cliTokenURL(homeDirectory: homeDirectory)
-        if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path) {
+        if FileManager.default.fileExists(atPath: url.path) {
             guard let data = try? Data(contentsOf: url),
                   let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
             else { return .unreadable(.decode("agy token file unreadable")) }
-            let modified = (attrs[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
-            let size = (attrs[.size] as? NSNumber)?.int64Value ?? 0
-            return .found(cliToken(root: root, signature: "\(modified)-\(size)"))
+            let signature = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+            let token = cliToken(root: root, signature: signature, source: .cliToken)
+            guard token.accessToken != nil || token.refreshToken != nil else {
+                return .unreadable(.decode("Antigravity token file has no OAuth token"))
+            }
+            return .found(token)
         }
-        return loadCLITokenFromKeychain()
+        return .missing
     }
 
     nonisolated private static func loadCLITokenFromKeychain() -> CLITokenLoad {
@@ -253,7 +287,11 @@ nonisolated enum AntigravityCredentials {
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             return .unreadable(.transport("agy keychain read failed: exit \(proc.terminationStatus) \(msg)"))
         }
-        var text = String(data: out, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return parseKeychainToken(out)
+    }
+
+    static func parseKeychainToken(_ data: Data) -> CLITokenLoad {
+        var text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let prefix = "go-keyring-base64:"
         if text.hasPrefix(prefix) {
             text = Data(base64Encoded: String(text.dropFirst(prefix.count)))
@@ -263,16 +301,21 @@ nonisolated enum AntigravityCredentials {
             return .unreadable(.decode("agy keychain token unreadable"))
         }
         let digest = SHA256.hash(data: Data(text.utf8)).prefix(16).map { String(format: "%02x", $0) }.joined()
-        return .found(cliToken(root: root, signature: "keychain-\(digest)"))
+        let token = cliToken(root: root, signature: "keychain-\(digest)", source: .keychain)
+        guard token.accessToken != nil || token.refreshToken != nil else {
+            return .unreadable(.decode("Antigravity keychain has no OAuth token"))
+        }
+        return .found(token)
     }
 
-    nonisolated private static func cliToken(root: [String: Any], signature: String) -> CLIToken {
+    nonisolated private static func cliToken(root: [String: Any], signature: String, source: CredentialFileSource) -> CLIToken {
         let token = root["token"] as? [String: Any] ?? root
         return CLIToken(
-            accessToken: nonEmpty(token["access_token"] as? String),
-            refreshToken: nonEmpty(token["refresh_token"] as? String),
-            expiryDate: (token["expiry"] as? String).flatMap { parseISO8601($0) } ?? parseExpiryDate(token["expiry_date"]),
-            signature: signature
+            accessToken: nonEmpty(token["access_token"] as? String ?? token["accessToken"] as? String),
+            refreshToken: nonEmpty(token["refresh_token"] as? String ?? token["refreshToken"] as? String),
+            expiryDate: parseExpiryDate(token["expiry"] ?? token["expiry_date"] ?? token["expires_at"] ?? token["expiresAt"]),
+            signature: signature, source: source,
+            idToken: nonEmpty(token["id_token"] as? String ?? token["idToken"] as? String)
         )
     }
 
@@ -338,7 +381,7 @@ nonisolated enum AntigravityCredentials {
             if (200..<300).contains(http.statusCode) { return .valid }
             let msg = String(data: data, encoding: .utf8) ?? ""
             let asHTTP = QuotaError.http(http.statusCode, msg)
-            if asHTTP.looksLikeInterceptedResponse || http.statusCode >= 500 {
+            if asHTTP.looksLikeInterceptedResponse || http.statusCode >= 500 || http.statusCode == 429 {
                 return .unknown(asHTTP)
             }
             // client 校验在 grant 校验之前：secret 不对时是 invalid_client，换下一个；
@@ -422,24 +465,41 @@ nonisolated enum AntigravityCredentials {
         return expiryDate.timeIntervalSinceNow < refreshSkew
     }
 
-    /// 若 `access_token` 临近过期则通过 Google OAuth 静默刷新并回写本地文件。
+    /// GUI / agy 原始登录只读，续期结果保存在 CCBar 自己的钥匙串并绑定原始凭据指纹。
+    /// 旧 jetski / oauth_creds 保留原有回写行为。所有 I/O 可注入，回归测试不访问用户登录。
+    struct RefreshEnvironment: Sendable {
+        var load: @Sendable () throws -> AntigravityAccount?
+        var secrets: @Sendable () -> [String: String]
+        var send: @Sendable (URLRequest) async throws -> (Data, URLResponse)
+        var cached: @Sendable (String) -> RefreshedToken?
+        var save: @Sendable (RefreshedToken, AntigravityAccount) throws -> Void
+
+        static let live = RefreshEnvironment(
+            load: { try AntigravityCredentials.load() },
+            secrets: { extractClientSecretsFromLocalTools() },
+            send: { try await NetworkProxy.data(for: $0) },
+            cached: { loadRefreshCache(key: $0) },
+            save: { token, account in try persistRefreshedToken(token, account: account) }
+        )
+    }
+
+    /// 若 `access_token` 临近过期则通过 Google OAuth 静默刷新。
     /// 返回当前可用的 `access_token`。
     nonisolated static func ensureFreshAccessToken(
-        account: inout AntigravityAccount
+        account: inout AntigravityAccount,
+        forceRefresh: Bool = false,
+        environment: RefreshEnvironment = .live
     ) async -> Result<String, QuotaError> {
-        guard let current = account.accessToken, !current.isEmpty else {
-            return .failure(.missingToken)
-        }
-        if !isExpired(expiryDate: account.expiryDate) {
+        if let current = account.accessToken, !current.isEmpty,
+           !forceRefresh, !isExpired(expiryDate: account.expiryDate) {
             return .success(current)
         }
-        guard let refreshToken = account.refreshToken, !refreshToken.isEmpty else {
+        guard account.refreshToken != nil else {
             return .failure(.tokenRefreshFailed("no refresh_token for antigravity"))
         }
         do {
             let refreshed = try await Coordinator.shared.refresh(
-                refreshToken: refreshToken,
-                source: account.source
+                account: account, forceRefresh: forceRefresh, environment: environment
             )
             account.accessToken = refreshed.accessToken
             account.expiryDate = refreshed.expiryDate
@@ -461,13 +521,13 @@ nonisolated enum AntigravityCredentials {
         static let shared = Coordinator()
         private var inFlight: [String: Task<RefreshedToken, Error>] = [:]
 
-        func refresh(refreshToken: String, source: CredentialFileSource) async throws -> RefreshedToken {
-            let key = source.rawValue
+        func refresh(account: AntigravityAccount, forceRefresh: Bool, environment: RefreshEnvironment) async throws -> RefreshedToken {
+            let key = account.refreshKey
             if let task = inFlight[key] {
                 return try await task.value
             }
             let task = Task {
-                try await AntigravityCredentials.performRefresh(refreshToken: refreshToken, source: source)
+                try await AntigravityCredentials.performRefresh(account: account, forceRefresh: forceRefresh, environment: environment)
             }
             inFlight[key] = task
             defer { inFlight[key] = nil }
@@ -475,7 +535,7 @@ nonisolated enum AntigravityCredentials {
         }
     }
 
-    private struct RefreshedToken: Sendable {
+    struct RefreshedToken: Sendable, Codable {
         var accessToken: String
         var refreshToken: String?
         var expiryDate: Date?
@@ -484,21 +544,24 @@ nonisolated enum AntigravityCredentials {
     // MARK: - Network refresh
 
     nonisolated private static func performRefresh(
-        refreshToken: String,
-        source: CredentialFileSource
+        account: AntigravityAccount, forceRefresh: Bool, environment: RefreshEnvironment
     ) async throws -> RefreshedToken {
-        // 重读存储：Google CLI 可能已刷新过
-        do {
-            if let onDisk = try load(homeDirectory: FileManager.default.homeDirectoryForCurrentUser),
-               let token = onDisk.accessToken, !token.isEmpty,
-               let expiry = onDisk.expiryDate, !isExpired(expiryDate: expiry) {
-                return RefreshedToken(accessToken: token, refreshToken: onDisk.refreshToken, expiryDate: expiry)
-            }
-        } catch {}
+        let current = try await Task.detached(priority: .utility) { try environment.load() }.value
+        guard let current, account.belongsToSameLogin(as: current) else {
+            throw QuotaError.tokenRefreshFailed("Antigravity login changed during refresh")
+        }
+        if let token = current.accessToken, !isExpired(expiryDate: current.expiryDate),
+           !forceRefresh || token != account.accessToken {
+            return RefreshedToken(accessToken: token, refreshToken: current.refreshToken, expiryDate: current.expiryDate)
+        }
+        let cached = await Task.detached(priority: .utility) { environment.cached(account.refreshKey) }.value
+        if let cached, !isExpired(expiryDate: cached.expiryDate),
+           !forceRefresh || cached.accessToken != account.accessToken { return cached }
+        guard let refreshToken = cached?.refreshToken ?? current.refreshToken else { throw QuotaError.missingToken }
 
         // 候选 client：Antigravity 原生 client 优先（jetski 真源，agy 生态），Gemini CLI 次之。
         // client_secret 从本机官方组件按需提取，不硬编码进源码。
-        let localSecrets = extractClientSecretsFromLocalTools()
+        let localSecrets = await Task.detached(priority: .utility) { environment.secrets() }.value
         // 官方组件内的 client ID 与 secret 存在多种来源与顺序（npm bundle、agy 二进制），
         // 无法保证精确配对。策略：为每个内置 clientID 在提取结果中做多重候选回退：
         // 1. 精确 key；2. 已知别名 key；3. 仅有一个 secret 时直接采用。
@@ -521,11 +584,12 @@ nonisolated enum AntigravityCredentials {
             (clientID, nil),
         ]
         candidates.append(contentsOf: extras)
+        if account.source == .oauthCreds { candidates.swapAt(0, 1) }
 
         var lastErr: Error?
         for cand in candidates {
             // 清理提取值：粘连的尾缀（如 "...ZtsXhttps"）在此剔除
-            let secret = cand.secret.flatMap { $0.split(separator: "http", maxSplits: 1).first.map(String.init) }
+            let secret = cand.secret
             var req = URLRequest(url: tokenEndpoint)
             req.httpMethod = "POST"
             req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
@@ -542,10 +606,9 @@ nonisolated enum AntigravityCredentials {
             let data: Data
             let resp: URLResponse
             do {
-                (data, resp) = try await NetworkProxy.data(for: req)
+                (data, resp) = try await environment.send(req)
             } catch {
-                lastErr = QuotaError.from(transport: error)
-                continue
+                throw QuotaError.from(transport: error)
             }
             guard let http = resp as? HTTPURLResponse else {
                 lastErr = QuotaError.tokenRefreshFailed("non-http response")
@@ -558,11 +621,17 @@ nonisolated enum AntigravityCredentials {
                     lastErr = QuotaError.tokenRefreshFailed("no access_token in refresh response")
                     continue
                 }
-                let newRefresh = root["refresh_token"] as? String
+                let newRefresh = nonEmpty(root["refresh_token"] as? String) ?? refreshToken
                 let expiresIn = (root["expires_in"] as? Double) ?? (root["expires_in"] as? Int).map(Double.init) ?? 3600
+                guard expiresIn.isFinite, expiresIn > 0 else { throw QuotaError.decode("invalid OAuth expires_in") }
                 let expiryDate = Date().addingTimeInterval(expiresIn)
                 let refreshed = RefreshedToken(accessToken: newAccess, refreshToken: newRefresh, expiryDate: expiryDate)
-                try writeBack(refreshed, source: source)
+                // 请求期间 GUI 可能切号 / 退出。先复核来源，再保存到该登录专属缓存。
+                let latest = try await Task.detached(priority: .utility) { try environment.load() }.value
+                guard let latest, account.belongsToSameLogin(as: latest) else {
+                    throw QuotaError.tokenRefreshFailed("Antigravity login changed during refresh")
+                }
+                try await Task.detached(priority: .utility) { try environment.save(refreshed, account) }.value
                 return refreshed
             }
             let msg = String(data: data, encoding: .utf8) ?? ""
@@ -570,6 +639,7 @@ nonisolated enum AntigravityCredentials {
             // 代理 / 网关拦截页同样会带 4xx 回来，但换 client 候选救不了它，
             // 文案也不该说成"令牌刷新失败"——同 CodexTokenRefresher，只按响应体形状区分。
             let asHTTP = QuotaError.http(http.statusCode, msg)
+            if http.statusCode == 429 || http.statusCode >= 500 || asHTTP.looksLikeInterceptedResponse { throw asHTTP }
             lastErr = asHTTP.looksLikeInterceptedResponse
                 ? asHTTP
                 : QuotaError.tokenRefreshFailed("http \(http.statusCode): \(msg) [client=\(cand.id.prefix(8))...]")
@@ -582,8 +652,18 @@ nonisolated enum AntigravityCredentials {
 
     // MARK: - Write back
 
-    private static func writeBack(_ token: RefreshedToken, source: CredentialFileSource) throws {
-        let home = FileManager.default.homeDirectoryForCurrentUser
+    static func persistRefreshedToken(
+        _ token: RefreshedToken, account: AntigravityAccount,
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        cacheWriter: (RefreshedToken, String) throws -> Void = { try saveRefreshCache($0, key: $1) }
+    ) throws {
+        switch account.source {
+        case .keychain, .cliToken: try cacheWriter(token, account.refreshKey)
+        case .jetski, .oauthCreds: try writeBack(token, source: account.source, homeDirectory: homeDirectory)
+        }
+    }
+
+    private static func writeBack(_ token: RefreshedToken, source: CredentialFileSource, homeDirectory home: URL) throws {
         switch source {
         case .oauthCreds:
             let url = oauthCredsURL(homeDirectory: home)
@@ -620,6 +700,49 @@ nonisolated enum AntigravityCredentials {
             let out = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
             try out.write(to: url, options: [.atomic])
             AppLog.info(.credentials, "antigravity jetski token refreshed")
+        case .keychain, .cliToken:
+            // GUI / agy 的存储由官方客户端维护，永不把它降级写入 jetski 文件。
+            break
+        }
+    }
+
+    private static let refreshCacheService = "com.nanvon.ccbar.antigravity-refresh"
+
+    private static func loadRefreshCache(key: String) -> RefreshedToken? {
+        let context = LAContext()
+        context.interactionNotAllowed = true
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: refreshCacheService, kSecAttrAccount as String: key,
+            kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne,
+            kSecUseAuthenticationContext as String: context,
+        ]
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+              let data = result as? Data else { return nil }
+        return try? JSONDecoder().decode(RefreshedToken.self, from: data)
+    }
+
+    private static func saveRefreshCache(_ token: RefreshedToken, key: String) throws {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: refreshCacheService,
+            // 单条缓存，切号时替换，避免保留多个历史账号的令牌。
+            kSecAttrAccount as String: key,
+        ]
+        let data = try JSONEncoder().encode(token)
+        let status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        if status == errSecItemNotFound {
+            // 删除仅限 CCBar 自己的续期缓存，不接触 gemini / antigravity。
+            SecItemDelete([kSecClass as String: kSecClassGenericPassword,
+                           kSecAttrService as String: refreshCacheService] as CFDictionary)
+            var add = query
+            add[kSecValueData as String] = data
+            add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+            let added = SecItemAdd(add as CFDictionary, nil)
+            guard added == errSecSuccess else { throw QuotaError.transport("Antigravity refresh cache write failed: \(added)") }
+        } else if status != errSecSuccess {
+            throw QuotaError.transport("Antigravity refresh cache write failed: \(status)")
         }
     }
 
@@ -657,6 +780,6 @@ nonisolated enum AntigravityCredentials {
     }
 
     private static func percent(_ s: String) -> String {
-        s.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? s
+        s.addingPercentEncoding(withAllowedCharacters: CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~")) ?? s
     }
 }

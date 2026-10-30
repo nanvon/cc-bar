@@ -1696,8 +1696,9 @@ final class AppState {
                 try AntigravityCredentials.load()
             }.value
             guard var next else {
+                if antigravityQuota != nil || quotaCache.antigravity != nil { resetAntigravityQuotaState() }
                 antigravityAccount = nil
-                antigravityError = "未配置 Antigravity：请先在 VSCode/Antigravity CLI 中登录 Google 账号"
+                antigravityError = tr("Sign in to the Antigravity app, then refresh", "请先在 Antigravity 桌面端登录,然后刷新")
                 return
             }
             if antigravityIdentityChanged(previous: antigravityAccount, next: next) {
@@ -1712,7 +1713,7 @@ final class AppState {
             antigravityAccount = next
             antigravityError = nil
         } catch {
-            antigravityAccount = nil
+            // 钥匙串临时锁定 / 读取被拒时保留已有展示，但阻止用旧登录发请求。
             antigravityError = "\(error)"
         }
     }
@@ -1722,10 +1723,7 @@ final class AppState {
         if let a = previous.email, let b = next.email, !a.isEmpty, !b.isEmpty {
             return a != b
         }
-        if let prevRef = previous.refreshToken, let nextRef = next.refreshToken {
-            return prevRef != nextRef
-        }
-        return previous.accessToken != next.accessToken
+        return !previous.belongsToSameLogin(as: next)
     }
 
     private func resetAntigravityQuotaState() {
@@ -2092,9 +2090,14 @@ final class AppState {
         defer { antigravityRefreshState.inFlight = false }
 
         guard var account = antigravityAccount else {
-            markAntigravityFailure(noAccountMessage)
+            markAntigravityFailure(antigravityError ?? noAccountMessage)
             return
         }
+        if let error = antigravityError {
+            markAntigravityFailure(error)
+            return
+        }
+        let initialLoginKey = account.refreshKey
         // agy 的完整额度（含 Pro 的 Argon 独立周额度）不要求先成功续期旧云端凭据。
         let sessionKey = account.refreshToken ?? account.accessToken ?? account.source.rawValue
         let cliResult = await AntigravityQuotaClient.fetchCLIQuota(sessionKey: sessionKey)
@@ -2143,20 +2146,14 @@ final class AppState {
             return
         case .signedOut? where hasCLISnapshot:
             // 已有 agy 额度时不改用云端的另一额度池；保留快照，请用户自己去 agy 重新登录，cc-bar 不打开登录页。
-            markAntigravityFailure(tr(
-                "Sign-in is no longer valid — run agy in Terminal to sign in again",
-                "登录已失效,请在终端运行 agy 重新登录"
-            ))
+            markAntigravityFailure(tr("Sign in to Antigravity again, then refresh", "请在 Antigravity 中重新登录,然后刷新"))
             return
         default:
             break
         }
-        guard account.accessToken != nil else {
-            markAntigravityFailure(QuotaError.missingToken.userMessage)
-            return
-        }
         let refreshed = await AntigravityCredentials.ensureFreshAccessToken(account: &account)
-        let activeToken: String
+        guard antigravityAccount?.refreshKey == initialLoginKey, antigravityError == nil else { return }
+        var activeToken: String
         switch refreshed {
         case .success(let t):
             activeToken = t
@@ -2169,7 +2166,24 @@ final class AppState {
         }
         // 版本只决定是否提醒；token 轮换或切号期间取到的额度照常展示，与原有行为一致。
         let alertEntryVersion = primaryQuotaAlertVersion(for: .antigravity)
-        let result = await AntigravityQuotaClient.fetch(accessToken: activeToken)
+        var result = await AntigravityQuotaClient.fetch(accessToken: activeToken)
+        // 有效期内的令牌也可能被撤销；401 仅允许一次同登录续期重试，429 不进入此分支。
+        if case .failure(let error) = result, error.httpStatusCode == 401 {
+            guard antigravityAccount?.refreshKey == account.refreshKey, antigravityError == nil else { return }
+            let retryLoginKey = account.refreshKey
+            let retried = await AntigravityCredentials.ensureFreshAccessToken(account: &account, forceRefresh: true)
+            guard antigravityAccount?.refreshKey == retryLoginKey, antigravityError == nil else { return }
+            switch retried {
+            case .success(let token):
+                activeToken = token
+                antigravityAccount = account
+                result = await AntigravityQuotaClient.fetch(accessToken: token)
+            case .failure(let error):
+                markAntigravityFailure(error.userMessage, error: error)
+                return
+            }
+        }
+        guard antigravityAccount?.refreshKey == account.refreshKey, antigravityError == nil else { return }
         switch result {
         case .success(let fetched):
             // 回填 plan；邮箱 jetski 本地解不出（非 JWT），额度链路成功后用 UserInfo
@@ -2177,6 +2191,12 @@ final class AppState {
             var email = fetched.account.email ?? account.email
             if email == nil {
                 email = await AntigravityQuotaClient.fetchAccountEmail(accessToken: activeToken)
+            }
+            guard antigravityAccount?.refreshKey == account.refreshKey, antigravityError == nil else { return }
+            // 启动时尚未解析出邮箱；取得真实身份后再核对持久化快照的账号绑定。
+            if let email, let cachedEmail = quotaCache.antigravity?.accountID,
+               email.lowercased() != cachedEmail.lowercased() {
+                resetAntigravityQuotaState()
             }
             // 回填邮箱会递增版本，须在写回账号前判断。
             let alertCurrent = primaryQuotaAlertVersion(for: .antigravity) == alertEntryVersion

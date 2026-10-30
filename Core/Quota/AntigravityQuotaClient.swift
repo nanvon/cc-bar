@@ -35,27 +35,9 @@ nonisolated enum AntigravityQuotaClient {
 
     /// CLI 不携带套餐和可核实身份；仅在需要时用有效令牌补充套餐，不混入云端额度。
     static func fetchPlan(accessToken: String) async -> Result<String?, QuotaError> {
-        var request = URLRequest(url: dailyEndpoint)
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("antigravity/1.0 darwin/arm64 google-api-nodejs-client/10.3.0", forHTTPHeaderField: "User-Agent")
-        request.setValue("gl-node/20.0.0", forHTTPHeaderField: "X-Goog-Api-Client")
-        request.httpBody = Data("{}".utf8)
-        request.timeoutInterval = 15
-        do {
-            let (data, response) = try await NetworkProxy.data(for: request)
-            guard let http = response as? HTTPURLResponse else { return .failure(.transport("non-http")) }
-            guard (200..<300).contains(http.statusCode) else {
-                return .failure(.http(http.statusCode, "Antigravity plan lookup failed"))
-            }
-            guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                return .failure(.decode("Antigravity plan response is not a JSON object"))
-            }
-            return .success(parse(root: root).snapshot.planType)
-        } catch {
-            return .failure(.from(transport: error))
-        }
+        let result = await cloudRequest(baseURL: dailyEndpoint, method: "loadCodeAssist", token: accessToken,
+                                        body: ["metadata": clientMetadata], dataLoader: { try await NetworkProxy.data(for: $0) })
+        return result.map { parse(root: $0).snapshot.planType }
     }
 
     /// agy 1.4.0 的 /quota：command.data.groups，字段使用 snake_case。
@@ -81,160 +63,155 @@ nonisolated enum AntigravityQuotaClient {
         return snapshot.allLimits.isEmpty ? nil : snapshot
     }
 
-    nonisolated static func fetch(accessToken: String) async -> Result<Fetched, QuotaError> {
+    typealias DataLoader = @Sendable (URLRequest) async throws -> (Data, URLResponse)
+
+    // 与桌面端相同的客户端形态；旧 antigravity/1.0 UA 会被标为 UNSUPPORTED_CLIENT。
+    static let cloudUserAgent: String = {
+        #if arch(arm64)
+        let arch = "arm64"
+        #else
+        let arch = "amd64"
+        #endif
+        return "antigravity/2.28.2 (aidev_client; os_type=darwin; arch=\(arch))"
+    }()
+
+    static let clientMetadata: [String: String] = [
+        "ideType": "ANTIGRAVITY", "platform": "PLATFORM_UNSPECIFIED", "pluginType": "GEMINI",
+    ]
+
+    nonisolated static func fetch(
+        accessToken: String,
+        dataLoader: @escaping DataLoader = { try await NetworkProxy.data(for: $0) }
+    ) async -> Result<Fetched, QuotaError> {
         let token = accessToken.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !token.isEmpty else { return .failure(.missingToken) }
-
-        // 官方 Antigravity 2.12.0 使用 daily 域；主域可能返回另一套基础额度池，
-        // 即使请求成功也会造成套餐、用量与重置时间错配，因此仅作为回退。
-        let endpoints = [dailyEndpoint, endpoint]
-        var lastError: QuotaError?
-        for url in endpoints {
-            let result = await fetch(from: url, accessToken: token)
-            switch result {
-            case .success:
-                return result
-            case .failure(let err):
-                // 认证失败或限流直接返回，不以另一域名绕过。
-                if err.isAuthFailure || err.isRateLimited { return .failure(err) }
-                lastError = err
+        var grouped: Fetched?
+        var legacy: Fetched?
+        var lastError: QuotaError = .decode("Antigravity returned no measured quota")
+        let fetchedAt = Date()
+        // daily 与 production 有时只返回部分分组。只按稳定 bucket ID 补缺，不覆盖先取得的值，
+        // 不把另一域的 legacy 模型池混进已取得的分组额度。
+        for baseURL in [dailyEndpoint, endpoint] {
+            let setup = await cloudRequest(baseURL: baseURL, method: "loadCodeAssist", token: token,
+                                           body: ["metadata": clientMetadata], dataLoader: dataLoader)
+            let root: [String: Any]
+            switch setup {
+            case .success(let value): root = value
+            case .failure(let error):
+                if error.httpStatusCode == 401 || error.isRateLimited { return .failure(error) }
+                lastError = error
                 continue
             }
+            if rejectsConsumerClient(root) {
+                return .failure(.http(403, "Antigravity OAuth client cannot read this account's quota"))
+            }
+            let plan = parse(root: root, fetchedAt: fetchedAt)
+            let project = projectID(in: root)
+            let body: [String: Any] = project.map { ["project": $0] } ?? [:]
+            let summary = await cloudRequest(baseURL: baseURL, method: "retrieveUserQuotaSummary", token: token,
+                                             body: body, dataLoader: dataLoader)
+            switch summary {
+            case .success(let value):
+                let parsed = parse(root: value, fetchedAt: fetchedAt)
+                if !parsed.snapshot.allLimits.isEmpty {
+                    let next = merge(base: plan, enrichment: parsed)
+                    grouped = grouped.map { mergeGrouped(base: $0, enrichment: next) } ?? next
+                    if let grouped, hasCompleteGroupedQuota(grouped.snapshot) { return .success(grouped) }
+                }
+            case .failure(let error):
+                // 429 不允许被可选富化吞掉后继续请求其它端点 / 域名。
+                if error.httpStatusCode == 401 || error.isRateLimited { return .failure(error) }
+                lastError = error
+            }
+            if grouped != nil { continue }
+
+            // 没有分组源时保留 legacy 兜底；模型列表里全为 100% 的占位值必须用 quota 桶核实。
+            var fallback = plan
+            var modelQuota: Fetched?
+            var verifiedQuota: Fetched?
+            for method in ["fetchAvailableModels", "retrieveUserQuota"] {
+                let result = await cloudRequest(baseURL: baseURL, method: method, token: token,
+                                                body: body, dataLoader: dataLoader)
+                switch result {
+                case .success(let value):
+                    let parsed = parse(root: value, fetchedAt: fetchedAt)
+                    if method == "fetchAvailableModels" { modelQuota = parsed } else { verifiedQuota = parsed }
+                case .failure(let error):
+                    if error.httpStatusCode == 401 || error.isRateLimited { return .failure(error) }
+                    lastError = error
+                }
+            }
+            if let verifiedQuota, !verifiedQuota.snapshot.allLimits.isEmpty {
+                fallback = merge(base: fallback, enrichment: verifiedQuota)
+                if let modelQuota { fallback = merge(base: fallback, enrichment: modelQuota) }
+            } else if let modelQuota, modelQuota.snapshot.allLimits.contains(where: { $0.window.usedPercent > 0 }) {
+                fallback = merge(base: fallback, enrichment: modelQuota)
+            }
+            if !fallback.snapshot.allLimits.isEmpty { legacy = legacy ?? fallback }
         }
-        return .failure(lastError ?? .transport("no endpoint"))
+        if let grouped { return .success(grouped) }
+        if let legacy { return .success(legacy) }
+        return .failure(lastError)
     }
 
-    private static func fetch(from url: URL, accessToken: String) async -> Result<Fetched, QuotaError> {
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue("application/json", forHTTPHeaderField: "Accept")
-        req.setValue("antigravity/1.0 darwin/arm64 google-api-nodejs-client/10.3.0", forHTTPHeaderField: "User-Agent")
-        req.setValue("gl-node/20.0.0", forHTTPHeaderField: "X-Goog-Api-Client")
-        req.timeoutInterval = 30
-        // daily 域保持与官方客户端一致的空 body；旧主域回退保留既有 project 上下文。
-        let payload: [String: Any] = url == dailyEndpoint ? [:] : [
-            "cloudaicompanionProject": "aicode-consumers",
-            "metadata": ["ideName": "antigravity"],
-        ]
-        req.httpBody = try? JSONSerialization.data(withJSONObject: payload)
+    static func projectID(in root: [String: Any]) -> String? {
+        let value = root["cloudaicompanionProject"]
+        let raw = value as? String ?? (value as? [String: Any])?["id"] as? String
+        guard let value = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
+        return value
+    }
 
-        let data: Data
-        let resp: URLResponse
+    private static func rejectsConsumerClient(_ root: [String: Any]) -> Bool {
+        guard root["currentTier"] == nil, projectID(in: root) == nil else { return false }
+        return (root["ineligibleTiers"] as? [[String: Any]] ?? []).contains {
+            ($0["reasonCode"] as? String ?? $0["reason"] as? String) == "GOOGLE_TOS_NOT_SUPPORTED_BY_CLIENT"
+        }
+    }
+
+    private static func hasCompleteGroupedQuota(_ snapshot: QuotaSnapshot) -> Bool {
+        Set(snapshot.allLimits.map(\.id)).isSuperset(of: [
+            "gemini-argon-wtu-weekly", "gemini-5h", "gemini-weekly", "claude-5h", "claude-weekly",
+        ])
+    }
+
+    static func mergeGrouped(base: Fetched, enrichment: Fetched) -> Fetched {
+        var limits = base.snapshot.allLimits
+        let existing = Set(limits.map(\.id))
+        limits.append(contentsOf: enrichment.snapshot.allLimits.filter { !existing.contains($0.id) })
+        let order = ["gemini-argon-wtu-weekly", "gemini-5h", "gemini-weekly", "claude-5h", "claude-weekly"]
+        limits.sort { (order.firstIndex(of: $0.id) ?? 99) < (order.firstIndex(of: $1.id) ?? 99) }
+        var result = base
+        result.snapshot.primaryLimit = limits.first
+        result.snapshot.secondaryLimit = limits.dropFirst().first
+        result.snapshot.auxiliaryLimits = Array(limits.dropFirst(2))
+        result.snapshot.planType = base.snapshot.planType ?? enrichment.snapshot.planType
+        result.account.planType = result.snapshot.planType
+        return result
+    }
+
+    private static func cloudRequest(
+        baseURL: URL, method: String, token: String, body: [String: Any], dataLoader: DataLoader
+    ) async -> Result<[String: Any], QuotaError> {
+        let url = URL(string: baseURL.absoluteString.replacingOccurrences(of: "loadCodeAssist", with: method))!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue(cloudUserAgent, forHTTPHeaderField: "User-Agent")
+        request.timeoutInterval = 15
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
         do {
-            (data, resp) = try await NetworkProxy.data(for: req)
-        } catch {
-            return .failure(.from(transport: error))
-        }
-        guard let http = resp as? HTTPURLResponse else {
-            return .failure(.transport("non-http"))
-        }
-        guard (200..<300).contains(http.statusCode) else {
-            let msg = String(data: data, encoding: .utf8) ?? ""
-            return .failure(.http(http.statusCode, msg.isEmpty ? "antigravity loadCodeAssist failed" : msg))
-        }
-        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return .failure(.decode("not json object"))
-        }
-        var fetched = parse(root: root)
-        let fetchedAt = Date()
-        // 二阶段富化（首选）：retrieveUserQuotaSummary 返回按组（Gemini / Claude+GPT）
-        // 区分的 5h + weekly 窗口，与官方 UI 一致，是信息最全的真实数据源。
-        // （实测免费版账号即有 4 桶：gemini-weekly/5h + 3p-weekly/5h。）
-        if let enriched = await tryFetchUserQuotaSummary(baseURL: url, accessToken: accessToken, fetchedAt: fetchedAt) {
-            fetched = merge(base: fetched, enrichment: enriched)
-        }
-        // 若已拿到完整权威分组配额（Gemini 主条 + Claude 组），无需发起后续三四阶段兜底请求，
-        // 避免多余网络 RTT 并降低 Google 429 风险。
-        let hasCompleteGroupedQuota = fetched.snapshot.primaryLimit != nil && !fetched.snapshot.auxiliaryLimits.isEmpty
-        if !hasCompleteGroupedQuota {
-            // 三阶段富化：loadCodeAssist 未返回额度时（如 daily 域回退），fetchAvailableModels
-            // 提供 Gemini 轮换窗口；g1 账号缺少该接口时此步为空，不视为失败。
-            if let enriched = await tryEnrichWithAvailableModels(baseURL: url, accessToken: accessToken, fetchedAt: fetchedAt) {
-                fetched = merge(base: fetched, enrichment: enriched)
+            let (data, response) = try await dataLoader(request)
+            guard let http = response as? HTTPURLResponse else { return .failure(.transport("non-http")) }
+            guard (200..<300).contains(http.statusCode) else {
+                return .failure(.http(http.statusCode, String(data: data, encoding: .utf8) ?? "Antigravity request failed"))
             }
-            // 四阶段富化（兜底）：retrieveUserQuota 按模型分桶的剩余额度（仅 5h 语义），
-            // 在 summary 不可用时仍可给出第三方/Gemini 的 5h 窗口。
-            if let enriched = await tryFetchUserQuota(baseURL: url, accessToken: accessToken, fetchedAt: fetchedAt) {
-                fetched = merge(base: fetched, enrichment: enriched)
+            guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return .failure(.decode("Antigravity response is not a JSON object"))
             }
-        }
-        return .success(fetched)
-    }
-
-    /// 尝试用同一 host 的 `fetchAvailableModels` 补齐窗口；403/401 等视为无权，不算失败。
-    private static func tryEnrichWithAvailableModels(baseURL: URL, accessToken: String, fetchedAt: Date) async -> Fetched? {
-        let baseStr = baseURL.absoluteString
-        // 将 v1internal:loadCodeAssist 替换为 v1internal:fetchAvailableModels
-        let modelsStr = baseStr.replacingOccurrences(of: "loadCodeAssist", with: "fetchAvailableModels")
-        guard let modelsURL = URL(string: modelsStr) else { return nil }
-        var req = URLRequest(url: modelsURL)
-        req.httpMethod = "POST"
-        req.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue("application/json", forHTTPHeaderField: "Accept")
-        req.setValue("antigravity/1.0 darwin/arm64 google-api-nodejs-client/10.3.0", forHTTPHeaderField: "User-Agent")
-        req.setValue("gl-node/20.0.0", forHTTPHeaderField: "X-Goog-Api-Client")
-        req.timeoutInterval = 15
-        // fetchAvailableModels 不接受 cloudaicompanionProject 字段（实测 400），保持空 body
-        req.httpBody = try? JSONSerialization.data(withJSONObject: [String: Any]())
-        guard let (data, resp) = try? await NetworkProxy.data(for: req),
-              let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return nil }
-        return parse(root: root, fetchedAt: fetchedAt)
-    }
-
-    /// 用同一 host 的 `retrieveUserQuotaSummary` 补齐按组区分的权威额度。
-    /// 返回 `groups[]`：`{ displayName, buckets: [{ bucketId, window, remainingFraction, resetTime }] }`。
-    /// bucketId 语义：`gemini-weekly` / `gemini-5h`（Gemini Models 组）、
-    /// `3p-weekly` / `3p-5h`（Claude and GPT models 组）。
-    private static func tryFetchUserQuotaSummary(baseURL: URL, accessToken: String, fetchedAt: Date) async -> Fetched? {
-        let baseStr = baseURL.absoluteString
-        // 将 v1internal:loadCodeAssist 替换为 v1internal:retrieveUserQuotaSummary
-        let summaryStr = baseStr.replacingOccurrences(of: "loadCodeAssist", with: "retrieveUserQuotaSummary")
-        guard summaryStr != baseStr, let summaryURL = URL(string: summaryStr) else { return nil }
-        var req = URLRequest(url: summaryURL)
-        req.httpMethod = "POST"
-        req.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue("application/json", forHTTPHeaderField: "Accept")
-        req.setValue("antigravity/1.0 darwin/arm64 google-api-nodejs-client/10.3.0", forHTTPHeaderField: "User-Agent")
-        req.setValue("gl-node/20.0.0", forHTTPHeaderField: "X-Goog-Api-Client")
-        req.timeoutInterval = 15
-        // retrieveUserQuotaSummary 不接受 cloudaicompanionProject 等字段，保持空 body
-        req.httpBody = try? JSONSerialization.data(withJSONObject: [String: Any]())
-        guard let (data, resp) = try? await NetworkProxy.data(for: req),
-              let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return nil }
-        return parse(root: root, fetchedAt: fetchedAt)
-    }
-
-    /// 用同一 host 的 `retrieveUserQuota` 补齐按模型分桶的真实额度。
-    /// `buckets[]`：`{ modelId, remainingFraction, resetTime?, tokenType? }`。
-    /// 与 `fetchAvailableModels` 不同，该端点区分第三方（Claude/GPT）5h 窗口与 Gemini 轮换窗口。
-    private static func tryFetchUserQuota(baseURL: URL, accessToken: String, fetchedAt: Date) async -> Fetched? {
-        let baseStr = baseURL.absoluteString
-        // 将 v1internal:loadCodeAssist 替换为 v1internal:retrieveUserQuota
-        let quotaStr = baseStr.replacingOccurrences(of: "loadCodeAssist", with: "retrieveUserQuota")
-        guard quotaStr != baseStr, let quotaURL = URL(string: quotaStr) else { return nil }
-        var req = URLRequest(url: quotaURL)
-        req.httpMethod = "POST"
-        req.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue("application/json", forHTTPHeaderField: "Accept")
-        req.setValue("antigravity/1.0 darwin/arm64 google-api-nodejs-client/10.3.0", forHTTPHeaderField: "User-Agent")
-        req.setValue("gl-node/20.0.0", forHTTPHeaderField: "X-Goog-Api-Client")
-        req.timeoutInterval = 15
-        // retrieveUserQuota 不接受 cloudaicompanionProject 等字段，保持空 body
-        req.httpBody = try? JSONSerialization.data(withJSONObject: [String: Any]())
-        guard let (data, resp) = try? await NetworkProxy.data(for: req),
-              let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return nil }
-        return parse(root: root, fetchedAt: fetchedAt)
+            return .success(root)
+        } catch { return .failure(.from(transport: error)) }
     }
 
     // MARK: - Merge
@@ -287,6 +264,7 @@ nonisolated enum AntigravityQuotaClient {
     // MARK: - Parse
 
     nonisolated static func parse(root: [String: Any], fetchedAt: Date = Date()) -> Fetched {
+        let root = root["response"] as? [String: Any] ?? root
         // 1. 尝试新版 loadCodeAssist 的 tier 结构
         // 典型字段：currentTier, paidTier, allowedTiers, project
         // 若包含显式额度 buckets（如 retrieveUserQuota / fetchAvailableModels 的 fallback），则走 buckets

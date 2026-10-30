@@ -124,7 +124,7 @@ cc-bar 展示两类数据：**订阅额度**直连各服务官方接口获取剩
 | :--- | :--- | :---: | :--- |
 | **Codex** | `~/.codex/auth.json`<br>导入的其他账号：CCBar 自己的 Keychain 条目 | 读 / 写 | 临期时使用 `refresh_token` 自动续期，新令牌写回原存储位置。续期前二次确认本地文件，避免与 `codex` CLI 冲突抢刷。 |
 | **Claude Code** | `~/.claude/.credentials.json`<br>或 macOS Keychain | **严格只读** | **绝不刷新或篡改凭据**。因 Anthropic 刷新令牌为一次性，第三方刷新会导致 CLI 被踢下线。过期时保留快照并提示终端重登；必要时提供安全 CLI 兜底。 |
-| **Antigravity** | `~/.gemini/jetski-standalone-oauth-token`<br>`~/.gemini/oauth_creds.json` (兜底) | 读 / 写 | 优先读取独立 OAuth Token，临期自动续期回写。Cloud Mode 直连 Google 云端 API，无需本地 IDE 运行。 |
+| **Antigravity** | 系统钥匙串 `gemini / antigravity`（优先）<br>旧 jetski / CLI token / oauth_creds 文件（兼容） | 原始 GUI 登录只读；CCBar 续期缓存读 / 写；旧 jetski / oauth_creds 读 / 写 | 仅安装并登录桌面端即可识别账号、查询额度和自动续期，无需 agy。续期缓存按原始登录绑定，存 CCBar 自己的钥匙串。 |
 | **Cursor** | `~/Library/Application Support/Cursor`<br>`/User/globalStorage/state.vscdb` | **严格只读** | 仅读 `cursorAuth/accessToken` 构造 Cookie 查询用量，绝不碰 refresh token/OAuth，不写回 Cursor SQLite 或 Keychain。 |
 | **Command Code** | 5 级本地来源或 macOS Keychain | 读 / Keychain | 只读自动探测按 `~/.commandcode/auth.json` → `~/.pi/agent/auth.json` → `~/.local/share/opencode/auth.json` → 环境变量 → Keychain 依次尝试；也可在设置中切换为手动 API Key，由 macOS Keychain 保存。 |
 | **OpenCode Go** | OpenCode / Pi 的 `auth.json` 或 macOS Keychain | 读 / Keychain | 只读自动探测按 OpenCode `auth.json` → `~/.pi/agent/auth.json` → 环境变量 `OPENCODE_API_KEY` → Keychain 依次尝试，读取其中的 `opencode-go` API Key；也可在设置中切换为手动 API Key，由 macOS Keychain 保存。 |
