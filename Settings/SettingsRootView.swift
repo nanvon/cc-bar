@@ -479,6 +479,23 @@ struct SettingsRootView: View {
                     .toggleStyle(.switch)
                     .tint(.green)
             }
+            InsetDivider()
+            // 隐私模式已隐藏全部邮箱，此时开关置灰并显示为关闭；关闭隐私模式后恢复用户原先的选择。
+            PrefsRow(
+                label: "Show email in popover",
+                chinese: "弹出面板显示邮箱",
+                desc: "Always hidden in privacy mode.",
+                chineseDesc: "开启隐私模式时始终隐藏"
+            ) {
+                Toggle("", isOn: Binding(
+                    get: { settings.popoverShowsEmail && !settings.privacyMode },
+                    set: { settings.popoverShowsEmail = $0 }
+                ))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .tint(.green)
+                    .disabled(settings.privacyMode)
+            }
         }
     }
 

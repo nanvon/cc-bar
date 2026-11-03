@@ -179,7 +179,10 @@ private struct ImportedCodexRow: View {
 
     private var displayName: String {
         if PrivacyDisplay.isEnabled { return PrivacyDisplay.account(account.id) }
-        return account.alias.isEmpty ? (account.email.map { emailUsername($0) } ?? account.id) : account.alias
+        if !account.alias.isEmpty { return account.alias }
+        // 关闭「弹出面板显示邮箱」时，邮箱用户名也不显示，名称留空，只剩套餐副标题。
+        if !SettingsStore.shared.popoverShowsEmail { return "" }
+        return account.email.map { emailUsername($0) } ?? account.id
     }
 
     private var displaySubtitle: String {
@@ -191,7 +194,9 @@ private struct ImportedCodexRow: View {
         var parts: [String] = []
         // 有别名时名称不含 email，subtitle 补上 email；无别名时名称已是 email 用户名，不再重复。
         // email 可空（PAT 导入、无 email claim），此时仍保留 plan。
-        if let email = account.email, !email.isEmpty, !account.alias.isEmpty { parts.append(email) }
+        if SettingsStore.shared.popoverShowsEmail, let email = account.email, !email.isEmpty, !account.alias.isEmpty {
+            parts.append(email)
+        }
         if let plan = CodexAccount.planName(account.planType) { parts.append(plan) }
         return parts.joined(separator: " · ")
     }

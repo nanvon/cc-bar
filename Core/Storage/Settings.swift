@@ -322,6 +322,9 @@ final class SettingsStore {
     /// 截图隐私模式：全局隐藏账号、项目及对话身份；保留真实用量统计。
     var privacyMode: Bool { didSet { defaults.set(privacyMode, forKey: Keys.privacyMode) } }
 
+    /// Popover 账号副标题是否显示邮箱；隐私模式开启时始终不显示。
+    var popoverShowsEmail: Bool { didSet { defaults.set(popoverShowsEmail, forKey: Keys.popoverShowsEmail) } }
+
     // 系统授权状态不持久化；此版本号仅用于丢弃设置变化前开始的额度请求。
     private(set) var quotaAlertRuntimeVersion: UInt64 = 0
     var quotaAlertsEnabled: Bool {
@@ -435,6 +438,7 @@ final class SettingsStore {
         appLanguage = AppLanguage(rawValue: langRaw) ?? .system
         launchAtLogin = Self.isLaunchAtLoginOn(SMAppService.mainApp.status)
         privacyMode = defaults.object(forKey: Keys.privacyMode) as? Bool ?? false
+        popoverShowsEmail = defaults.object(forKey: Keys.popoverShowsEmail) as? Bool ?? true
         quotaAlertsEnabled = defaults.object(forKey: "ccbar.settings.quotaAlertsEnabled") as? Bool
             ?? defaults.object(forKey: "ccbar.settings.codexQuotaAlertsEnabled") as? Bool ?? false
         quotaAlertThresholdPercent = QuotaAlertPreferences.validThreshold(
@@ -817,6 +821,7 @@ final class SettingsStore {
         static let launchAtLogin = "ccbar.settings.launchAtLogin"
         static let appLanguage = "ccbar.settings.appLanguage"
         static let privacyMode = "ccbar.settings.privacyMode"
+        static let popoverShowsEmail = "ccbar.settings.popoverShowsEmail"
         static let autoCheckForUpdates = "ccbar.settings.autoCheckForUpdates"
         /// 与 `AppLog` 共用同一个 key:门面在 init 时直接读 UserDefaults,不能等 SettingsStore 建好。
         static let verboseLogging = AppLog.verboseLoggingDefaultsKey

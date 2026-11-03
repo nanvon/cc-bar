@@ -210,7 +210,7 @@ struct PopoverRootView: View {
     }
 
     private func providerSubtitle(for app: QuotaApp) -> String {
-        let privacy = SettingsStore.shared.privacyMode
+        let showsEmail = !SettingsStore.shared.privacyMode && SettingsStore.shared.popoverShowsEmail
         var parts: [String] = []
         let email: String?
         let plan: String?
@@ -242,8 +242,8 @@ struct PopoverRootView: View {
             plan = nil
             fallback = "OpenCode"
         }
-        // 每个服务只有一个主账号，隐私模式直接不显示邮箱，不必换成「账号 NN」。
-        if !privacy, let email, !email.isEmpty { parts.append(email) }
+        // 每个服务只有一个主账号，隐私模式或关闭「弹出面板显示邮箱」时直接不显示邮箱，不必换成「账号 NN」。
+        if showsEmail, let email, !email.isEmpty { parts.append(email) }
         if let plan, !plan.isEmpty { parts.append(plan) }
         if parts.isEmpty { parts.append(fallback) }
         return parts.joined(separator: " · ")
