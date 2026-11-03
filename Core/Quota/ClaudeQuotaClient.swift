@@ -81,9 +81,14 @@ nonisolated enum ClaudeQuotaClient {
 
     /// `organization.organization_type`（`claude_pro` / `claude_max` / `claude_team` …）；
     /// 缺类型时退回 `account.has_claude_max` / `has_claude_pro`。
+    /// 2026-10-30 起原 Max 20x 改名 Ultra，按 `rate_limit_tier` 含 `max_20x` 识别。
     nonisolated static func parsePlanName(root: [String: Any]) -> String? {
         let organization = root["organization"] as? [String: Any]
         let account = root["account"] as? [String: Any]
+        if let tier = organization?["rate_limit_tier"] as? String,
+           tier.lowercased().contains("max_20x") {
+            return "Ultra"
+        }
         var type = nonEmpty(organization?["organization_type"] as? String)
         if type == nil {
             if account?["has_claude_max"] as? Bool == true {

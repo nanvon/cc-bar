@@ -69,8 +69,9 @@ struct ClaudeAccount: Sendable, Equatable {
         Self.planName(subscriptionType)
     }
 
-    /// `pro` / `claude_pro` → `Pro`，`max` / `claude_max` → `Max`。Max 5x / 20x 不细分，
-    /// 与 Codex 各档 Pro 统一显示大类的做法一致。
+    /// `pro` / `claude_pro` → `Pro`，`max` / `claude_max` → `Max`。原 Max 20x 已改名 Ultra，
+    /// 由 `ClaudeQuotaClient.parsePlanName` 按 profile 的 `rate_limit_tier` 识别；
+    /// 本地 `subscriptionType` 不分档，兜底时 Ultra 仍显示 `Max`。
     nonisolated static func planName(_ type: String?) -> String? {
         var base = type?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
         if base.hasPrefix("claude_") { base.removeFirst("claude_".count) }
