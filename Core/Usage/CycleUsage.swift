@@ -195,6 +195,24 @@ nonisolated struct CycleUsageSummary: Sendable, Equatable, Identifiable {
         else { return nil }
         return currentAllowanceTotals.costUSD * 100 / Decimal(forecastObservedPercent)
     }
+
+    /// 整个周期观察到的官方已用比例：各额度段增量之和，Claude 周内重置后可超过 100%。
+    var cycleObservedPercent: Double {
+        cycle.totalObservedUsedPercent
+    }
+
+    /// 历史周期的用满预估：整个周期的用量 ÷ 观察到的已用比例之和，即一份完整额度对应的 Tokens。
+    var cycleEstimatedFullAllowanceTokens: Int? {
+        guard cycleObservedPercent > 0, totals.totalTokens > 0 else { return nil }
+        let estimate = Double(totals.totalTokens) * 100 / cycleObservedPercent
+        guard estimate.isFinite, estimate <= Double(Int.max) else { return nil }
+        return Int(estimate.rounded())
+    }
+
+    var cycleEstimatedFullAllowanceCostUSD: Decimal? {
+        guard cycleObservedPercent > 0, totals.costUSD > 0 else { return nil }
+        return totals.costUSD * 100 / Decimal(cycleObservedPercent)
+    }
 }
 
 enum CycleUsageRollupCache {

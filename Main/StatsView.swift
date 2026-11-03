@@ -657,6 +657,7 @@ struct StatsView: View {
                 .ccPanel(cornerRadius: 12)
             } else {
                 QuotaCycleCardsSection(apps: quotaApps, isWide: isWide)
+                QuotaCycleHistorySection(apps: quotaApps, isWide: isWide)
                 quotaTimelineSection(isWide: isWide)
             }
         }
@@ -3183,7 +3184,7 @@ private struct QuotaTimelineChart: View {
                     y: .value("Remaining", entry.remainingPercent)
                 )
                 .foregroundStyle(chartPointColor(remainingPercent: Double(entry.remainingPercent)))
-                .symbolSize(40)
+                .symbolSize(14)
             }
 
             if let resetAt {
