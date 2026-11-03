@@ -46,11 +46,8 @@ nonisolated private struct TieredPricedPeriod: Sendable {
 
 nonisolated enum Pricing {
     /// 价格表按各厂商官方定价页核对（基础表 2026-10-19，新增型号 2026-10-27），起点对齐 cc-switch `seed_model_pricing` /
-    /// CodexBar `CostUsagePricing`。命中不到时返回 nil。键为 `pricingKey(model:)` 归一化后的模型名（循环剥 provider 前缀
-    /// `openai-codex/` / `openai/` / `anthropic/` / `deepseek/` / `opencode-go/` / `commandcode/` /
-    /// `command-code/` / `antigravity/` / `z-ai/` / `zai/` / `minimax/` / `deepseek-account/` /
-    /// `deepseek-official/` 和末尾 `-YYYYMMDD` /
-    /// `-YYYY-MM-DD` 日期段）。
+    /// CodexBar `CostUsagePricing`。命中不到时返回 nil。键为官方型号名；渠道前缀、日期与渠道附加标记
+    /// 由 `ModelIdentity` 解析，按 `modelCandidates` 的顺序逐个查价，见 `resolvedPrice`。
     ///
     /// Google Gemini、Cursor / xAI、Z.ai、MiniMax 的价格只能在这里维护：远端价格目录只收
     /// anthropic / openai / deepseek（见 `LiteLLMPricingDecoder` 与 `ModelsDevPricingDecoder` 的
@@ -152,7 +149,7 @@ nonisolated enum Pricing {
         "cursor-sdk:grok-4.7:500k:slow": .init(input: 4, output: 12, cacheRead: 1, cacheCreation: 0),
         "cursor-sdk:grok-4.7:500k:fast": .init(input: 6, output: 18, cacheRead: 1.50, cacheCreation: 0),
         // Grok 4.7 输入超过 256K 时整次请求按 2 倍标准价，见 contextPriceTiers。Cursor 自身费用仍用服务端 chargedCents。
-        "grok-4-7":             .init(input: 2,    output: 6,    cacheRead: 0.50, cacheCreation: 0),
+        "grok-4.7":             .init(input: 2,    output: 6,    cacheRead: 0.50, cacheCreation: 0),
         "grok-4-6":             .init(input: 2,    output: 6,    cacheRead: 0.50, cacheCreation: 0),
         "grok-4-5":             .init(input: 2,    output: 6,    cacheRead: 0.50, cacheCreation: 0),
 
@@ -374,7 +371,7 @@ nonisolated enum Pricing {
             shortContext: .init(input: 0.10, output: 0.50, cacheRead: 0.01, cacheCreation: 0.125),
             longContext: .init(input: 0.50, output: 2.50, cacheRead: 0.05, cacheCreation: 0.625)
         ),
-        "grok-4-7": .init(
+        "grok-4.7": .init(
             longContextThreshold: 256_000,
             shortContext: .init(input: 2, output: 6, cacheRead: 0.50, cacheCreation: 0),
             longContext: .init(input: 4, output: 12, cacheRead: 1, cacheCreation: 0)
@@ -647,47 +644,17 @@ nonisolated enum Pricing {
         }
     }
 
-    /// 归一化模型名：循环去支持的 provider 前缀（含嵌套两层，如 `commandcode/deepseek/...`）；
+    /// 存储用的模型名归一化：循环去支持的 provider 前缀（含嵌套两层，如 `commandcode/deepseek/...`）；
     /// 剥末尾 `-YYYY-MM-DD` 或 `-YYYYMMDD` 日期后缀；兼容 Vertex AI 的 `@日期` 写法。
-    /// 该结果同时是 Codex 旧存储身份与 Claude 存储身份（标识迁移按它对账旧快照），前缀表不能随定价需要扩充；
-    /// 只为查价而剥的前缀放在 `pricingKey(model:)`。
+    /// 该结果同时是 Codex 旧存储身份与 Claude 存储身份（标识迁移按它对账旧快照），前缀表不能改；
+    /// 查价不用它，改由 `ModelIdentity` 解析。
     nonisolated static func normalize(model: String) -> String {
-        normalize(model: model, stripping: identityPrefixes)
-    }
-
-    /// 查价用的模型键：在 `normalize(model:)` 基础上再剥转售标签，不作为任何存储身份。
-    nonisolated static func pricingKey(model: String) -> String {
-        let identity = ModelIdentity.parse(model)
-        if identity.channel == .cursor {
-            // 未指定速度时保持缺价，不能把插件当前默认值套到历史请求。
-            return identity.cursorPricingKey ?? model.lowercased()
-        }
-        return normalize(model: model, stripping: pricingPrefixes)
-    }
-
-    private static let identityPrefixes = [
-        "openai-codex/", "openai/", "anthropic/", "deepseek/",
-        "opencode-go/", "commandcode/", "command-code/"
-    ]
-
-    /// Antigravity 与 Command Code / OpenCode 的转售标签：`antigravity/gemini-3.8-flash`、
-    /// `commandcode/z-ai/glm-5.3-flash`、`commandcode/minimax/minimax-m3`。
-    /// DSH 的 DeepSeek 路由名：`deepseek-account/deepseek-flash`（账号登录）、`deepseek-official/deepseek-v4-flash`（API Key）。
-    private static let pricingOnlyPrefixes = [
-        "antigravity/", "z-ai/", "zai/", "minimax/",
-        "deepseek-account/", "deepseek-official/"
-    ]
-
-    private static let pricingPrefixes = identityPrefixes + pricingOnlyPrefixes
-
-    private static func normalize(model: String, stripping providerPrefixes: [String]) -> String {
         var m = model
-        // 循环剥除：Pi / OpenCode 日志里 provider 网关标签可能是 `commandcode/deepseek/...` 双层，
-        // 剥掉外层后还要继续剥内层才能与本地表 / 远端目录对齐。
+        // 循环剥除：Pi / OpenCode 日志里 provider 网关标签可能是 `commandcode/deepseek/...` 双层。
         var removed = true
         while removed {
             removed = false
-            for prefix in providerPrefixes where m.hasPrefix(prefix) {
+            for prefix in identityPrefixes where m.hasPrefix(prefix) {
                 m.removeFirst(prefix.count)
                 removed = true
                 break
@@ -697,15 +664,69 @@ nonisolated enum Pricing {
         if let at = m.firstIndex(of: "@") {
             m = String(m[m.startIndex..<at])
         }
-        // Anthropic 风格：`-YYYYMMDD` 或 `-YYYY-MM-DD`
-        let patterns = [#"-\d{4}-\d{2}-\d{2}$"#, #"-\d{8}$"#]
-        for pat in patterns {
-            if let range = m.range(of: pat, options: .regularExpression) {
+        return strippingDateSuffix(m).lowercased()
+    }
+
+    /// 查价身份：渠道链与格式差异归一后的模型键，不作为任何存储身份。
+    nonisolated static func pricingKey(model: String) -> String {
+        ModelIdentity.parse(model).pricingIdentity
+    }
+
+    private static let identityPrefixes = [
+        "openai-codex/", "openai/", "anthropic/", "deepseek/",
+        "opencode-go/", "commandcode/", "command-code/"
+    ]
+
+    /// 去掉 Anthropic 风格的 `-YYYYMMDD` 或 `-YYYY-MM-DD` 日期后缀。
+    nonisolated static func strippingDateSuffix(_ model: String) -> String {
+        var m = model
+        for pattern in [#"-\d{4}-\d{2}-\d{2}$"#, #"-\d{8}$"#] {
+            if let range = m.range(of: pattern, options: .regularExpression) {
                 m.removeSubrange(range)
                 break
             }
         }
-        return m.lowercased()
+        return m
+    }
+
+    /// 查价候选键，由具体到通用：渠道自有价 → 官方型号候选。
+    private static func pricingCandidates(for model: String) -> [String] {
+        let identity = ModelIdentity.parse(model)
+        let channelKeys = identity.channelPricingKey.map { [$0] } ?? []
+        // 标识自带 Fast 档却没有渠道自有价时保持缺价：绝不把 Standard 价当 Fast。
+        guard identity.speed != .fast else { return channelKeys }
+        return channelKeys + identity.modelCandidates
+    }
+
+    /// 按候选顺序取第一个有价的键及其价格；都没有时为 nil（未定价）。
+    private static func resolvedPrice(
+        model: String,
+        app: UsageApp,
+        speed: UsageSpeed,
+        at date: Date,
+        inputTotal: Int
+    ) -> (key: String, price: ModelPrice)? {
+        for key in pricingCandidates(for: model) {
+            if let rate = price(for: key, app: app, speed: speed, at: date, inputTotal: inputTotal) {
+                return (key, rate)
+            }
+        }
+        return nil
+    }
+
+    /// 展示用型号：按查价顺序第一个有 Standard 价的官方型号；都没有时为解析出的模型名。
+    /// Fast 档是同一型号的另一种速度，型号名末尾的 `-fast` 在展示时并入该型号。
+    nonisolated static func displayModel(for identity: ModelIdentity) -> String {
+        func official(_ name: String) -> String? {
+            // Standard 价不分 App，这里的 app 只为满足签名。
+            ModelIdentity.candidates(for: name).first {
+                standardPrice(for: $0, app: .codex, at: Date(), inputTotal: 0) != nil
+            }
+        }
+        let name = identity.name
+        let speedMerged = name.hasSuffix("-fast") ? official(String(name.dropLast("-fast".count))) : nil
+        let matched = speedMerged ?? official(name) ?? name
+        return ModelIdentity.aliases[matched] ?? matched
     }
 
     private static let perMillion: Decimal = 1_000_000
@@ -758,9 +779,9 @@ nonisolated enum Pricing {
         at date: Date,
         inputTotal: Int? = nil
     ) -> CostBreakdown? {
-        let key = pricingKey(model: model)
         let fullInput = max(0, inputTotal ?? (input + cacheRead + cacheCreation + cacheCreation1h))
-        guard let p = price(for: key, app: app, speed: speed, at: date, inputTotal: fullInput) else { return nil }
+        guard let p = resolvedPrice(model: model, app: app, speed: speed, at: date, inputTotal: fullInput)?.price
+        else { return nil }
         let i = Decimal(input)     * p.input        / perMillion
         let o = Decimal(output)    * p.output       / perMillion
         let cr = Decimal(cacheRead) * p.cacheRead   / perMillion
@@ -887,16 +908,14 @@ nonisolated enum Pricing {
         speed: UsageSpeed = .standard,
         inputTotal: Int = 0
     ) -> Bool {
-        let key = pricingKey(model: model)
-        return price(for: key, app: app, speed: speed, at: Date(), inputTotal: inputTotal) != nil
+        resolvedPrice(model: model, app: app, speed: speed, at: Date(), inputTotal: inputTotal) != nil
     }
 
     /// 是否应因缺价主动刷新远端目录。明确不计价的内部模型不会触发网络请求。
     static func needsRemotePriceRefresh(model: String, app: UsageApp, speed: UsageSpeed) -> Bool {
-        let key = pricingKey(model: model)
         guard speed != .unknown else { return false }
-        if app == .codex, key == "codex-auto-review" { return false }
-        return price(for: key, app: app, speed: speed, at: Date(), inputTotal: 0) == nil
+        if app == .codex, pricingKey(model: model) == "codex-auto-review" { return false }
+        return resolvedPrice(model: model, app: app, speed: speed, at: Date(), inputTotal: 0) == nil
     }
 
     /// 原始 Tokens 到 Fast 计费等效 Tokens 的换算倍率；未知或未收录的 Fast 模型返回 nil。
@@ -907,7 +926,8 @@ nonisolated enum Pricing {
         case .unknown:
             return nil
         case .fast:
-            let key = pricingKey(model: model)
+            let key = resolvedPrice(model: model, app: app, speed: speed, at: Date(), inputTotal: 0)?.key
+                ?? pricingKey(model: model)
             switch app {
             case .codex:
                 // ChatGPT credit 倍率不是 API Priority 价格字段，不能从在线价格猜。
@@ -994,10 +1014,13 @@ nonisolated enum Pricing {
 
     /// 计价时实际会用到的远端价格。本地规则优先的键返回 nil，与 `price(for:)` 的取价顺序一致。
     private static func remoteRate(for usage: PricingUsageKey) -> ModelPrice? {
-        if usage.speed == .standard, localOverrideKeys.contains(usage.model) { return nil }
-        if usage.speed == .fast, fixedFastLocalOverrideKeys.contains(usage.model) { return nil }
-        if usage.speed == .fast, usage.app == .codex, timedCodexFastPrices[usage.model] != nil { return nil }
-        return PricingCatalogStore.shared.rate(for: usage.model, app: usage.app, speed: usage.speed)
+        guard let key = resolvedPrice(
+            model: usage.model, app: usage.app, speed: usage.speed, at: Date(), inputTotal: 0
+        )?.key else { return nil }
+        if usage.speed == .standard, localOverrideKeys.contains(key) { return nil }
+        if usage.speed == .fast, fixedFastLocalOverrideKeys.contains(key) { return nil }
+        if usage.speed == .fast, usage.app == .codex, timedCodexFastPrices[key] != nil { return nil }
+        return PricingCatalogStore.shared.rate(for: key, app: usage.app, speed: usage.speed)
     }
 
     private static func sha256Hex(_ text: String) -> String {
@@ -1052,11 +1075,9 @@ nonisolated enum Pricing {
         let cacheRuleBody = "claude-cache-creation-1h:\(claudeCacheCreation1hMultiplier)"
         let fixedOverrideBody = fixedLocalOverrideKeys.sorted().joined(separator: ";")
         let fixedFastOverrideBody = fixedFastLocalOverrideKeys.sorted().joined(separator: ";")
-        // 查价前缀或 Cursor 解析规则改变会让原本未定价的用量命中新键，也要触发重建。
-        // 调整 ModelIdentity 的 Cursor 查价语义时同步提高此版本。
-        let pricingPrefixBody = pricingPrefixes.joined(separator: ";")
-        let pricingAliasBody = "model-identity-cursor-v1"
-        return "\(baseBody)|\(tierBody)|\(timedTierBody)|\(timedFastBody)|\(fastLongBody)|\(timedFastLongBody)|\(overrideBody)|\(fixedOverrideBody)|\(fixedFastOverrideBody)|\(fastPriceBody)|\(cacheRuleBody)|\(pricingPrefixBody)|\(pricingAliasBody)"
+        // 模型解析规则改变会让原本未定价的用量命中新键，也要触发重建。
+        let identityRuleBody = ModelIdentity.ruleSignature
+        return "\(baseBody)|\(tierBody)|\(timedTierBody)|\(timedFastBody)|\(fastLongBody)|\(timedFastLongBody)|\(overrideBody)|\(fixedOverrideBody)|\(fixedFastOverrideBody)|\(fastPriceBody)|\(cacheRuleBody)|\(identityRuleBody)"
     }
 
     private static func fingerprintBody(_ values: [String: ModelPrice], prefix: String) -> String {

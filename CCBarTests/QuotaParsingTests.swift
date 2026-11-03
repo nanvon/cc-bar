@@ -832,7 +832,8 @@ final class QuotaParsingTests: XCTestCase {
 
         XCTAssertEqual(plan("claude_pro", "default_claude_ai"), "Pro")
         XCTAssertEqual(plan("claude_max", "default_claude_max_5x"), "Max")
-        XCTAssertEqual(plan("claude_max", "default_claude_max_20x"), "Max")
+        XCTAssertEqual(plan("claude_max", "default_claude_max_20x"), "Ultra")
+        XCTAssertEqual(plan("claude_ultra", nil), "Ultra")
         XCTAssertEqual(plan("claude_team", nil), "Team")
         XCTAssertNil(plan(nil, nil))
         XCTAssertEqual(
@@ -3812,9 +3813,13 @@ final class QuotaParsingTests: XCTestCase {
                        CostBreakdown(input: 4, output: 12, cacheRead: 1, cacheCreation: 0))
         XCTAssertEqual(price("magpie/cursor/grok-4.7@500k:fast"),
                        CostBreakdown(input: 6, output: 18, cacheRead: 1.5, cacheCreation: 0))
-        XCTAssertNil(price("cursor/composer-2.5"))
-        XCTAssertNil(price("magpie/cursor/composer-2.5"))
+        // 未写速度时没有 Cursor 自有价，按型号官方价计。
+        XCTAssertEqual(price("cursor/composer-2.5"),
+                       CostBreakdown(input: 0.5, output: 2.5, cacheRead: 0.2, cacheCreation: 0))
+        XCTAssertEqual(price("magpie/cursor/composer-2.5"),
+                       CostBreakdown(input: 0.5, output: 2.5, cacheRead: 0.2, cacheCreation: 0))
         XCTAssertNil(price("magpie/cursor/grok-4.7@500k:unknown"))
+        XCTAssertNil(price("cursor/new-model:fast"), "没有 Cursor Fast 价时不能用 Standard 价顶替")
         XCTAssertNil(price("cursor/grok-4.7-256k:fast"))
         XCTAssertNil(Pricing.costBreakdown(
             app: .codex, model: "cursor/composer-2.5:fast", speed: .fast,
@@ -3830,15 +3835,62 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertEqual(identity.model, "grok-4.7")
         XCTAssertEqual(identity.context, "256k")
         XCTAssertEqual(identity.speed, .fast)
-        XCTAssertEqual(identity.cursorPricingKey, "cursor-sdk:grok-4.7:256k:fast")
+        XCTAssertEqual(identity.channelPricingKey, "cursor-sdk:grok-4.7:256k:fast")
+        XCTAssertEqual(identity.pricingIdentity, "cursor/grok-4.7@256k:fast")
         XCTAssertEqual(ModelIdentity.parse("cursor/new-model@1m:slow").model, "new-model")
         XCTAssertEqual(ModelIdentity.parse("cursor/composer-2.5").speed, .unspecified)
-        for value in ["cursor/model@20261027:fast", "cursor/model@0k:fast", "cursor/model:unknown", "unknown/cursor/model:fast"] {
+        XCTAssertNil(ModelIdentity.parse("cursor/composer-2.5").channelPricingKey)
+        XCTAssertEqual(ModelIdentity.parse("cursor/model@20261027:fast").name, "model")
+        XCTAssertEqual(ModelIdentity.parse("unknown/cursor/model:fast").channel, .cursor)
+        for value in ["cursor/model@0k:fast", "cursor/model:unknown", "cursor/model@latest"] {
             let parsed = ModelIdentity.parse(value)
-            XCTAssertEqual(parsed.channel, .unknown)
+            XCTAssertFalse(parsed.isResolved)
             XCTAssertEqual(parsed.model, value)
-            XCTAssertNil(parsed.cursorPricingKey)
+            XCTAssertNil(parsed.channelPricingKey)
         }
+    }
+
+    func testPricingUsesOfficialModelPriceAcrossChannels() {
+        func price(_ model: String, app: UsageApp = .pi, speed: UsageSpeed = .standard,
+                   inputTotal: Int? = nil) -> CostBreakdown? {
+            Pricing.costBreakdown(
+                app: app, model: model, speed: speed,
+                input: 1_000_000, output: 1_000_000,
+                cacheRead: 1_000_000, cacheCreation: 0,
+                at: Date(timeIntervalSince1970: 1_800_000_000), inputTotal: inputTotal
+            )
+        }
+        let flash = price("deepseek-v4.1-flash")
+        XCTAssertNotNil(flash)
+        for model in [
+            "trae-cn/deepseek-v4.1-flash-1017-max",
+            "magpie/trae-cn/DeepSeek-V4.1-Flash-1017-max",
+            "magpie/workbuddy/deepseek-v4.1-flash",
+            "deepseek-v41-flash-1017",
+            "cursor/deepseek-v41-flash-1017",
+            "opencode/deepseek-v4.1-flash-free",
+            "opencode2dsh/deepseek-v4.1-flash-free",
+            "magpie/opencode-zen-free/deepseek-v4.1-flash-free",
+            "some-new-gateway/deepseek-v4.1-flash"
+        ] {
+            XCTAssertEqual(price(model), flash, model)
+        }
+        XCTAssertEqual(price("commandcode/minimax/minimax-m3-free"), price("minimax-m3"))
+        XCTAssertEqual(price("grok-4-7"), price("grok-4.7"))
+        XCTAssertEqual(price("cursor/grok-4.7@256k", inputTotal: 256_001),
+                       CostBreakdown(input: 4, output: 12, cacheRead: 1, cacheCreation: 0))
+        // 原名本身有价时不能被去后缀改写：Command Code 的 Fast 变体单独定价。
+        XCTAssertEqual(price("commandcode/deepseek/deepseek-v4.1-flash-fast"),
+                       CostBreakdown(input: 0.32, output: 1.16, cacheRead: 0.032, cacheCreation: 0))
+        XCTAssertNil(price("opencode/mimo-v2.6-flash-free"))
+        XCTAssertNil(price("codex-auto-review", app: .codex))
+
+        XCTAssertEqual(Pricing.pricingKey(model: "trae-cn/deepseek-v4.1-flash-1017-max"),
+                       "deepseek-v4.1-flash-1017-max")
+        XCTAssertEqual(ModelIdentity.parse("trae-cn/deepseek-v4.1-flash-1017-max").model, "deepseek-v4.1-flash")
+        XCTAssertEqual(ModelIdentity.parse("composer-2.5-fast").model, "composer-2.5")
+        XCTAssertEqual(ModelIdentity.parse("grok-4.7-high-fast").model, "grok-4.7")
+        XCTAssertEqual(ModelIdentity.parse("opencode/mimo-v2.6-flash-free").model, "mimo-v2.6-flash-free")
     }
 
     func testGPT55StandardLongContextProAndFastRates() throws {

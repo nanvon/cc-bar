@@ -33,8 +33,8 @@ final class StatsOverviewModelTests: XCTestCase {
         XCTAssertEqual(ModelIdentity.parse("magpie/codex/gpt-6-astra").model, "gpt-6-astra")
         XCTAssertEqual(ModelIdentity.parse("openai-codex/gpt-6-astra").model, "gpt-6-astra")
         XCTAssertEqual(ModelIdentity.parse("magpie/opencode-zen-free/deepseek-v4.1-flash-free").model,
-                       "deepseek-v4.1-flash-free")
-        XCTAssertEqual(ModelIdentity.parse("unknown/codex/gpt-6-astra").model, "unknown/codex/gpt-6-astra")
+                       "deepseek-v4.1-flash")
+        XCTAssertEqual(ModelIdentity.parse("unknown/codex/gpt-6-astra").model, "gpt-6-astra")
     }
 
     // MARK: - 等价对照
