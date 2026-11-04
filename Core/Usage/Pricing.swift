@@ -197,6 +197,8 @@ nonisolated enum Pricing {
         "glm-5.2":        .init(input: 1.40, output: 4.40, cacheRead: 0.26,  cacheCreation: 0),
         "glm-5.3-flash":  .init(input: 0.15, output: 0.50, cacheRead: 0.03,  cacheCreation: 0),
         "glm-5.3-flashx": .init(input: 0.37, output: 1.25, cacheRead: 0.075, cacheCreation: 0),
+        // Kimi K3.1 Pro 官方价；DSH 不区分缓存 TTL，写入统一按默认 5 分钟价估算。
+        "kimi-k3.1-pro":  .init(input: 2, output: 10, cacheRead: 0.20, cacheCreation: 2),
         // M3.1 Flash 为固定价，官方未列缓存写入费；M3 取永久五折后的实付价。
         // M3 官方另有 >512K 的 2 倍档，Command Code 两档都按短上下文价，这里保持短上下文价。
         // M2.7 官方单列缓存写入；M3 定价页没有这项，继续为 0。

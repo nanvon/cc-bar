@@ -125,6 +125,18 @@ final class DshPricingTests: XCTestCase {
         assertRates("deepseek/deepseek-v4-flash", at: utc(2026, 9, 15), input: 0.30, output: 1.20, cacheRead: 0.006)
     }
 
+    func testKimiK31ProForwarderPriceAndCacheWrite() {
+        let model = "magpie/trae-cn/kimi-k3.1-pro-max"
+        assertRates(model, at: utc(2026, 11, 4), input: 2, output: 10, cacheRead: 0.20)
+        let breakdown = Pricing.costBreakdown(
+            app: .dsh, model: model, speed: .standard,
+            input: 5_699, output: 17_742, cacheRead: 3_772_160, cacheCreation: 123_904,
+            at: utc(2026, 11, 4)
+        )
+        assertClose(breakdown?.cacheCreation, 0.247808, "Kimi cacheCreation")
+        assertClose(breakdown?.total, 1.191058, "Kimi 汇总")
+    }
+
     func testDSHEntryCostMatchesExpectedUSD() {
         // 2026-09-15：input 1M + output 0.5M + cacheRead 2M
         // 0.30 + 0.5×1.20 + 2×0.006 = 0.912
