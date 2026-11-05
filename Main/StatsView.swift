@@ -3512,14 +3512,17 @@ enum StatsFormatter {
         return value < 0.1 ? "<0.1%" : String(format: "%.1f%%", min(100, value))
     }
 
-    /// 紧凑显示。中文用 万 / 亿,英文用 k / M / B。
-    /// zh:  6772.37 万  /  1.23 亿  /  1,234
-    /// en:  67.7M  /  248.3k  /  1,234
+    /// 紧凑显示，单位由「设置 → 外观与显示 → 统计 → Token 单位」决定，默认跟随界面语言。
     @MainActor
     static func compactToken(_ value: Int) -> String {
+        compactToken(value, usesChineseUnits: SettingsStore.shared.usesChineseTokenUnits)
+    }
+
+    /// 万 / 亿:  6772.37 万  /  1.23 亿  /  1,234
+    /// k / M / B:  67.72M  /  248.3k  /  999
+    static func compactToken(_ value: Int, usesChineseUnits: Bool) -> String {
         let v = Double(value)
-        switch L10n.current {
-        case .zh:
+        if usesChineseUnits {
             if v >= 100_000_000 {
                 return "\(trimTrailingZeros(v / 100_000_000)) 亿"
             }
@@ -3527,18 +3530,17 @@ enum StatsFormatter {
                 return "\(trimTrailingZeros(v / 10_000)) 万"
             }
             return token(value)
-        case .en:
-            if v >= 1_000_000_000 {
-                return String(format: "%.2fB", v / 1_000_000_000)
-            }
-            if v >= 1_000_000 {
-                return String(format: "%.2fM", v / 1_000_000)
-            }
-            if v >= 1_000 {
-                return String(format: "%.1fk", v / 1_000)
-            }
-            return "\(value)"
         }
+        if v >= 1_000_000_000 {
+            return String(format: "%.2fB", v / 1_000_000_000)
+        }
+        if v >= 1_000_000 {
+            return String(format: "%.2fM", v / 1_000_000)
+        }
+        if v >= 1_000 {
+            return String(format: "%.1fk", v / 1_000)
+        }
+        return "\(value)"
     }
 
     @MainActor

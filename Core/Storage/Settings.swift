@@ -3,6 +3,15 @@ import Foundation
 import Observation
 import ServiceManagement
 
+/// Token 大数的显示单位（设置项，默认跟随界面语言）。
+enum TokenUnitStyle: String, CaseIterable, Identifiable {
+    case automatic
+    case chinese
+    case western
+
+    var id: String { rawValue }
+}
+
 enum QuotaIntervalChoice: String, CaseIterable, Identifiable {
     case m1
     case m2
@@ -279,6 +288,8 @@ final class SettingsStore {
 
     /// 统计页排行口径（默认 Tokens），见 `StatsRankMetric`。
     var statsRankMetric: StatsRankMetric { didSet { defaults.set(statsRankMetric.rawValue, forKey: Keys.statsRankMetric) } }
+    /// Token 大数的显示单位，见 `TokenUnitStyle`。
+    var tokenUnitStyle: TokenUnitStyle { didSet { defaults.set(tokenUnitStyle.rawValue, forKey: Keys.tokenUnitStyle) } }
 
     /// 额度用满预估的 Codex 卡与弹出面板的 Codex 花费是否计入 Pi / OpenCode / DSH 里使用 Codex 订阅的用量
     /// （默认只算 Codex 自己的日志）。
@@ -420,6 +431,8 @@ final class SettingsStore {
         resetTimeDisplay = ResetTimeDisplay(rawValue: rtdRaw) ?? .relative
         let srmRaw = defaults.string(forKey: Keys.statsRankMetric) ?? StatsRankMetric.tokens.rawValue
         statsRankMetric = StatsRankMetric(rawValue: srmRaw) ?? .tokens
+        let tusRaw = defaults.string(forKey: Keys.tokenUnitStyle) ?? TokenUnitStyle.automatic.rawValue
+        tokenUnitStyle = TokenUnitStyle(rawValue: tusRaw) ?? .automatic
         cycleIncludesOtherAgents = defaults.object(forKey: Keys.cycleIncludesOtherAgents) as? Bool ?? false
         piEstimatedOutputSpeed = defaults.object(forKey: Keys.piEstimatedOutputSpeed) as? Bool ?? false
         showServiceStatus = defaults.object(forKey: Keys.showServiceStatus) as? Bool ?? true
@@ -725,6 +738,15 @@ final class SettingsStore {
         }
     }
 
+    /// Token 大数是否用 万 / 亿；否则用 k / M / B。
+    var usesChineseTokenUnits: Bool {
+        switch tokenUnitStyle {
+        case .automatic: return resolvedLanguage == .zh
+        case .chinese: return true
+        case .western: return false
+        }
+    }
+
     // MARK: - Floating panel frame
 
     /// 悬浮窗 frame，nil 表示尚未拖动过；启动时由 controller 还原
@@ -813,6 +835,7 @@ final class SettingsStore {
         static let usageInterval = "ccbar.settings.usageInterval"
         static let resetTimeDisplay = "ccbar.settings.resetTimeDisplay"
         static let statsRankMetric = "ccbar.settings.statsRankMetric"
+        static let tokenUnitStyle = "ccbar.settings.tokenUnitStyle"
         static let cycleIncludesOtherAgents = "ccbar.settings.cycleIncludesOtherAgents"
         static let piEstimatedOutputSpeed = "ccbar.settings.piEstimatedOutputSpeed"
         static let showServiceStatus = "ccbar.settings.showServiceStatus"

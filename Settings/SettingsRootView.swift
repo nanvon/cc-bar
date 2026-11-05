@@ -419,6 +419,20 @@ struct SettingsRootView: View {
                 .fixedSize()
             }
             InsetDivider()
+            PrefsRow(label: "Token units", chinese: "Token 单位") {
+                Picker("", selection: Binding(
+                    get: { settings.tokenUnitStyle },
+                    set: { settings.tokenUnitStyle = $0 }
+                )) {
+                    Text(tr("Follow language", "跟随语言")).tag(TokenUnitStyle.automatic)
+                    Text("万 / 亿").tag(TokenUnitStyle.chinese)
+                    Text("k / M / B").tag(TokenUnitStyle.western)
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .fixedSize()
+            }
+            InsetDivider()
             PrefsRow(
                 label: "Include Codex subscription usage in Pi, OpenCode and DSH",
                 chinese: "包含 Pi、OpenCode、DSH 中的 Codex 订阅用量",

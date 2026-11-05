@@ -3234,6 +3234,15 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertEqual(StatsFormatter.axisCost(0.125), "$0.125")
     }
 
+    func testCompactTokenFollowsSelectedUnits() {
+        XCTAssertEqual(StatsFormatter.compactToken(67_723_700, usesChineseUnits: true), "6772.37 万")
+        XCTAssertEqual(StatsFormatter.compactToken(123_000_000, usesChineseUnits: true), "1.23 亿")
+        XCTAssertEqual(StatsFormatter.compactToken(67_723_700, usesChineseUnits: false), "67.72M")
+        XCTAssertEqual(StatsFormatter.compactToken(248_300, usesChineseUnits: false), "248.3k")
+        XCTAssertEqual(StatsFormatter.compactToken(1_230_000_000, usesChineseUnits: false), "1.23B")
+        XCTAssertEqual(StatsFormatter.compactToken(999, usesChineseUnits: false), "999")
+    }
+
     func testSuccessfulCycleRebuildPreservesUnrelatedScanWarning() {
         let scanWarning = "usage scan incomplete: 1 log source(s) unreadable; retrying next scan"
 
