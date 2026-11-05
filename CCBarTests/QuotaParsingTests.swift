@@ -1128,6 +1128,101 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertTrue(entries.filter { $0.windowIndex == 1 }.allSatisfy { $0.resetsAt == secondReset })
     }
 
+    func testFiveHourTimelineConnectsResetWithoutDateToNewWindow() throws {
+        let start = QuotaHistoryStore.todayStart(now: Date(timeIntervalSince1970: 1_788_000_000))
+        let firstReset = start.addingTimeInterval(5 * 3_600)
+        let secondReset = firstReset.addingTimeInterval(5 * 3_600)
+        let key = "claude:primary"
+        var payload = QuotaHistoryPayload(dayStart: start)
+        // 重现实际采样顺序：49 → 48 → 到期后 100（无重置时间）→ 同值刷新 → 新窗 97。
+        let samples: [(Double, TimeInterval, Date?)] = [
+            (51, 3_600, firstReset),
+            (52, 7_200, firstReset),
+            (0, 18_060, nil),
+            (0, 18_120, nil),
+            (3, 21_600, secondReset),
+        ]
+        for (used, offset, reset) in samples {
+            payload = QuotaHistoryStore.record(
+                payload: payload, accountKey: key, app: .claude, kind: .claudePrimary,
+                snapshot: snapshot(kind: .fiveHour, usedPercent: used, reset: reset),
+                sampledAt: start.addingTimeInterval(offset)
+            )
+        }
+        // 经过保存、重读与历史清洗，旧格式的满额恢复点仍应正确投影。
+        let restored = try JSONDecoder().decode(QuotaHistoryPayload.self, from: JSONEncoder().encode(payload))
+        let cleaned = QuotaHistoryStore.cleanupInconsistentChains(restored)
+        XCTAssertEqual(cleaned, QuotaHistoryStore.cleanupInconsistentChains(cleaned))
+        let period = try XCTUnwrap(QuotaHistoryStore.timelinePeriods(
+            payload: cleaned, accountKey: key, limitKind: .fiveHour,
+            now: start.addingTimeInterval(21_600)
+        ).first)
+        XCTAssertEqual(period.entries.map(\.remainingPercent), [48, 100, 97])
+        XCTAssertEqual(period.entries.map(\.windowIndex), [0, 1, 1])
+        XCTAssertEqual(period.entries.map(\.source), [.change, .sample, .change])
+        XCTAssertNil(period.entries[1].deltaPercent)
+        XCTAssertEqual(period.entries[1].sampledAt, start.addingTimeInterval(18_060))
+        XCTAssertNil(period.entries[1].resetsAt, "不伪造接口未返回的重置时间")
+        XCTAssertEqual(period.totalDelta, -4)
+        XCTAssertEqual(cleaned.events.count, 3, "同值刷新不重复生成满额恢复记录")
+        XCTAssertEqual(cleaned.events.last?.beforeRemainingPercent, 100)
+        XCTAssertEqual(cleaned.events.last?.deltaPercent, -3)
+    }
+
+    func testHistoryDoesNotRollBackSampleAfterExpiredWindowWithoutResetDate() throws {
+        let start = Date(timeIntervalSince1970: 1_788_000_000)
+        let reset = start.addingTimeInterval(3_600)
+        let key = "claude:primary"
+        var payload = QuotaHistoryPayload(dayStart: QuotaHistoryStore.todayStart(now: start))
+        for (used, offset) in [(51.0, 0.0), (52.0, 60.0)] {
+            payload = QuotaHistoryStore.record(
+                payload: payload, accountKey: key, app: .claude, kind: .claudePrimary,
+                snapshot: snapshot(kind: .fiveHour, usedPercent: used, reset: reset),
+                sampledAt: start.addingTimeInterval(offset)
+            )
+        }
+        // 模拟只有 lastSamples 留下重置后满额的历史，旧链尾仍停在上一窗口 48%。
+        let series = QuotaHistoryStore.seriesKey(accountKey: key, limitKind: .fiveHour)
+        var sample = try XCTUnwrap(payload.lastSamples[series])
+        sample.sampledAt = reset.addingTimeInterval(60)
+        sample.remainingPercent = 100
+        sample.resetsAt = nil
+        payload.lastSamples[series] = sample
+        XCTAssertEqual(QuotaHistoryStore.cleanupInconsistentChains(payload).lastSamples[series]?.remainingPercent, 100)
+
+        payload = QuotaHistoryStore.record(
+            payload: payload, accountKey: key, app: .claude, kind: .claudePrimary,
+            snapshot: snapshot(kind: .fiveHour, usedPercent: 0, reset: nil),
+            sampledAt: reset.addingTimeInterval(120)
+        )
+        XCTAssertEqual(payload.events.count, 1, "同值刷新不能以旧窗口链尾制造 +52%")
+        XCTAssertEqual(payload.lastSamples[series]?.remainingPercent, 100)
+    }
+
+    func testFiveHourTimelineKeepsMissingResetDateInUnexpiredWindow() throws {
+        let start = QuotaHistoryStore.todayStart(now: Date(timeIntervalSince1970: 1_788_000_000))
+        let reset = start.addingTimeInterval(5 * 3_600)
+        let key = "claude:primary"
+        var payload = QuotaHistoryPayload(dayStart: start)
+        let samples: [(Double, TimeInterval, Date?)] = [
+            (0, 3_600, reset), (1, 7_200, reset), (0, 7_260, nil), (2, 7_320, reset),
+        ]
+        for (used, offset, end) in samples {
+            payload = QuotaHistoryStore.record(
+                payload: payload, accountKey: key, app: .claude, kind: .claudePrimary,
+                snapshot: snapshot(kind: .fiveHour, usedPercent: used, reset: end),
+                sampledAt: start.addingTimeInterval(offset)
+            )
+        }
+        let period = try XCTUnwrap(QuotaHistoryStore.timelinePeriods(
+            payload: payload, accountKey: key, limitKind: .fiveHour,
+            now: start.addingTimeInterval(7_320)
+        ).first)
+        XCTAssertEqual(period.entries.map(\.windowIndex), [0, 0, 0])
+        XCTAssertEqual(period.entries.map(\.deltaPercent), [-1, 1, -2])
+        XCTAssertTrue(period.entries.allSatisfy { $0.source == .change })
+    }
+
     func testWeeklyTimelineKeepsPreviousCycleWhenResetPointShifted() {
         let now = Date(timeIntervalSince1970: 1_788_000_000)
         let currentEnd = now.addingTimeInterval(3 * 24 * 60 * 60)

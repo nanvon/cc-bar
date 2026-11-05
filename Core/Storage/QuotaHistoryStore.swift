@@ -297,18 +297,29 @@ enum QuotaHistoryStore {
     }
 
     /// 按 `resets_at` 给相邻点分段：跨窗重置不产生变动事件，折线若把两个窗口直连，
-    /// 就会画出一条「额度自己涨回去」的假斜线。`resets_at` 缺失时无从判定，延续当前段。
+    /// 就会画出一条「额度自己涨回去」的假斜线。`resets_at` 缺失但上一窗口已到期时，
+    /// 先开始新段；后续取到新窗口时间后接入此段，不再重复断线。
     nonisolated private static func assignWindowIndexes(_ entries: [QuotaTimelineEntry]) -> [QuotaTimelineEntry] {
         var result: [QuotaTimelineEntry] = []
         result.reserveCapacity(entries.count)
         var index = 0
         var windowEnd: Date?
         for entry in entries {
+            var next = entry
+            if isAfterUnresolvedReset(previousEnd: windowEnd, resetsAt: entry.resetsAt, sampledAt: entry.sampledAt) {
+                index += 1
+                windowEnd = nil
+                // Claude 到期后可能返回满额但没有 resets_at。旧版本将恢复满额记为正 delta，
+                // 保留真实采样点，在展示时改为无差值的重置采样，不计入变动明细条数。
+                if entry.remainingPercent == 100, let delta = entry.deltaPercent, delta > 0 {
+                    next.source = .sample
+                    next.deltaPercent = nil
+                }
+            }
             if let resetsAt = entry.resetsAt {
                 if let windowEnd, !isSameWindow(windowEnd, resetsAt) { index += 1 }
                 windowEnd = resetsAt
             }
-            var next = entry
             next.windowIndex = index
             result.append(next)
         }
@@ -463,6 +474,7 @@ enum QuotaHistoryStore {
         var baseline = previous
         if let tail = next.events.last(where: { $0.accountKey == accountKey && $0.limitKind == limit.kind }),
            isSameWindow(previous.resetsAt, tail.resetsAt),
+           !isAfterUnresolvedReset(previousEnd: tail.resetsAt, resetsAt: previous.resetsAt, sampledAt: previous.sampledAt),
            previous.sampledAt >= tail.sampledAt,
            previous.remainingPercent != tail.afterRemainingPercent
         {
@@ -485,6 +497,8 @@ enum QuotaHistoryStore {
         // 采样写为新基线；旧窗口事件保持独立历史，互不差分。
         guard isSameWindow(baseline.resetsAt, limit.window.resetsAt) else { return next }
 
+        // 到期后暂缺重置时间的满额恢复也保留原始记录；投影时按上一窗口的到期时间
+        // 将其识别为新段的重置采样，避免后续刷新覆盖 lastSamples 后丢失这个点。
         let delta = remaining - baseline.remainingPercent
         next.events.append(QuotaChangeEvent(
             id: eventId(
@@ -513,6 +527,16 @@ enum QuotaHistoryStore {
     nonisolated private static func isSameWindow(_ a: Date?, _ b: Date?) -> Bool {
         guard let a, let b else { return true }
         return abs(a.timeIntervalSince(b)) <= windowAlignmentTolerance
+    }
+
+    /// 缺失新重置时间不能否定已知的旧窗口到期，尤其不能据此把新采样回滚成旧窗口的值。
+    nonisolated private static func isAfterUnresolvedReset(
+        previousEnd: Date?,
+        resetsAt: Date?,
+        sampledAt: Date
+    ) -> Bool {
+        guard resetsAt == nil, let previousEnd else { return false }
+        return sampledAt >= previousEnd
     }
 
     nonisolated static func todayStart(now: Date = Date()) -> Date {
@@ -591,6 +615,7 @@ enum QuotaHistoryStore {
             }) else { continue }
             guard tail.limitID == sample.limitID,
                   isSameWindow(tail.resetsAt, sample.resetsAt),
+                  !isAfterUnresolvedReset(previousEnd: tail.resetsAt, resetsAt: sample.resetsAt, sampledAt: sample.sampledAt),
                   sample.remainingPercent != tail.afterRemainingPercent
             else { continue }
             var fixed = sample
