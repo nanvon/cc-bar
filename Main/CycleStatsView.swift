@@ -275,15 +275,16 @@ struct QuotaCycleHistorySection: View {
     let apps: [UsageApp]
     let isWide: Bool
 
-    @State private var kind: QuotaLimitKind = .weekly
+    private var kind: QuotaLimitKind { appState.mainWindowSession.historyWindow }
 
     var body: some View {
+        @Bindable var session = appState.mainWindowSession
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(tr("Past cycles", "历史周期"))
                     .font(.system(size: 13, weight: .semibold))
                 Spacer(minLength: 8)
-                Picker(tr("Cycle", "周期"), selection: $kind) {
+                Picker(tr("Cycle", "周期"), selection: $session.historyWindow) {
                     Text(tr("5-hour", "5 小时")).tag(QuotaLimitKind.fiveHour)
                     Text(tr("Weekly", "周")).tag(QuotaLimitKind.weekly)
                 }

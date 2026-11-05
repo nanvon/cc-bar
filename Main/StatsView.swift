@@ -398,18 +398,29 @@ private struct CursorHistoryRequest: Hashable {
 
 struct StatsView: View {
     @Environment(AppState.self) private var appState
-    @State private var range: StatsRange = .today
-    @State private var serviceFilter: StatsServiceFilter = .all
-    @State private var viewMode: StatsViewMode = .overview
-    @State private var customFrom: Date = Calendar.current.startOfDay(
-        for: Date().addingTimeInterval(-7 * 86400)
-    )
-    @State private var customTo: Date = Calendar.current.startOfDay(for: Date())
-    @State private var granularity: StatsGranularity = .day
+    private var session: MainWindowSessionState { appState.mainWindowSession }
+    private var range: StatsRange {
+        get { session.range }
+        nonmutating set { session.range = newValue }
+    }
+    private var serviceFilter: StatsServiceFilter {
+        get { session.serviceFilter }
+        nonmutating set { session.serviceFilter = newValue }
+    }
+    private var viewMode: StatsViewMode {
+        get { session.viewMode }
+        nonmutating set { session.viewMode = newValue }
+    }
+    private var customFrom: Date { session.customFrom }
+    private var customTo: Date { session.customTo }
+    private var granularity: StatsGranularity {
+        get { session.granularity }
+        nonmutating set { session.granularity = newValue }
+    }
     /// 概览派生结果的同步缓存，见 `StatsOverviewCache`。
     @State private var overviewCache = StatsOverviewCache()
-    /// 时间线窗口视角全局统一，避免 Codex 与 Claude 默认落在不同口径。
-    @State private var timelineWindow: QuotaLimitKind = .fiveHour
+    /// 时间线窗口视角全局统一，与历史周期的选择分别记忆。
+    private var timelineWindow: QuotaLimitKind { session.timelineWindow }
     @State private var pendingNavigation: StatsNavigationRequest?
     /// 概览 / 额度页的滚动画布是否已离开顶部，决定顶栏分隔线是否显示（见 `showsTopBarDivider`）。
     @State private var canvasScrolled = false
@@ -418,6 +429,7 @@ struct StatsView: View {
     @State private var overviewBottomHeight: CGFloat = 0
 
     var body: some View {
+        @Bindable var session = self.session
         HStack(spacing: 0) {
             sidebar
                 .frame(width: MainWindowLayout.sidebarWidth)
@@ -440,20 +452,20 @@ struct StatsView: View {
                 switch viewMode {
                 case .conversations:
                     ConversationStatsView(
-                        granularity: $granularity,
-                        range: $range,
-                        customFrom: $customFrom,
-                        customTo: $customTo,
+                        granularity: $session.granularity,
+                        range: $session.range,
+                        customFrom: $session.customFrom,
+                        customTo: $session.customTo,
                         serviceFilter: serviceFilter,
                         navigation: $pendingNavigation
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 case .projects:
                     ProjectStatsView(
-                        granularity: $granularity,
-                        range: $range,
-                        customFrom: $customFrom,
-                        customTo: $customTo,
+                        granularity: $session.granularity,
+                        range: $session.range,
+                        customFrom: $session.customFrom,
+                        customTo: $session.customTo,
                         serviceFilter: serviceFilter,
                         navigation: $pendingNavigation,
                         navigate: navigate,
@@ -535,6 +547,7 @@ struct StatsView: View {
     }
 
     private func overviewContent(canvasWidth: CGFloat, canvasHeight: CGFloat, isWide: Bool) -> some View {
+        @Bindable var session = self.session
         let model = overviewModel
         let scope = StatsOverviewScope(range: range, granularity: granularity, serviceFilter: serviceFilter)
         let contentWidth = max(0, canvasWidth - 40)
@@ -562,6 +575,7 @@ struct StatsView: View {
                 OverviewCompositionPanel(
                     model: model,
                     scope: scope,
+                    dimension: $session.compositionDimension,
                     onSelectService: { app in serviceFilter = filter(for: app) },
                     navigate: navigate
                 )
@@ -849,12 +863,13 @@ struct StatsView: View {
 
     /// 四个视图共用的顶栏：标题 + 各视图的说明 / 扫描状态，右侧粒度、范围控件（额度页没有）。
     private var topBar: some View {
-        StatsTopBar(
+        @Bindable var session = self.session
+        return StatsTopBar(
             mode: viewMode,
-            granularity: $granularity,
-            range: $range,
-            customFrom: $customFrom,
-            customTo: $customTo
+            granularity: $session.granularity,
+            range: $session.range,
+            customFrom: $session.customFrom,
+            customTo: $session.customTo
         ) {
             topBarDetail
         }
@@ -939,13 +954,14 @@ struct StatsView: View {
     // MARK: Timeline
 
     private var timelineHeader: some View {
-        HStack(alignment: .firstTextBaseline) {
+        @Bindable var session = self.session
+        return HStack(alignment: .firstTextBaseline) {
             Text(timelineWindow == .weekly
                  ? tr("Weekly quota changes", "周额度变化")
                  : tr("Quota changes today", "今天的额度变化"))
                 .font(.system(size: 13, weight: .semibold))
             Spacer()
-            Picker(tr("Quota window", "额度窗口"), selection: $timelineWindow) {
+            Picker(tr("Quota window", "额度窗口"), selection: $session.timelineWindow) {
                 ForEach(QuotaTimelineWindowKind.pickable, id: \.self) { item in
                     Text(item.label).tag(item.kind)
                 }
@@ -1740,10 +1756,10 @@ extension CompositionDimension {
 private struct OverviewCompositionPanel: View {
     let model: StatsOverviewModel
     let scope: StatsOverviewScope
+    @Binding var dimension: CompositionDimension
     let onSelectService: (UsageApp) -> Void
     let navigate: (StatsNavigationRequest.Target) -> Void
 
-    @State private var dimension: CompositionDimension = .service
     @State private var expandedProvider: ModelProvider?
     @State private var expandedModel: String?
 

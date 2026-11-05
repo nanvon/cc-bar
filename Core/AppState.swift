@@ -19,9 +19,44 @@ nonisolated struct AppTerminationError: Error, LocalizedError {
     }
 }
 
+/// 主窗口的浏览选择只在本次运行期间保留；切页和关闭窗口不清空，退出后不写盘。
+@Observable
+@MainActor
+final class MainWindowSessionState {
+    var range: StatsRange = .today
+    var serviceFilter: StatsServiceFilter = .all
+    var viewMode: StatsViewMode = .overview
+    var customFrom: Date = Calendar.current.startOfDay(for: Date().addingTimeInterval(-7 * 86400))
+    var customTo: Date = Calendar.current.startOfDay(for: Date())
+    var granularity: StatsGranularity = .day
+    var timelineWindow: QuotaLimitKind = .fiveHour
+    var historyWindow: QuotaLimitKind = .fiveHour
+    var compositionDimension: CompositionDimension = .service
+    var conversationSort: ConversationQuerySort = .recent
+    var conversationProjectKey: String?
+    var projectSort: ProjectListSort
+    var settingsCategory: SettingsCategory = .services
+    private var projectRankMetric: StatsRankMetric
+
+    init() {
+        let metric = SettingsStore.shared.statsRankMetric
+        projectSort = ProjectListSort(metric)
+        projectRankMetric = metric
+    }
+
+    /// 项目页未挂载时也可能修改排行设置，重新进入时同样需要同步默认排序。
+    func reconcileProjectSort() {
+        let metric = SettingsStore.shared.statsRankMetric
+        guard metric != projectRankMetric else { return }
+        projectRankMetric = metric
+        projectSort = ProjectListSort(metric)
+    }
+}
+
 @Observable
 @MainActor
 final class AppState {
+    let mainWindowSession = MainWindowSessionState()
     var codexAccount: CodexAccount? {
         didSet {
             // 正常 token 续期 / 身份回填不失效；切号、退出登录及已知 user 变化则失效。

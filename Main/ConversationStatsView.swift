@@ -23,8 +23,14 @@ struct ConversationStatsView: View {
     @Binding var navigation: StatsNavigationRequest?
 
     @State private var search = ""
-    @State private var sort: ConversationQuerySort = .recent
-    @State private var projectKey: String?
+    private var sort: ConversationQuerySort {
+        get { appState.mainWindowSession.conversationSort }
+        nonmutating set { appState.mainWindowSession.conversationSort = newValue }
+    }
+    private var projectKey: String? {
+        get { appState.mainWindowSession.conversationProjectKey }
+        nonmutating set { appState.mainWindowSession.conversationProjectKey = newValue }
+    }
     @State private var selection: String?
     @State private var visibleLimit = 200
 
@@ -55,6 +61,10 @@ struct ConversationStatsView: View {
         }
         .onAppear {
             applyNavigation()
+            // 离开本页时，共享的服务或时间范围也可能改变。
+            if let projectKey, !queryResult.projectKeys.contains(projectKey) {
+                self.projectKey = nil
+            }
             reconcileSelection()
         }
         .onChange(of: navigation) { _, _ in applyNavigation() }
@@ -70,10 +80,11 @@ struct ConversationStatsView: View {
 
     /// 列表栏顶部过滤行：搜索、项目菜单、排序，外观与项目页过滤行一致。
     private func filterRow(_ result: ConversationQueryResult) -> some View {
-        HStack(spacing: 6) {
+        @Bindable var session = appState.mainWindowSession
+        return HStack(spacing: 6) {
             StatsSearchField(prompt: tr("Search title or project", "搜索标题或项目"), text: $search)
             projectMenu(result)
-            StatsFilterMenu(items: ConversationQuerySort.allCases, label: { $0.label }, selection: $sort)
+            StatsFilterMenu(items: ConversationQuerySort.allCases, label: { $0.label }, selection: $session.conversationSort)
         }
         .padding(.horizontal, 8)
         .padding(.top, 10)

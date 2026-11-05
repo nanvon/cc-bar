@@ -44,7 +44,10 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
 struct SettingsRootView: View {
     @Environment(AppState.self) private var appState
     private let updater = AppUpdater.shared
-    @State private var selectedCategory: SettingsCategory = .services
+    private var selectedCategory: SettingsCategory {
+        get { appState.mainWindowSession.settingsCategory }
+        nonmutating set { appState.mainWindowSession.settingsCategory = newValue }
+    }
     @State private var launchAtLoginMessage: String?
     @State private var launchAtLoginMessageIsError = false
     @State private var isRecalculatingUsage = false

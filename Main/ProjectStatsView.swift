@@ -3,7 +3,7 @@ import Charts
 import SwiftUI
 
 /// 项目列表排序：API 等值 / Tokens / 最近活跃。特殊项目（无明确项目、系统任务）始终排在末尾。
-/// 默认值跟随设置里的排行口径，菜单切换只作用于本次查看、不持久化。
+/// 默认值跟随设置里的排行口径，菜单选择在本次运行期间保留，不写盘。
 enum ProjectListSort: Hashable, CaseIterable {
     case cost
     case tokens
@@ -118,7 +118,7 @@ struct ProjectStatsView: View {
     let showServiceInOverview: (UsageApp) -> Void
 
     @State private var search = ""
-    @State private var sort = ProjectListSort(SettingsStore.shared.statsRankMetric)
+    private var sort: ProjectListSort { appState.mainWindowSession.projectSort }
     @State private var selection: String?
     @State private var cache = ProjectPageCache()
 
@@ -150,12 +150,15 @@ struct ProjectStatsView: View {
             }
         }
         .onAppear {
+            appState.mainWindowSession.reconcileProjectSort()
             applyNavigation()
-            reconcileSelection(rows: rows)
+            reconcileSelection(rows: listRows(pageOutput.overview.projects))
         }
         .onChange(of: navigation) { _, _ in applyNavigation() }
         .onChange(of: rows.map(\.key)) { _, _ in reconcileSelection(rows: rows) }
-        .onChange(of: SettingsStore.shared.statsRankMetric) { _, metric in sort = ProjectListSort(metric) }
+        .onChange(of: SettingsStore.shared.statsRankMetric) { _, _ in
+            appState.mainWindowSession.reconcileProjectSort()
+        }
     }
 
     /// 列表行大号数字与工具构成细条的口径：按 Tokens / 费用排序时跟随排序，按最近活跃时跟随设置。
@@ -168,7 +171,8 @@ struct ProjectStatsView: View {
     }
 
     private func filterRow(projectCount: Int) -> some View {
-        HStack(spacing: 6) {
+        @Bindable var session = appState.mainWindowSession
+        return HStack(spacing: 6) {
             StatsSearchField(prompt: tr("Search project name or path", "搜索项目名或路径"), text: $search)
             Text(tr("\(projectCount) projects", "\(projectCount) 个项目"))
                 .font(.system(size: 11.5))
@@ -177,7 +181,7 @@ struct ProjectStatsView: View {
                 .lineLimit(1)
                 .fixedSize()
                 .padding(.horizontal, 4)
-            StatsFilterMenu(items: ProjectListSort.allCases, label: { $0.label }, selection: $sort)
+            StatsFilterMenu(items: ProjectListSort.allCases, label: { $0.label }, selection: $session.projectSort)
         }
         .padding(.horizontal, 8)
         .padding(.top, 10)
