@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C1A0DE02000000000001AAAA /* ClaudeAuthTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A0DE01000000000001AAAA /* ClaudeAuthTests.swift */; };
 		49C2AC02000000000001AAAA /* AppUpdater.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C2AC01000000000001AAAA /* AppUpdater.swift */; };
 		49C2AC04000000000001AAAA /* AppUpdateWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C2AC03000000000001AAAA /* AppUpdateWindow.swift */; };
 		49C2AC07000000000001AAAA /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 49C2AC06000000000001AAAA /* Sparkle */; };
@@ -169,6 +170,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		C1A0DE01000000000001AAAA /* ClaudeAuthTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeAuthTests.swift; sourceTree = "<group>"; };
 		49C2AC01000000000001AAAA /* AppUpdater.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUpdater.swift; sourceTree = "<group>"; };
 		49C2AC03000000000001AAAA /* AppUpdateWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUpdateWindow.swift; sourceTree = "<group>"; };
 		49C2AB03000000000001AAAA /* CodexModelIdentityMigrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexModelIdentityMigrationTests.swift; sourceTree = "<group>"; };
@@ -591,6 +593,7 @@
 		49C1B302000000000001AAAA /* CCBarTests */ = {
 			isa = PBXGroup;
 			children = (
+				C1A0DE01000000000001AAAA /* ClaudeAuthTests.swift */,
 				49C2AD06000000000001AAAA /* QuotaAlertTests.swift */,
 				49C1B300000000000001AAAA /* QuotaParsingTests.swift */,
 				49C1BC12000000000001AAAA /* CursorAuthTests.swift */,
@@ -887,6 +890,7 @@
 			files = (
 				49C2AD06000000000001AABB /* QuotaAlertTests.swift in Sources */,
 				49C1B300000000000001AABB /* QuotaParsingTests.swift in Sources */,
+				C1A0DE02000000000001AAAA /* ClaudeAuthTests.swift in Sources */,
 				49C1BC12000000000001AABB /* CursorAuthTests.swift in Sources */,
 				49C1BC15000000000001AABB /* CursorUsageFetcherTests.swift in Sources */,
 				49C1BF02000000000001AABB /* QuotaRefreshPlanTests.swift in Sources */,
