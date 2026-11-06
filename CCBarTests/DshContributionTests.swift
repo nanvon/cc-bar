@@ -365,14 +365,14 @@ final class DshContributionTests: XCTestCase {
     }
 
     func testDeferredRoundRescanIsIdempotent() throws {
-        // UsageService 的节流语义：未落盘的一轮丢弃试算结果、watermark 也停在上一轮，
+        // 不能提交的一轮（如全量重扫不完整）丢弃试算结果、watermark 也停在上一轮，
         // 下一轮会把同样的帧再扫一遍。这里验证「重扫 + 只提交一次」与「只扫一次」等价。
         try logs.write(project: "p", session: "s", file: "session.v1.jsonl.zstd", bytes: try log(session: "s", inputs: [40]))
 
         var contributions: [String: DshContribution] = [:]
         var dshState: [String: ScanFileState] = [:]
 
-        // 第 1 轮：决定暂不落盘 → 试算结果与 watermark 都不采纳
+        // 第 1 轮：不能提交 → 试算结果与 watermark 都不采纳
         let round1 = DshSessionScanner.scan(previous: dshState, root: logs.root)
         let trial = DshContributionStore.apply(scan: round1, to: contributions)
         XCTAssertTrue(trial.changed)
@@ -387,7 +387,7 @@ final class DshContributionTests: XCTestCase {
         XCTAssertEqual(
             totalTokens(DshContributionRollup.reduce(contributions)),
             40,
-            "未落盘导致的重扫不得把同一段用量算两遍"
+            "未提交导致的重扫不得把同一段用量算两遍"
         )
     }
 

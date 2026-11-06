@@ -2368,9 +2368,8 @@ final class UsageService {
             cycleChanged = ingested || opencodeReplaced
         }
 
-        // DSH 不像其他扫描器那样靠 seen 集合兜底去重：本轮若不落盘，watermark 会一并压住，
-        // 下一轮会把同样的帧再扫一遍。因此先纯内存试算贡献，只有本轮真的落盘才把它计入聚合，
-        // 让「未落盘就重扫」天然幂等。
+        // DSH 没有 seen 集合兜底去重，贡献与 watermark 必须同进同退：能提交时两者每轮一起更新内存，
+        // 写盘节流只影响磁盘；不能提交（冻结、全量重扫不完整）时两者都停在上一轮。
         let dshRebuildReady = !dshFrozen && dshNeedsFullRescan && dsh.isComplete
         let canCommitDsh = !dshFrozen && (!dshNeedsFullRescan || dsh.isComplete)
         let dshUpdate = canCommitDsh
@@ -2390,28 +2389,26 @@ final class UsageService {
         let shouldWriteRollups = mustWriteRollups || dshRebuildReady
             || (hasUnwrittenRollupChanges && (!allowDeferredWrite || throttleElapsed))
 
-        if shouldWriteRollups {
-            // 贡献有变化就整体重归并并替换 DSH 分区：日桶、对话桶与档案只换 DSH 那一份，
-            // 其他服务分区原样保留（§3.3）。父子归属变化也在这里生效。
-            if canCommitDsh {
-                // 周期桶与贡献同步提交：未落盘的一轮不归集，否则下一轮重扫会重复计入。
-                if !dshCycleRebuilt, applyDshCycleUpdate(
-                    dshUpdate,
-                    cycles: cycles,
-                    accountSegments: appState?.quotaCycles.accountSegments ?? []
-                ) {
-                    cycleChanged = true
-                }
-                dshContributions = dshUpdate.contributions
-                dshNeedsFullRescan = false
-                let dshRollup = DshContributionRollup.reduce(dshContributions)
-                aggregator.replaceLocal(app: .dsh, buckets: dshRollup.dayBuckets)
-                conversationAggregator.replaceLocal(
-                    app: .dsh,
-                    infos: dshRollup.conversationInfos,
-                    buckets: dshRollup.conversationBuckets
-                )
+        // 整体重归并并替换 DSH 分区：日桶、对话桶与档案只换 DSH 那一份，
+        // 其他服务分区原样保留（§3.3）。父子归属变化也在这里生效。
+        if canCommitDsh {
+            // 周期桶与贡献同步更新：watermark 同时前进，下一轮只会带来新条目。
+            if !dshCycleRebuilt, applyDshCycleUpdate(
+                dshUpdate,
+                cycles: cycles,
+                accountSegments: appState?.quotaCycles.accountSegments ?? []
+            ) {
+                cycleChanged = true
             }
+            dshContributions = dshUpdate.contributions
+            dshNeedsFullRescan = false
+            let dshRollup = DshContributionRollup.reduce(dshContributions)
+            aggregator.replaceLocal(app: .dsh, buckets: dshRollup.dayBuckets)
+            conversationAggregator.replaceLocal(
+                app: .dsh,
+                infos: dshRollup.conversationInfos,
+                buckets: dshRollup.conversationBuckets
+            )
         }
 
         let buckets = aggregator.snapshotLocal()
@@ -2429,7 +2426,7 @@ final class UsageService {
         let claudeSeen = ledgerComplete ? [] : claude.newSeenIds
         let codexSeen = ledgerComplete ? [] : codex.newSeenIds
         let piSeen = ledgerComplete ? [] : pi.newSeenIds
-        let dshStateForScan = shouldWriteRollups && canCommitDsh ? dsh.newState : prev.dsh
+        let dshStateForScan = canCommitDsh ? dsh.newState : prev.dsh
         // watermark 绝不能单独越过尚未落盘的聚合数据：进度落后一轮只是多扫一次，
         // 进度领先则会在重启后拿到「新 watermark + 旧汇总」，中间那段用量永久丢失。
         let probeGenerationID = loadedRollupGeneration ?? ""

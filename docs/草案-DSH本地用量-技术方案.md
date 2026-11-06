@@ -5,7 +5,7 @@
 > 实施中与本文档的三处偏差（有效内容已并入常驻文档，这里只作追溯）：
 > 1. **S1 拆成两个文件**：§7 S1 原写「`DshZstdFrames.swift`：帧边界扫描 + 单帧解码」，实际拆为 `DshZstdFrames.swift`（纯 Swift 帧边界扫描，无外部依赖）与 `DshZstdDecoder.swift`（`import libzstd` 的单帧解码）。
 > 2. **UI 穷举分支提前到 S2 落地**：给 `UsageApp` 增加 `dsh` 会同时打断 Core 与 UI 的穷举 `switch`，不补齐就无法编译，因此 `StatsView` / `DesignSystem` / `ConversationStatsView` / `CycleStatsView` / `SettingsRootView` 的分支随 S2 一起提交，S6 只补识别色、设置探测与诊断。
-> 3. **`DshContributionStore.apply` 返回 `Update{contributions, changed}`**：第 5 个扫描器没有 seen 集合兜底，未落盘的一轮会重扫同样的帧，因此需要 `changed` 供 `UsageService` 做「只在真的落盘时才计入聚合」的门控。
+> 3. **`DshContributionStore.apply` 返回 `Update{contributions, changed}`**：第 5 个扫描器没有 seen 集合兜底，未落盘的一轮会重扫同样的帧，因此需要 `changed` 供 `UsageService` 做「只在真的落盘时才计入聚合」的门控。（2026-11-06 修正：该门控导致 DSH 新用量最长晚 15 分钟显示，现已改为每轮更新内存，写盘节流不变，见[技术实现 §7.4a](技术实现.md)。）
 >
 > 另：本机只读快照的样本量随时间变化（§2.2 记的是 3 个项目 / 19 个会话 / 2498 帧），实施后复核为 24 个规范日志 / 3151 帧，0 撕裂 0 损坏。
 >

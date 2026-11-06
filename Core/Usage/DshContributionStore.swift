@@ -11,8 +11,7 @@ import Foundation
 nonisolated enum DshContributionStore {
     struct Update: Sendable, Equatable {
         var contributions: [String: DshContribution]
-        /// 是否有会话的用量或元数据发生变化。调用方据此决定这轮要不要落盘
-        /// （未落盘就不能把结果计入内存聚合，否则下一轮重扫会重复计费）。
+        /// 是否有会话的用量或元数据发生变化。调用方据此标记有待落盘的变化。
         var changed: Bool
         /// 本轮整体替换（换 generation、替换 / 截断重扫或新建）的会话 id；周期桶据此按会话替换而不是累加。
         var replacedSessionIDs: Set<String> = []

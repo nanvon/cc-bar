@@ -485,6 +485,169 @@ final class UsageSafeRebuildTests: XCTestCase {
         )
     }
 
+    // MARK: - DSH 写盘节流期内的入账
+
+    private struct DshLiveTotals: Equatable {
+        var dayInput: Int
+        var dayRequests: Int
+        var conversationInput: Int
+        var cycleInput: Int
+    }
+
+    private func dshLiveTotals(_ service: UsageService, env: UsageTestEnvironment) -> DshLiveTotals {
+        let current = result(service)
+        let day = env.totals(current.day, app: .dsh)
+        return DshLiveTotals(
+            dayInput: day.inputTokens,
+            dayRequests: day.requestCount,
+            conversationInput: current.conversation
+                .filter { $0.conversationKey == "dsh:dsh-live" }
+                .reduce(0) { $0 + $1.inputTokens },
+            cycleInput: current.cycle
+                .filter { $0.conversationKey == "dsh:dsh-live" }
+                .reduce(0) { $0 + $1.inputTokens }
+        )
+    }
+
+    /// 一个 Codex 周期 + 一条走 Codex 订阅的 DSH 会话，跑完首轮后进入写盘节流窗口。
+    private func seedLiveDsh(_ env: UsageTestEnvironment, now: Date) async throws -> UsageService {
+        env.appState.quotaCycles.records = [
+            makeCycle(
+                id: "codex-5h-live",
+                app: .codex,
+                accountKey: "acct-live",
+                kind: .fiveHour,
+                startAt: now.addingTimeInterval(-3_600),
+                endAt: now.addingTimeInterval(3_600)
+            )
+        ]
+        env.appState.quotaCycles.accountSegments = [
+            QuotaCycleAccountSegment(
+                id: "seg-live",
+                accountKey: "acct-live",
+                app: .codex,
+                startAt: now.addingTimeInterval(-86_400),
+                endAt: nil
+            )
+        ]
+        try writeLiveDshLog(env, now: now, assistants: [(turn: 1, secondsAgo: 120, input: 100)])
+        let service = env.makeService()
+        await env.bootstrap(service)
+        await service.scanNow()
+        XCTAssertEqual(
+            dshLiveTotals(service, env: env),
+            DshLiveTotals(dayInput: 100, dayRequests: 1, conversationInput: 100, cycleInput: 100)
+        )
+        return service
+    }
+
+    /// 同一路径原地重写为更长的内容：inode 不变，增量扫描从 watermark 续读。
+    private func writeLiveDshLog(
+        _ env: UsageTestEnvironment,
+        now: Date,
+        assistants: [(turn: Int, secondsAgo: Double, input: Int)]
+    ) throws {
+        let nowMs = now.timeIntervalSince1970 * 1_000
+        try env.writeDshLog(
+            project: "project-live",
+            session: "dsh-live",
+            records: [DshTestFixtures.session(id: "dsh-live", time: nowMs - 300_000)]
+                + assistants.map {
+                    DshTestFixtures.assistant(
+                        time: nowMs - $0.secondsAgo * 1_000,
+                        provider: "openai-codex",
+                        model: "gpt-5",
+                        input: $0.input,
+                        output: 10,
+                        cacheRead: 0,
+                        turn: $0.turn
+                    )
+                }
+        )
+    }
+
+    func testDshUsageIsVisibleDuringWriteThrottleAndCountedOnce() async throws {
+        let env = environment!
+        let now = Date()
+        let service = try await seedLiveDsh(env, now: now)
+        let committedID = try committed(env).snapshotID
+
+        try writeLiveDshLog(env, now: now, assistants: [
+            (turn: 1, secondsAgo: 120, input: 100),
+            (turn: 2, secondsAgo: 60, input: 200),
+        ])
+        await service.scanNow()
+        let expected = DshLiveTotals(dayInput: 300, dayRequests: 2, conversationInput: 300, cycleInput: 300)
+        XCTAssertEqual(dshLiveTotals(service, env: env), expected, "节流期内的新用量必须当轮可见")
+        XCTAssertEqual(try committed(env).snapshotID, committedID, "写盘节流不变：这一轮不得写盘")
+        XCTAssertEqual(
+            env.totals(try committed(env).usageRollup.buckets, app: .dsh).inputTokens,
+            100,
+            "磁盘上的汇总仍是上一次提交的内容"
+        )
+
+        // 再扫一轮没有新日志：内存 watermark 已前进，不得重复计入。
+        await service.scanNow()
+        XCTAssertEqual(dshLiveTotals(service, env: env), expected, "未写盘的后续轮次不得重复计入")
+
+        // 未写盘就重启：磁盘是旧汇总 + 旧 watermark，补读后总量一致。
+        let restarted = env.makeService()
+        await env.bootstrap(restarted)
+        await restarted.scanNow()
+        XCTAssertEqual(dshLiveTotals(restarted, env: env), expected, "重启后补读不得丢失或翻倍")
+    }
+
+    func testDshSlotReplacedAcrossThrottledRoundsIsCountedOnce() async throws {
+        let env = environment!
+        let now = Date()
+        let service = try await seedLiveDsh(env, now: now)
+
+        try writeLiveDshLog(env, now: now, assistants: [
+            (turn: 1, secondsAgo: 120, input: 100),
+            (turn: 2, secondsAgo: 60, input: 200),
+        ])
+        await service.scanNow()
+
+        // 同一 (turn, step) 的后续样本跨轮到达：替换前样本，整个会话重读后不得相加。
+        try writeLiveDshLog(env, now: now, assistants: [
+            (turn: 1, secondsAgo: 120, input: 100),
+            (turn: 2, secondsAgo: 60, input: 200),
+            (turn: 2, secondsAgo: 30, input: 250),
+        ])
+        await service.scanNow()
+        XCTAssertEqual(
+            dshLiveTotals(service, env: env),
+            DshLiveTotals(dayInput: 350, dayRequests: 2, conversationInput: 350, cycleInput: 350)
+        )
+    }
+
+    func testDshThrottledUsageSurvivesCommitFailureWithoutDoubling() async throws {
+        let env = environment!
+        let now = Date()
+        let service = try await seedLiveDsh(env, now: now)
+
+        try writeLiveDshLog(env, now: now, assistants: [
+            (turn: 1, secondsAgo: 120, input: 100),
+            (turn: 2, secondsAgo: 60, input: 200),
+        ])
+        await service.scanNow()
+        let expected = DshLiveTotals(dayInput: 300, dayRequests: 2, conversationInput: 300, cycleInput: 300)
+        XCTAssertEqual(dshLiveTotals(service, env: env), expected)
+
+        // 写盘失败回滚到上一份提交，贡献、watermark、周期桶一起退回。
+        env.faults.fail(at: .beforeCurrentReplace)
+        await service.flushPendingRollupChangesForTesting()
+        env.faults.clear()
+        XCTAssertEqual(
+            dshLiveTotals(service, env: env),
+            DshLiveTotals(dayInput: 100, dayRequests: 1, conversationInput: 100, cycleInput: 100),
+            "回滚必须退回已提交状态"
+        )
+
+        await service.scanNow()
+        XCTAssertEqual(dshLiveTotals(service, env: env), expected, "回滚后补读只计一次")
+    }
+
     func testDeletedDshSessionContributionSurvivesRebuild() async throws {
         let env = environment!
         let service = try await seed(env)
@@ -499,7 +662,7 @@ final class UsageSafeRebuildTests: XCTestCase {
             ]
         )
         await service.scanNow()
-        // 常规扫描按节流只更新内存；DSH 贡献同样要等落盘那一轮才生效。
+        // 常规扫描按节流只更新内存；这里先提交，下面才能比对落盘后的 DSH 贡献。
         await service.flushPendingRollupChangesForTesting()
         let withExtra = env.totals(result(service).day, app: .dsh)
         XCTAssertEqual(withExtra.inputTokens, dshBefore.inputTokens + 1_234)
