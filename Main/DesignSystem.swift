@@ -104,8 +104,8 @@ extension UsageApp {
         case .cursor: .cursorAccent
         case .pi: .piAccent
         case .opencode: .opencodeAccent
-        // DSH 识别色取官方主题强调蓝（dsh-client-ui-theme 的 deepseek-500 / 深色 deepseek-400，
-        // Asset Catalog : DshAccent），用于图表 / 色块；tile 走官方品牌主色黑底，不用此色。
+        // DSH 识别色为项目自选深蓝（Asset Catalog : DshAccent），用于图表 / 色块；
+        // 官方强调蓝与 Antigravity 蓝几乎相同，所以不用。tile 走官方品牌主色黑底，不用此色。
         case .dsh: .dshAccent
         case .antigravity: .antigravityAccent
         }
@@ -348,7 +348,7 @@ struct ServiceTile: View {
     private var isOpenAIBrand: Bool { logoName == "codex" }
 
     /// 固定深色底 + 白色 logo,不随外观切换:
-    /// - DSH:官方品牌主色(dsh-client-ui-theme `brand-primary` 浅色值 #0F1115),图表里的 `Color.dshAccent` 仍是官方强调蓝;
+    /// - DSH:官方品牌主色(dsh-client-ui-theme `brand-primary` 浅色值 #0F1115),图表里的 `Color.dshAccent` 是项目自选深蓝;
     /// - Cursor:`CursorAccent` 深色值是近白,直接当底色会吞掉白色 logo,所以 tile 固定用它的浅色值 #2C2C2E。
     private var fixedDarkBackground: Color? {
         switch logoName {
