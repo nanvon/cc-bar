@@ -130,8 +130,14 @@ final class OpencodeScannerTests: XCTestCase {
     // MARK: - 全量扫描
 
     func testFullScanParsesModelTokensAndCost() throws {
+        let projectDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ccbar-opencode-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: projectDir) }
+        let projectPath = projectDir.resolvingSymlinksInPath().path
+
         let db = try createSchema()
-        insertSession(db, id: "ses-1", title: "ccbar 对 OpenCode 用量监测探讨", directory: "/Users/nanvon/Code/cc-bar")
+        insertSession(db, id: "ses-1", title: "ccbar 对 OpenCode 用量监测探讨", directory: projectPath)
         insertMessage(db, id: "msg-u1", sessionID: "ses-1", timeCreated: 1_786_075_932_000, data: userMessageData())
         insertMessage(db, id: "msg-a1", sessionID: "ses-1", timeCreated: 1_786_075_934_000, data: assistantMessageData())
         insertMessage(db, id: "msg-a2", sessionID: "ses-1", timeCreated: 1_786_075_936_000,
@@ -172,7 +178,7 @@ final class OpencodeScannerTests: XCTestCase {
         XCTAssertEqual(seed.key, "opencode:ses-1")
         XCTAssertEqual(seed.app, .opencode)
         XCTAssertEqual(seed.title, "ccbar 对 OpenCode 用量监测探讨")
-        XCTAssertEqual(seed.project.path, "/Users/nanvon/Code/cc-bar")
+        XCTAssertEqual(seed.project.path, projectPath)
         XCTAssertEqual(seed.project.status, .available)
     }
 

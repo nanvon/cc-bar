@@ -105,6 +105,26 @@ jobs:
             CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES \
             build-for-testing
 
+      # 并行测试会启动多个测试宿主；主 App 的 LSMultipleInstancesProhibited 会拦住第 2 个实例。
+      # 只在 CI 的测试副本上关掉并重新做 ad-hoc 签名，源码里的 Info.plist 不动。
+      - name: 允许并行测试宿主
+        run: |
+          set -euo pipefail
+          app="build/ci/Build/Products/Debug/CCBar.app"
+          plutil -replace LSMultipleInstancesProhibited -bool NO "$app/Contents/Info.plist"
+          cat > build/ci/test-entitlements.plist <<'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>com.apple.security.app-sandbox</key><false/>
+            <key>com.apple.security.cs.disable-library-validation</key><true/>
+            <key>com.apple.security.get-task-allow</key><true/>
+          </dict></plist>
+          EOF
+          codesign --force --sign - --options runtime \
+            --entitlements build/ci/test-entitlements.plist "$app"
+          codesign --verify --strict "$app"
+
       # artifact 不保留可执行位，先打成 tar 再由测试分片解包，避免 App 主程序变成 644 无法启动。
       - name: 打包测试产物
         run: tar -czf build/ci/test-products.tar.gz -C build/ci/Build Products
