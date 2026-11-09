@@ -145,45 +145,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - shard: 1
-            only_testing: >-
-              -only-testing:CCBarTests/QuotaParsingTests
-              -only-testing:CCBarTests/PiJSONLScannerTests
-              -only-testing:CCBarTests/UpdateCheckerTests
-              -only-testing:CCBarTests/CursorUsageFetcherTests
-              -only-testing:CCBarTests/StatsOverviewModelTests
-              -only-testing:CCBarTests/QuotaPersistenceCoordinatorTests
-          - shard: 2
-            only_testing: >-
-              -only-testing:CCBarTests/UsageSafeRebuildTests
-              -only-testing:CCBarTests/OpencodeScannerTests
-              -only-testing:CCBarTests/DshSessionScannerTests
-              -only-testing:CCBarTests/AntigravityCredentialsTests
-              -only-testing:CCBarTests/AntigravityDesktopQuotaTests
-              -only-testing:CCBarTests/AntigravityScannerTests
-              -only-testing:CCBarTests/DshZstdFrameScannerTests
-              -only-testing:CCBarTests/OpenCodeGoQuotaTests
-              -only-testing:CCBarTests/RedactTests
-              -only-testing:CCBarTests/ConversationProjectResolverTests
-              -only-testing:CCBarTests/DshPricingTests
-              -only-testing:CCBarTests/ImportedCodexStoreTests
-              -only-testing:CCBarTests/UsageEquivalenceTests
-          - shard: 3
-            only_testing: >-
-              -only-testing:CCBarTests/ScannerIncrementalTests
-              -only-testing:CCBarTests/QuotaAlertTests
-              -only-testing:CCBarTests/UsageHistoryRecoveryTests
-              -only-testing:CCBarTests/AppRuntimeIsolationTests
-              -only-testing:CCBarTests/CodexModelIdentityMigrationTests
-              -only-testing:CCBarTests/DshContributionTests
-              -only-testing:CCBarTests/ProjectUsageTests
-              -only-testing:CCBarTests/QuotaRefreshPlanTests
-              -only-testing:CCBarTests/UsageSnapshotStoreTests
-              -only-testing:CCBarTests/CursorAuthTests
-              -only-testing:CCBarTests/CommandCodeQuotaTests
-              -only-testing:CCBarTests/DshAggregationRegressionTests
-              -only-testing:CCBarTests/DshDiagnosticsTests
+        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@v4
 
@@ -204,8 +166,53 @@ jobs:
           tar -xzf build/ci/test-products.tar.gz -C build/ci/Build
 
       - name: 运行本分片测试
+        env:
+          SHARD: ${{ matrix.shard }}
         run: |
-          set -o pipefail
+          set -euo pipefail
+          # 前两个分片保留原有负载分配，第三个分片自动运行剩余所有测试（包括新测试类）。
+          shard1=(
+            QuotaParsingTests
+            PiJSONLScannerTests
+            UpdateCheckerTests
+            CursorUsageFetcherTests
+            StatsOverviewModelTests
+            QuotaPersistenceCoordinatorTests
+          )
+          shard2=(
+            UsageSafeRebuildTests
+            OpencodeScannerTests
+            DshSessionScannerTests
+            AntigravityCredentialsTests
+            AntigravityDesktopQuotaTests
+            AntigravityScannerTests
+            DshZstdFrameScannerTests
+            OpenCodeGoQuotaTests
+            RedactTests
+            ConversationProjectResolverTests
+            DshPricingTests
+            ImportedCodexStoreTests
+            UsageEquivalenceTests
+          )
+          test_args=()
+          case "$SHARD" in
+            1)
+              for test_class in "${shard1[@]}"; do
+                test_args+=("-only-testing:CCBarTests/$test_class")
+              done
+              ;;
+            2)
+              for test_class in "${shard2[@]}"; do
+                test_args+=("-only-testing:CCBarTests/$test_class")
+              done
+              ;;
+            3)
+              for test_class in "${shard1[@]}" "${shard2[@]}"; do
+                test_args+=("-skip-testing:CCBarTests/$test_class")
+              done
+              ;;
+            *) echo "未知测试分片: $SHARD" >&2; exit 1 ;;
+          esac
           mkdir -p build/ci/TestResults
           xctestrun=$(find build/ci/Build/Products -maxdepth 1 -name '*.xctestrun' -print -quit)
           xcodebuild \
@@ -213,7 +220,7 @@ jobs:
             -destination 'platform=macOS' \
             -parallel-testing-enabled YES \
             -resultBundlePath "build/ci/TestResults/shard-${{ matrix.shard }}.xcresult" \
-            ${{ matrix.only_testing }} \
+            "${test_args[@]}" \
             test-without-building
 
       - name: 上传测试结果
