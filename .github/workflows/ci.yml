@@ -99,6 +99,7 @@ jobs:
             -derivedDataPath build/ci \
             -onlyUsePackageVersionsFromResolvedFile \
             -parallel-testing-enabled NO \
+            CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
             build-for-testing
 
       - name: 上传测试产物
