@@ -106,11 +106,15 @@ jobs:
             CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES \
             build-for-testing
 
+      # artifact 不保留可执行位，先打成 tar 再由测试分片解包，避免 App 主程序变成 644 无法启动。
+      - name: 打包测试产物
+        run: tar -czf build/ci/test-products.tar.gz -C build/ci/Build Products
+
       - name: 上传测试产物
         uses: actions/upload-artifact@v4
         with:
           name: test-products
-          path: build/ci/Build/Products
+          path: build/ci/test-products.tar.gz
           if-no-files-found: error
           retention-days: 1
 
@@ -173,7 +177,10 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: test-products
-          path: build/ci/Build/Products
+          path: build/ci
+
+      - name: 解包测试产物
+        run: tar -xzf build/ci/test-products.tar.gz -C build/ci/Build
 
       - name: 运行本分片测试
         run: |
