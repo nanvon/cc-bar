@@ -63,7 +63,7 @@ jobs:
     name: 构建测试包
     needs: changes
     if: needs.changes.outputs.code == 'true'
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
 
@@ -77,16 +77,16 @@ jobs:
         uses: actions/cache@v4
         with:
           path: build/ci/SourcePackages
-          key: ${{ runner.os }}-spm-${{ hashFiles('ccbar.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          key: macos-26-spm-${{ hashFiles('ccbar.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
 
       # Debug 构建产物只在 CI 使用；按源码哈希做键，源码变化时用 restore-keys 回退到上一版做增量编译。
       - name: 缓存 Debug 构建
         uses: actions/cache@v4
         with:
           path: build/ci/Build
-          key: ${{ runner.os }}-debug-${{ hashFiles('ccbar.xcodeproj/project.pbxproj', '**/*.swift', 'ccbar.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          key: macos-26-debug-${{ hashFiles('ccbar.xcodeproj/project.pbxproj', '**/*.swift', 'ccbar.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
           restore-keys: |
-            ${{ runner.os }}-debug-
+            macos-26-debug-
 
       - name: 编译测试包
         run: |
@@ -98,7 +98,6 @@ jobs:
             -destination 'platform=macOS' \
             -derivedDataPath build/ci \
             -onlyUsePackageVersionsFromResolvedFile \
-            -parallel-testing-enabled NO \
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY='-' \
             DEVELOPMENT_TEAM='' \
@@ -122,7 +121,7 @@ jobs:
     name: 测试 shard ${{ matrix.shard }}
     needs: [changes, build]
     if: needs.changes.outputs.code == 'true' && needs.build.result == 'success'
-    runs-on: macos-15
+    runs-on: macos-26
     strategy:
       fail-fast: false
       matrix:
@@ -192,7 +191,7 @@ jobs:
           xcodebuild \
             -xctestrun "$xctestrun" \
             -destination 'platform=macOS' \
-            -parallel-testing-enabled NO \
+            -parallel-testing-enabled YES \
             -resultBundlePath "build/ci/TestResults/shard-${{ matrix.shard }}.xcresult" \
             ${{ matrix.only_testing }} \
             test-without-building
