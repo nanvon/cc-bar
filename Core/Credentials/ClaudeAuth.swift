@@ -74,14 +74,18 @@ enum ClaudeAuth {
         return try parse(data: bytes, source: .keychain)
     }
 
-    nonisolated private static func parse(data: Data, source: CredentialSource) throws -> ClaudeAccount {
+    nonisolated static func parse(data: Data, source: CredentialSource) throws -> ClaudeAccount {
         guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw CredentialError.decodeFailed("not a JSON object")
         }
         let oauth = root["claudeAiOauth"] as? [String: Any] ?? [:]
         let email = oauth["emailAddress"] as? String ?? oauth["email"] as? String
         let sub = oauth["subscriptionType"] as? String
-        let accessToken = oauth["accessToken"] as? String ?? oauth["access_token"] as? String
+        // ziin：MCP 授权也会创建同名凭据；缺少 CLI 登录令牌时交由现有 Desktop 识别流程处理。
+        guard let accessToken = oauth["accessToken"] as? String ?? oauth["access_token"] as? String,
+              !accessToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw CredentialError.decodeFailed("missing Claude OAuth access token")
+        }
         let refreshToken = oauth["refreshToken"] as? String ?? oauth["refresh_token"] as? String
         let expiresAt: Date? = {
             if let n = oauth["expiresAt"] as? Double {
