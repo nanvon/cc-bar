@@ -180,7 +180,9 @@ jobs:
           path: build/ci
 
       - name: 解包测试产物
-        run: tar -xzf build/ci/test-products.tar.gz -C build/ci/Build
+        run: |
+          mkdir -p build/ci/Build
+          tar -xzf build/ci/test-products.tar.gz -C build/ci/Build
 
       - name: 运行本分片测试
         run: |
