@@ -5,6 +5,11 @@ on:
   push:
     tags: ['v*']
 
+# 发布按 tag 串行执行，任何时候都不要取消：每个正式版本的产物都必须完整生成。
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: write # 创建 Release / 上传产物需要写权限
 
@@ -43,6 +48,18 @@ jobs:
         uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: latest-stable
+
+      # 复用上一版发布构建的依赖检出与增量产物；缓存键随源码变化，旧缓存作 restore 基线。
+      # build/ 约 300 MB，远低于仓库 10 GB 缓存上限。
+      - name: 缓存 Swift 包与增量构建
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/SourcePackages
+            build/Build
+          key: ${{ runner.os }}-release-${{ hashFiles('ccbar.xcodeproj/project.pbxproj', '**/*.swift', 'ccbar.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-release-
 
       - name: 构建并打包(ad-hoc 签名,无需证书)
         env:
