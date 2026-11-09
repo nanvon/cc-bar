@@ -130,7 +130,7 @@ final class OpencodeScannerTests: XCTestCase {
     // MARK: - 全量扫描
 
     func testFullScanParsesModelTokensAndCost() throws {
-        let projectDir = FileManager.default.temporaryDirectory
+        let projectDir = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("ccbar-opencode-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: projectDir) }
