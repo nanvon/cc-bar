@@ -243,7 +243,7 @@ final class ProjectUsageTests: XCTestCase {
         XCTAssertEqual(models.first?.title, "mystery")
         XCTAssertEqual(models[1].title, "gpt-5", "同名模型跨服务合并")
         XCTAssertEqual(models[1].totals.costUSD, 10)
-        XCTAssertEqual(models.last?.title, "opencode-go/kimi")
+        XCTAssertEqual(models.last?.title, "kimi", "模型展示名会剥掉 opencode-go/ 渠道前缀")
 
         let services = model.composition[.service] ?? []
         XCTAssertEqual(services.count, UsageApp.allCases.count, "服务维度全部列出")

@@ -8,6 +8,8 @@
 # 用法:
 #   SPARKLE_PUBLIC_ED_KEY="公钥" scripts/build.sh
 #                               # 产物输出到 ./dist/CCBar.dmg 和 ./dist/CCBar.app.zip
+#   SPARKLE_PUBLIC_ED_KEY="公钥" scripts/build.sh --clean
+#                               # 丢弃 build/ 后从零构建（CI 缓存失效或需要验证干净构建时用）
 #   scripts/build.sh <输出目录>
 #
 set -euo pipefail
@@ -16,6 +18,11 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 BUILD_DIR="$REPO_ROOT/build"
+CLEAN_BUILD=0
+if [[ "${1:-}" == "--clean" ]]; then
+  CLEAN_BUILD=1
+  shift
+fi
 OUT_DIR="${1:-$REPO_ROOT/dist}"
 APP="$BUILD_DIR/Build/Products/Release/CCBar.app"
 
@@ -29,8 +36,12 @@ except ValueError:
 if len(key) != 32:
     sys.exit("SPARKLE_PUBLIC_ED_KEY 必须是 32 字节 Ed25519 公钥")'
 
-echo "==> [1/4] 清理旧构建"
-rm -rf "$BUILD_DIR"
+if [[ "$CLEAN_BUILD" == "1" ]]; then
+  echo "==> [1/4] 清理旧构建"
+  rm -rf "$BUILD_DIR"
+else
+  echo "==> [1/4] 复用 build/ 做增量构建（需要干净构建请加 --clean）"
+fi
 
 echo "==> [2/4] 编译(Release,不签名 → 自动 ad-hoc)"
 xcodebuild \
@@ -38,6 +49,7 @@ xcodebuild \
   -scheme ccbar \
   -configuration Release \
   -derivedDataPath "$BUILD_DIR" \
+  -onlyUsePackageVersionsFromResolvedFile \
   CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
   SPARKLE_PUBLIC_ED_KEY="$SPARKLE_PUBLIC_ED_KEY" \
   build

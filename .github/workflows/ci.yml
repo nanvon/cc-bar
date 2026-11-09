@@ -1,0 +1,257 @@
+name: CI
+
+# PR 与 main 的质量门禁：只运行单元测试，不做发布打包。
+# 只改 README / docs / release-notes 的提交不会启动 macOS job；
+# 但 ci-status 始终运行，作为分支保护唯一必填检查，避免 docs-only PR 被“永远等待”卡住。
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# 同一个 PR 的新提交取消旧任务；main 上的每个提交都完整跑完。
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  changes:
+    name: 变更范围
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - name: 判断是否只改了文档
+        id: filter
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          files=""
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            files=$(gh api "repos/$REPO/pulls/$PR_NUMBER/files" --paginate --jq '.[].filename' 2>/dev/null || true)
+          elif [ -n "${BEFORE:-}" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ]; then
+            files=$(gh api "repos/$REPO/compare/$BEFORE...$SHA" --paginate --jq '.files[].filename' 2>/dev/null || true)
+          fi
+
+          code=false
+          if [ -z "$files" ]; then
+            code=true
+          else
+            while IFS= read -r file; do
+              [ -z "$file" ] && continue
+              case "$file" in
+                *.md|docs/*|release-notes/*) ;;
+                *) code=true; break ;;
+              esac
+            done <<< "$files"
+          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "本次改动文件："
+          printf '%s\n' "$files" | sed '/^$/d'
+
+  build:
+    name: 构建测试包
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 选择最新 Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      # Package.resolved 不变时直接复用依赖检出，省掉每次 fetch。
+      - name: 缓存 Swift Package
+        uses: actions/cache@v4
+        with:
+          path: build/ci/SourcePackages
+          key: macos-26-spm-${{ hashFiles('ccbar.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+
+      # Debug 构建产物只在 CI 使用；按源码哈希做键，源码变化时用 restore-keys 回退到上一版做增量编译。
+      - name: 缓存 Debug 构建
+        uses: actions/cache@v4
+        with:
+          path: build/ci/Build
+          key: macos-26-debug-${{ hashFiles('ccbar.xcodeproj/project.pbxproj', '**/*.swift', 'ccbar.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: |
+            macos-26-debug-
+
+      - name: 编译测试包
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project ccbar.xcodeproj \
+            -scheme ccbar \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            -derivedDataPath build/ci \
+            -onlyUsePackageVersionsFromResolvedFile \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY='-' \
+            DEVELOPMENT_TEAM='' \
+            PROVISIONING_PROFILE_SPECIFIER='' \
+            CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES \
+            build-for-testing
+
+      # 并行测试会启动多个测试宿主；主 App 的 LSMultipleInstancesProhibited 会拦住第 2 个实例。
+      # 只在 CI 的测试副本上关掉并重新做 ad-hoc 签名，源码里的 Info.plist 不动。
+      - name: 允许并行测试宿主
+        run: |
+          set -euo pipefail
+          app="build/ci/Build/Products/Debug/CCBar.app"
+          plutil -replace LSMultipleInstancesProhibited -bool NO "$app/Contents/Info.plist"
+          cat > build/ci/test-entitlements.plist <<'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>com.apple.security.app-sandbox</key><false/>
+            <key>com.apple.security.cs.disable-library-validation</key><true/>
+            <key>com.apple.security.get-task-allow</key><true/>
+          </dict></plist>
+          EOF
+          codesign --force --sign - --options runtime \
+            --entitlements build/ci/test-entitlements.plist "$app"
+          codesign --verify --strict "$app"
+
+      # artifact 不保留可执行位，先打成 tar 再由测试分片解包，避免 App 主程序变成 644 无法启动。
+      - name: 打包测试产物
+        run: tar -czf build/ci/test-products.tar.gz -C build/ci/Build Products
+
+      - name: 上传测试产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-products
+          path: build/ci/test-products.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+  test:
+    name: 测试 shard ${{ matrix.shard }}
+    needs: [changes, build]
+    if: needs.changes.outputs.code == 'true' && needs.build.result == 'success'
+    runs-on: macos-26
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 选择最新 Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: 下载测试产物
+        uses: actions/download-artifact@v4
+        with:
+          name: test-products
+          path: build/ci
+
+      - name: 解包测试产物
+        run: |
+          mkdir -p build/ci/Build
+          tar -xzf build/ci/test-products.tar.gz -C build/ci/Build
+
+      - name: 运行本分片测试
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          set -euo pipefail
+          # 前两个分片保留原有负载分配，第三个分片自动运行剩余所有测试（包括新测试类）。
+          shard1=(
+            QuotaParsingTests
+            PiJSONLScannerTests
+            UpdateCheckerTests
+            CursorUsageFetcherTests
+            StatsOverviewModelTests
+            QuotaPersistenceCoordinatorTests
+          )
+          shard2=(
+            UsageSafeRebuildTests
+            OpencodeScannerTests
+            DshSessionScannerTests
+            AntigravityCredentialsTests
+            AntigravityDesktopQuotaTests
+            AntigravityScannerTests
+            DshZstdFrameScannerTests
+            OpenCodeGoQuotaTests
+            RedactTests
+            ConversationProjectResolverTests
+            DshPricingTests
+            ImportedCodexStoreTests
+            UsageEquivalenceTests
+          )
+          test_args=()
+          case "$SHARD" in
+            1)
+              for test_class in "${shard1[@]}"; do
+                test_args+=("-only-testing:CCBarTests/$test_class")
+              done
+              ;;
+            2)
+              for test_class in "${shard2[@]}"; do
+                test_args+=("-only-testing:CCBarTests/$test_class")
+              done
+              ;;
+            3)
+              for test_class in "${shard1[@]}" "${shard2[@]}"; do
+                test_args+=("-skip-testing:CCBarTests/$test_class")
+              done
+              ;;
+            *) echo "未知测试分片: $SHARD" >&2; exit 1 ;;
+          esac
+          mkdir -p build/ci/TestResults
+          xctestrun=$(find build/ci/Build/Products -maxdepth 1 -name '*.xctestrun' -print -quit)
+          xcodebuild \
+            -xctestrun "$xctestrun" \
+            -destination 'platform=macOS' \
+            -parallel-testing-enabled YES \
+            -resultBundlePath "build/ci/TestResults/shard-${{ matrix.shard }}.xcresult" \
+            "${test_args[@]}" \
+            test-without-building
+
+      - name: 上传测试结果
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.shard }}
+          path: build/ci/TestResults
+          if-no-files-found: ignore
+          retention-days: 7
+
+  ci-status:
+    name: CI status
+    # 始终运行：docs-only 时 build/test 会 skip，这个 job 仍然成功，作为唯一必填检查。
+    if: always()
+    needs: [changes, build, test]
+    runs-on: ubuntu-latest
+    steps:
+      - name: 汇总必需 job 结果
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          CODE: ${{ needs.changes.outputs.code }}
+          BUILD: ${{ needs.build.result }}
+          TEST: ${{ needs.test.result }}
+        run: |
+          set -euo pipefail
+          echo "changes=$CHANGES code=$CODE build=$BUILD test=$TEST"
+          [ "$CHANGES" = "success" ] || exit 1
+          if [ "$CODE" = "true" ]; then
+            [ "$BUILD" = "success" ] || exit 1
+            [ "$TEST" = "success" ] || exit 1
+          else
+            echo "只改了文档，跳过 macOS 构建与测试"
+          fi
