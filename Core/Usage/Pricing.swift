@@ -45,7 +45,7 @@ nonisolated private struct TieredPricedPeriod: Sendable {
 }
 
 nonisolated enum Pricing {
-    /// 价格表按各厂商官方定价页核对（基础表 2026-10-19，新增型号 2026-10-27），起点对齐 cc-switch `seed_model_pricing` /
+    /// 价格表按各厂商官方定价页核对（基础表 2026-10-19，新增型号 2026-11-09），起点对齐 cc-switch `seed_model_pricing` /
     /// CodexBar `CostUsagePricing`。命中不到时返回 nil。键为官方型号名；渠道前缀、日期与渠道附加标记
     /// 由 `ModelIdentity` 解析，按 `modelCandidates` 的顺序逐个查价，见 `resolvedPrice`。
     ///
@@ -58,10 +58,16 @@ nonisolated enum Pricing {
         "claude-fable-5.1":  .init(input: 10,  output: 50,  cacheRead: 0.25, cacheCreation: 12.50),
         "claude-fable-5-1":  .init(input: 10,  output: 50,  cacheRead: 0.25, cacheCreation: 12.50),
         "claude-fable-5":    .init(input: 10,  output: 50,  cacheRead: 1.00, cacheCreation: 12.50),
+        // Fable 5.2（2026-11-09 发布）输入 / 输出降到 $8 / $40；缓存读取仍为 0.025x（$0.20），5m 写入 1.25x（$10）。
+        "claude-fable-5.2":  .init(input: 8,   output: 40,  cacheRead: 0.20, cacheCreation: 10),
+        "claude-fable-5-2":  .init(input: 8,   output: 40,  cacheRead: 0.20, cacheCreation: 10),
         // Mythos 5 / 5.1 与 Fable 5 / 5.1 同价：Mythos 5.1 缓存读取同为 0.025x（$0.25），Mythos 5 为 0.1x。
         "claude-mythos-5.1":     .init(input: 10, output: 50, cacheRead: 0.25, cacheCreation: 12.50),
         "claude-mythos-5-1":     .init(input: 10, output: 50, cacheRead: 0.25, cacheCreation: 12.50),
         "claude-mythos-5":       .init(input: 10, output: 50, cacheRead: 1.00, cacheCreation: 12.50),
+        // Mythos 5.2 与 Fable 5.2 同期发布、同价，需通过 Anthropic 验证计划。
+        "claude-mythos-5.2":     .init(input: 8,  output: 40, cacheRead: 0.20, cacheCreation: 10),
+        "claude-mythos-5-2":     .init(input: 8,  output: 40, cacheRead: 0.20, cacheCreation: 10),
         // Mythos Preview 是 Mythos 5 之前的邀请制版本，价格为 $25 / $125（缓存读 0.1x、5m 写入 1.25x）。
         "claude-mythos-preview": .init(input: 25, output: 125, cacheRead: 2.50, cacheCreation: 31.25),
         // Opus 5.5 缓存读取为 0.05x 基础输入价。
@@ -228,6 +234,11 @@ nonisolated enum Pricing {
     ]
 
     private static let claudeFastPrices: [String: ModelPrice] = [
+        // Fable / Mythos 5.2 Fast 模式：输入 / 输出 / 缓存均为 Standard 的 2 倍。
+        "claude-fable-5.2": .init(input: 16, output: 80, cacheRead: 0.40, cacheCreation: 20),
+        "claude-fable-5-2": .init(input: 16, output: 80, cacheRead: 0.40, cacheCreation: 20),
+        "claude-mythos-5.2": .init(input: 16, output: 80, cacheRead: 0.40, cacheCreation: 20),
+        "claude-mythos-5-2": .init(input: 16, output: 80, cacheRead: 0.40, cacheCreation: 20),
         "claude-opus-5.5": .init(input: 8,  output: 40,  cacheRead: 0.4, cacheCreation: 10),
         "claude-opus-5-5": .init(input: 8,  output: 40,  cacheRead: 0.4, cacheCreation: 10),
         "claude-opus-5":   .init(input: 10, output: 50,  cacheRead: 1, cacheCreation: 12.5),
@@ -265,6 +276,10 @@ nonisolated enum Pricing {
     ]
 
     private static let claudeFastMultipliers: [String: Decimal] = [
+        "claude-fable-5.2": 2,
+        "claude-fable-5-2": 2,
+        "claude-mythos-5.2": 2,
+        "claude-mythos-5-2": 2,
         "claude-opus-5.5": 2,
         "claude-opus-5-5": 2,
         "claude-opus-5": 2,
