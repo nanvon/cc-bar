@@ -1,0 +1,118 @@
+name: Pricing Rules
+
+# Resources/pricing-rules.json 合入 main 后校验、签名，上传到固定 tag `pricing-rules` 的 prerelease。
+# App 每 12 小时拉取一次，验签通过且 revision 更大才采纳，调价不用发版。流程说明见 docs/打包发布.md。
+on:
+  push:
+    branches: [main]
+    paths: ['Resources/pricing-rules.json']
+  workflow_dispatch:
+
+# 串行执行，不取消：后一次运行会按 revision 判断是否需要覆盖。
+concurrency:
+  group: pricing-rules
+  cancel-in-progress: false
+
+permissions:
+  contents: write # 创建 prerelease / 上传资产需要写权限
+
+jobs:
+  publish:
+    runs-on: macos-15
+    env:
+      RULES_TAG: pricing-rules
+      RULES_PATH: Resources/pricing-rules.json
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 校验签名配置
+        shell: bash
+        env:
+          SPARKLE_PUBLIC_ED_KEY: ${{ vars.SPARKLE_PUBLIC_ED_KEY }}
+          SPARKLE_PRIVATE_ED_KEY: ${{ secrets.SPARKLE_PRIVATE_ED_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$SPARKLE_PUBLIC_ED_KEY" || -z "$SPARKLE_PRIVATE_ED_KEY" ]]; then
+            echo "请先设置 repository variable SPARKLE_PUBLIC_ED_KEY 和 secret SPARKLE_PRIVATE_ED_KEY；见 docs/打包发布.md。"
+            exit 1
+          fi
+
+      - name: 选择最新 Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      # 用 App 同一份 PricingRules.swift 校验，结果与 App 加载时一致。
+      - name: 校验规则文件
+        id: check
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p build dist
+          xcrun swiftc -parse-as-library Core/Pricing/PricingRules.swift scripts/pricing-rules-tool.swift \
+            -o build/pricing-rules-tool
+          revision=$(build/pricing-rules-tool "$RULES_PATH")
+          echo "本地规则 revision=$revision"
+
+          published_revision=0
+          if gh release download "$RULES_TAG" --repo "$GITHUB_REPOSITORY" \
+              --pattern pricing-rules.json --dir build/published 2>/dev/null; then
+            if cmp -s "$RULES_PATH" build/published/pricing-rules.json; then
+              echo "已发布的规则文件与本次相同，跳过上传。"
+              echo "publish=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            if published_revision=$(build/pricing-rules-tool build/published/pricing-rules.json); then
+              echo "已发布规则 revision=$published_revision"
+            else
+              echo "::warning::已发布的规则文件无法通过校验，本次覆盖它。"
+              published_revision=0
+            fi
+          fi
+          if (( revision <= published_revision )); then
+            echo "规则内容有变化，但 revision=$revision 不大于已发布的 $published_revision；App 不会采纳。请把 revision 加 1。" >&2
+            exit 1
+          fi
+          cp "$RULES_PATH" dist/pricing-rules.json
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+
+      # sign_update 来自 Sparkle 的 SPM 预编译 artifact，与 App 锁定的 Sparkle 版本相同。
+      - name: 签名规则文件
+        if: steps.check.outputs.publish == 'true'
+        shell: bash
+        env:
+          SPARKLE_PUBLIC_ED_KEY: ${{ vars.SPARKLE_PUBLIC_ED_KEY }}
+          SPARKLE_PRIVATE_ED_KEY: ${{ secrets.SPARKLE_PRIVATE_ED_KEY }}
+        run: |
+          set -euo pipefail
+          xcodebuild -resolvePackageDependencies -project ccbar.xcodeproj \
+            -clonedSourcePackagesDirPath build/SourcePackages > /dev/null
+          sign_update="build/SourcePackages/artifacts/sparkle/Sparkle/bin/sign_update"
+          if [[ ! -x "$sign_update" ]]; then
+            echo "找不到 Sparkle sign_update；请检查 SPM artifact。" >&2
+            exit 1
+          fi
+          # 私钥只经 stdin 交给 sign_update，不打印签名工具的原始输出。
+          signature=$(printf '%s\n' "$SPARKLE_PRIVATE_ED_KEY" \
+            | env -u SPARKLE_PRIVATE_ED_KEY "$sign_update" --ed-key-file - --disable-signing-warning -p dist/pricing-rules.json)
+          printf '%s\n' "$signature" > dist/pricing-rules.json.sig
+          # 用 App 内置的同一把公钥验签，避免公私钥配置不匹配。
+          xcrun swift scripts/verify-update-signature.swift "$SPARKLE_PUBLIC_ED_KEY" "$signature" dist/pricing-rules.json
+
+      - name: 上传到 prerelease
+        if: steps.check.outputs.publish == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # 固定 tag 不以 v 开头，不触发 release.yml；prerelease 不会成为 latest，不影响 appcast。
+          if ! gh release view "$RULES_TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release create "$RULES_TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease \
+              --title "价格规则" \
+              --notes "CCBar 自动拉取的价格规则文件，由 pricing-rules workflow 维护，请勿手动修改。"
+          fi
+          gh release upload "$RULES_TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            dist/pricing-rules.json dist/pricing-rules.json.sig
