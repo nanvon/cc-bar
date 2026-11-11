@@ -447,7 +447,6 @@ final class AppState {
     /// 超时后已经开始的原子写入仍会完成，完成前继续阻止新的业务状态修改。
     var isPreparingForTermination: Bool { terminationRequested || terminationSaveTask != nil }
 
-    private let minSuccessInterval: TimeInterval = 60
     private let rateLimitBackoff: TimeInterval = 10 * 60
 
     func bootstrap() async {
@@ -582,41 +581,66 @@ final class AppState {
             commandCode=\(plan.refreshCommandCode) opencodeGo=\(plan.refreshOpenCodeGo) \
             imported=\(plan.refreshImported)
             """)
-        if plan.refreshCodex {
-            await loadCodex()
-            await loadCodexQuota(reason: reason)
-        }
-        if plan.refreshClaude {
-            await loadClaude()
-            await loadClaudeQuota(reason: reason)
-            handleClaudeDesktopAccessRequest()
-        }
-        if plan.refreshAntigravity {
-            await loadAntigravity()
-            await loadAntigravityQuota(reason: reason)
-        }
+        // 第一步串行读本地凭据。读取可能弹出钥匙串授权框，串行时一次只出现一个。
+        if plan.refreshCodex { await loadCodex() }
+        if plan.refreshClaude { await loadClaude() }
+        if plan.refreshAntigravity { await loadAntigravity() }
         if plan.refreshCursor {
             await loadCursor()
             handleCursorAccessRequest()
-            await loadCursorQuota(reason: reason)
-            // 远端用量与额度是两个独立接口：usage-summary 失败、限流退避或返回空额度时，
-            // get-filtered-usage-events 仍应照常拉取，否则统计页会永远停在"暂不可用"。
-            // 节流由 UsageService 自己的 inFlight / backoff 负责，不复用额度的刷新门禁。
-            await refreshCursorRemoteUsage(snapshot: cursorQuota)
         }
-        if plan.refreshCommandCode {
-            await loadCommandCode()
-            await loadCommandCodeQuota(reason: reason)
-        }
-        if plan.refreshOpenCodeGo {
-            await loadOpenCodeGo()
-            await loadOpenCodeGoQuota(reason: reason)
-        }
-        if plan.refreshImported {
-            await loadAllImportedCodexQuotas(
-                reason: reason,
-                canMirrorPrimary: plan.canMirrorPrimary
-            )
+        if plan.refreshCommandCode { await loadCommandCode() }
+        if plan.refreshOpenCodeGo { await loadOpenCodeGo() }
+
+        // 第二步各服务并发取数，一个服务超时不再推迟其他服务。子任务都回到 MainActor 执行，
+        // 只在 await 处交错；各服务的 inFlight / 429 退避 / 最短间隔照常按服务独立判断。
+        await withTaskGroup(of: Void.self) { group in
+            if plan.refreshCodex || plan.refreshImported {
+                group.addTask { [weak self] in
+                    guard let self else { return }
+                    if plan.refreshCodex { await self.loadCodexQuota(reason: reason) }
+                    // 导入账号与主账号同身份时镜像主账号本轮刚取到的快照，必须排在主 Codex 之后。
+                    if plan.refreshImported {
+                        await self.loadAllImportedCodexQuotas(
+                            reason: reason,
+                            canMirrorPrimary: plan.canMirrorPrimary
+                        )
+                    }
+                }
+            }
+            if plan.refreshClaude {
+                group.addTask { [weak self] in
+                    guard let self else { return }
+                    await self.loadClaudeQuota(reason: reason)
+                    await self.handleClaudeDesktopAccessRequest()
+                }
+            }
+            if plan.refreshAntigravity {
+                group.addTask { [weak self] in
+                    await self?.loadAntigravityQuota(reason: reason)
+                }
+            }
+            if plan.refreshCursor {
+                group.addTask { [weak self] in
+                    guard let self else { return }
+                    await self.loadCursorQuota(reason: reason)
+                    // 远端用量与额度是两个独立接口：usage-summary 失败、限流退避或返回空额度时，
+                    // get-filtered-usage-events 仍应照常拉取，否则统计页会永远停在"暂不可用"。
+                    // 节流由 UsageService 自己的 inFlight / backoff 负责，不复用额度的刷新门禁。
+                    let snapshot = await self.cursorQuota
+                    await self.refreshCursorRemoteUsage(snapshot: snapshot)
+                }
+            }
+            if plan.refreshCommandCode {
+                group.addTask { [weak self] in
+                    await self?.loadCommandCodeQuota(reason: reason)
+                }
+            }
+            if plan.refreshOpenCodeGo {
+                group.addTask { [weak self] in
+                    await self?.loadOpenCodeGoQuota(reason: reason)
+                }
+            }
         }
         logQuotaSummary()
         // 批次 C：本轮标脏的额度文件统一落盘（每文件每轮最多写一次）
@@ -1270,19 +1294,22 @@ final class AppState {
         guard !isPreparingForTermination else { return false }
         let now = Date()
         var state = importedCodexRefreshStates[id] ?? QuotaRefreshState()
-        guard !state.inFlight else { return false }
-        if let backoffUntil = state.backoffUntil, backoffUntil > now {
-            state.lastError = backoffMessage(until: backoffUntil)
+        switch QuotaRefreshGate.decide(
+            state: state,
+            reason: reason,
+            now: now,
+            minSuccessInterval: QuotaRefreshPolicy.defaultMinSuccessInterval
+        ) {
+        case .skip:
+            return false
+        case .backingOff(let until):
+            state.lastError = backoffMessage(until: until)
             state.lastErrorIsNetwork = false
             importedCodexRefreshStates[id] = state
             importedCodexErrors[id] = state.lastError
             return false
-        }
-        if reason == .periodic,
-           let lastSuccessAt = state.lastSuccessAt,
-           now.timeIntervalSince(lastSuccessAt) < minSuccessInterval
-        {
-            return false
+        case .start:
+            break
         }
         state.inFlight = true
         state.lastAttemptAt = now
@@ -1978,17 +2005,17 @@ final class AppState {
     }
 
     private func loadCodexQuota(reason: QuotaRefreshReason) async {
-        guard beginCodexRefresh(reason: reason) else { return }
+        guard beginQuotaRefresh(.codex, reason: reason) else { return }
         let alertEntryVersion = codexAlertEntryVersion
         let alertSettingsVersion = SettingsStore.shared.quotaAlertRuntimeVersion
         defer { codexRefreshState.inFlight = false }
 
         guard var account = codexAccount else {
-            markCodexFailure(noAccountMessage)
+            markQuotaFailure(.codex, noAccountMessage)
             return
         }
         guard let token = account.accessToken else {
-            markCodexFailure(QuotaError.missingToken.userMessage)
+            markQuotaFailure(.codex, QuotaError.missingToken.userMessage)
             return
         }
 
@@ -2011,7 +2038,7 @@ final class AppState {
                 account.idToken = t.idToken
                 codexAccount = account
             case .failure(let err):
-                markCodexFailure(err.userMessage, error: err)
+                markQuotaFailure(.codex, err.userMessage, error: err)
                 return
             }
         }
@@ -2032,7 +2059,7 @@ final class AppState {
                 account.chatgptUserId = account.chatgptUserId ?? fetched.userId
                 codexAccount = account
             }
-            storeCodex(snapshot: fetched.snapshot, source: .api)
+            storeQuota(.codex, snapshot: fetched.snapshot, source: .api)
             // OAuth 缺少 user 时也采用接口回填；已知身份冲突则不产生提醒。
             if nonEmpty(fetched.accountId).map({ $0 == account.accountId }) ?? true,
                account.chatgptUserId == nil || fetched.userId == nil || account.chatgptUserId == nonEmpty(fetched.userId) {
@@ -2043,21 +2070,21 @@ final class AppState {
                                   entryVersion: codexAlertEntryVersion, settingsVersion: alertSettingsVersion)
             }
         case .failure(let err):
-            markCodexFailure(err.userMessage, error: err)
+            markQuotaFailure(.codex, err.userMessage, error: err)
         }
     }
 
     private func loadClaudeQuota(reason: QuotaRefreshReason) async {
-        guard beginClaudeRefresh(reason: reason) else { return }
+        guard beginQuotaRefresh(.claude, reason: reason) else { return }
         let alertSettingsVersion = SettingsStore.shared.quotaAlertRuntimeVersion
         defer { claudeRefreshState.inFlight = false }
 
         guard var account = claudeAccount else {
-            markClaudeFailure(noAccountMessage)
+            markQuotaFailure(.claude, noAccountMessage)
             return
         }
         guard account.accessToken != nil else {
-            markClaudeFailure(QuotaError.missingToken.userMessage)
+            markQuotaFailure(.claude, QuotaError.missingToken.userMessage)
             return
         }
         let refreshed = await ClaudeTokenRefresher.ensureFreshAccessToken(account: &account)
@@ -2069,10 +2096,10 @@ final class AppState {
                 claudeAccount = account
             }
         case .failure(let err):
-            markClaudeFailure(err.userMessage, error: err)
+            markQuotaFailure(.claude, err.userMessage, error: err)
             // 凭据过期时 cc-bar 不再自己刷新(会作废 Claude Code 的 refresh_token),
             // 用户手动刷新时改走 claude CLI 兜底取数——CLI 用自己的会话身份,
-            // 刷新对它是安全的。已有快照会被 markClaudeFailure 保留,不会被清空。
+            // 刷新对它是安全的。已有快照会被 markQuotaFailure 保留,不会被清空。
             if err.isCredentialsExpired, reason == .userInitiated {
                 await loadClaudeCLIFallback(apiError: err)
             }
@@ -2083,13 +2110,13 @@ final class AppState {
         let result = await ClaudeQuotaClient.fetch(accessToken: activeToken)
         switch result {
         case .success(let snapshot):
-            storeClaude(snapshot: snapshot, source: .api)
+            storeQuota(.claude, snapshot: snapshot, source: .api)
             if primaryQuotaAlertVersion(for: .claude) == alertEntryVersion {
                 observePrimaryQuota(snapshot, settingsVersion: alertSettingsVersion)
             }
             await refreshClaudeProfileIfNeeded(account: account, accessToken: activeToken)
         case .failure(let err):
-            markClaudeFailure(err.userMessage, error: err)
+            markQuotaFailure(.claude, err.userMessage, error: err)
             if reason == .userInitiated, claudeQuota == nil {
                 await loadClaudeCLIFallback(apiError: err)
             }
@@ -2130,16 +2157,16 @@ final class AppState {
     }
 
     private func loadAntigravityQuota(reason: QuotaRefreshReason) async {
-        guard beginAntigravityRefresh(reason: reason) else { return }
+        guard beginQuotaRefresh(.antigravity, reason: reason) else { return }
         let alertSettingsVersion = SettingsStore.shared.quotaAlertRuntimeVersion
         defer { antigravityRefreshState.inFlight = false }
 
         guard var account = antigravityAccount else {
-            markAntigravityFailure(antigravityError ?? noAccountMessage)
+            markQuotaFailure(.antigravity, antigravityError ?? noAccountMessage)
             return
         }
         if let error = antigravityError {
-            markAntigravityFailure(error)
+            markQuotaFailure(.antigravity, error)
             return
         }
         let initialLoginKey = account.refreshKey
@@ -2177,8 +2204,8 @@ final class AppState {
                   !antigravityIdentityChanged(previous: current, next: account) else { return }
             antigravityAccount = account
             snapshot.planType = account.planType
-            storeAntigravity(snapshot: snapshot, source: .antigravityCLI)
-            if let planRateLimit { markAntigravityFailure(planRateLimit.userMessage, error: planRateLimit) }
+            storeQuota(.antigravity, snapshot: snapshot, source: .antigravityCLI)
+            if let planRateLimit { markQuotaFailure(.antigravity, planRateLimit.userMessage, error: planRateLimit) }
             // CLI JSON 不含可核实账号身份；与 Claude CLI 一样只展示，不生成系统提醒。
             return
         }
@@ -2187,11 +2214,11 @@ final class AppState {
             || antigravityQuota?.primaryLimit?.id == "gemini-argon-wtu-weekly"
         switch cliResult {
         case .failure(let error)? where error.isRateLimited || hasCLISnapshot:
-            markAntigravityFailure(error.userMessage, error: error)
+            markQuotaFailure(.antigravity, error.userMessage, error: error)
             return
         case .signedOut? where hasCLISnapshot:
             // 已有 agy 额度时不改用云端的另一额度池；保留快照，请用户自己去 agy 重新登录，cc-bar 不打开登录页。
-            markAntigravityFailure(tr("Sign in to Antigravity again, then refresh", "请在 Antigravity 中重新登录,然后刷新"))
+            markQuotaFailure(.antigravity, tr("Sign in to Antigravity again, then refresh", "请在 Antigravity 中重新登录,然后刷新"))
             return
         default:
             break
@@ -2206,7 +2233,7 @@ final class AppState {
                 antigravityAccount = account
             }
         case .failure(let err):
-            markAntigravityFailure(err.userMessage, error: err)
+            markQuotaFailure(.antigravity, err.userMessage, error: err)
             return
         }
         // 版本只决定是否提醒；token 轮换或切号期间取到的额度照常展示，与原有行为一致。
@@ -2224,7 +2251,7 @@ final class AppState {
                 antigravityAccount = account
                 result = await AntigravityQuotaClient.fetch(accessToken: token)
             case .failure(let error):
-                markAntigravityFailure(error.userMessage, error: error)
+                markQuotaFailure(.antigravity, error.userMessage, error: error)
                 return
             }
         }
@@ -2251,10 +2278,10 @@ final class AppState {
             account.planType = fetched.account.planType ?? account.planType
             antigravityAccount = account
             let snapshot = fetched.snapshot
-            storeAntigravity(snapshot: snapshot, source: .api)
+            storeQuota(.antigravity, snapshot: snapshot, source: .api)
             if alertCurrent { observePrimaryQuota(snapshot, settingsVersion: alertSettingsVersion) }
         case .failure(let err):
-            markAntigravityFailure(err.userMessage, error: err)
+            markQuotaFailure(.antigravity, err.userMessage, error: err)
         }
     }
 
@@ -2277,136 +2304,66 @@ final class AppState {
         return nil
     }
 
-    private func beginAntigravityRefresh(reason: QuotaRefreshReason) -> Bool {
-        guard !isPreparingForTermination else { return false }
-        let now = Date()
-        guard !antigravityRefreshState.inFlight else { return false }
-        if let backoffUntil = antigravityRefreshState.backoffUntil, backoffUntil > now {
-            markAntigravityFailure(backoffMessage(until: backoffUntil))
-            return false
-        }
-        if reason == .periodic,
-           let lastSuccessAt = antigravityRefreshState.lastSuccessAt,
-           now.timeIntervalSince(lastSuccessAt) < 120
-        {
-            return false
-        }
-        antigravityRefreshState.inFlight = true
-        antigravityRefreshState.lastAttemptAt = now
-        return true
-    }
-
-    private func storeAntigravity(snapshot: QuotaSnapshot, source: QuotaSnapshotSource) {
-        let updatedAt = Date()
-        let mergedSnapshot = snapshot.preservingFutureResetDates(from: antigravityQuota, now: updatedAt)
-        antigravityQuota = mergedSnapshot
-        antigravityQuotaSource = source
-        antigravityQuotaError = nil
-        antigravityRefreshState.lastSuccessAt = updatedAt
-        antigravityRefreshState.lastError = nil
-        antigravityRefreshState.lastErrorIsNetwork = false
-        antigravityRefreshState.backoffUntil = nil
-        antigravityRefreshState.source = source
-        quotaCache.antigravity = QuotaCacheRecord(snapshot: mergedSnapshot, source: source, updatedAt: updatedAt, accountID: antigravityAccount?.email)
-        saveQuotaCache()
-        recordAntigravityQuotaHistory(snapshot: mergedSnapshot, sampledAt: updatedAt)
-    }
-
-    private func markAntigravityFailure(_ message: String, error: QuotaError? = nil) {
-        antigravityQuotaError = message
-        antigravityRefreshState.lastError = message
-        antigravityRefreshState.lastErrorIsNetwork = error?.isNetworkFailure == true
-        if error?.isRateLimited == true {
-            antigravityRefreshState.backoffUntil = Date().addingTimeInterval(rateLimitBackoff)
-        }
-    }
-
     private func loadCursorQuota(reason: QuotaRefreshReason) async {
-        guard beginCursorRefresh(reason: reason) else { return }
+        guard beginQuotaRefresh(.cursor, reason: reason) else { return }
         let alertEntryVersion = primaryQuotaAlertVersion(for: .cursor)
         let alertSettingsVersion = SettingsStore.shared.quotaAlertRuntimeVersion
         defer { cursorRefreshState.inFlight = false }
 
         guard let session = cursorAccount else {
-            markCursorFailure(cursorKeychainAccessRequired ? cursorKeychainAccessMessage : noAccountMessage)
+            markQuotaFailure(.cursor, cursorKeychainAccessRequired ? cursorKeychainAccessMessage : noAccountMessage)
             return
         }
 
-        let initial = await CursorQuotaClient.fetch(cookieHeader: session.cookieHeader)
-        switch initial {
-        case .success(let snapshot):
-            storeCursor(snapshot: snapshot, source: .api)
+        func apply(_ snapshot: QuotaSnapshot, entryVersion: UInt64) {
+            storeQuota(.cursor, snapshot: snapshot, source: .api)
             // 版本只决定是否提醒；token 轮换或切号期间取到的额度照常展示，与原有行为一致。
-            if primaryQuotaAlertVersion(for: .cursor) == alertEntryVersion {
+            if primaryQuotaAlertVersion(for: .cursor) == entryVersion {
                 observePrimaryQuota(snapshot, settingsVersion: alertSettingsVersion)
             }
-        // 代理 / 网关返回的 401 页面不是 Cursor 在说"登录失效",重读本地凭据没有意义,
-        // 直接按原样报错(userMessage 会说明是被拦截)。
-        case .failure(let error) where error.httpStatusCode == 401
-            && !error.looksLikeInterceptedResponse:
-            // Cursor token 由 Cursor.app 持有。401 后只允许重读一次本地登录态；
-            // 仅当 access token 确实变化时才重试，绝不调用 OAuth refresh。
-            let previousToken = session.accessToken
-            await loadCursor()
-            guard let reloaded = cursorAccount,
-                  reloaded.accessToken != previousToken
-            else {
-                markCursorFailure(error.userMessage, error: error)
+        }
+
+        switch await CursorQuotaClient.fetch(cookieHeader: session.cookieHeader) {
+        case .success(let snapshot):
+            apply(snapshot, entryVersion: alertEntryVersion)
+        case .failure(let error):
+            // Cursor token 由 Cursor.app 持有。只认 401，只重读一次本地登录态，绝不调用 OAuth refresh。
+            let reload = await reloadCredentialAfterRejection(
+                error,
+                rejectedStatusCodes: [401],
+                current: session,
+                key: \.accessToken,
+                reload: { await self.loadCursor(); return self.cursorAccount }
+            )
+            guard case .changed(let reloaded) = reload else {
+                markQuotaFailure(.cursor, error.userMessage, error: error)
                 return
             }
-
             let retryEntryVersion = primaryQuotaAlertVersion(for: .cursor)
-            let retried = await CursorQuotaClient.fetch(cookieHeader: reloaded.cookieHeader)
-            switch retried {
+            switch await CursorQuotaClient.fetch(cookieHeader: reloaded.cookieHeader) {
             case .success(let snapshot):
-                storeCursor(snapshot: snapshot, source: .api)
-                if primaryQuotaAlertVersion(for: .cursor) == retryEntryVersion {
-                    observePrimaryQuota(snapshot, settingsVersion: alertSettingsVersion)
-                }
+                apply(snapshot, entryVersion: retryEntryVersion)
             case .failure(let retryError):
-                markCursorFailure(retryError.userMessage, error: retryError)
+                markQuotaFailure(.cursor, retryError.userMessage, error: retryError)
             }
-        case .failure(let error):
-            markCursorFailure(error.userMessage, error: error)
         }
-    }
-
-    private func beginCommandCodeRefresh(reason: QuotaRefreshReason) -> Bool {
-        guard !isPreparingForTermination else { return false }
-        let now = Date()
-        guard !commandCodeRefreshState.inFlight else { return false }
-        if let backoffUntil = commandCodeRefreshState.backoffUntil, backoffUntil > now {
-            markCommandCodeFailure(backoffMessage(until: backoffUntil))
-            return false
-        }
-        if reason == .periodic,
-           let lastSuccessAt = commandCodeRefreshState.lastSuccessAt,
-           now.timeIntervalSince(lastSuccessAt) < minSuccessInterval
-        {
-            return false
-        }
-        commandCodeRefreshState.inFlight = true
-        commandCodeRefreshState.lastAttemptAt = now
-        return true
     }
 
     private func loadCommandCodeQuota(reason: QuotaRefreshReason) async {
-        guard beginCommandCodeRefresh(reason: reason) else { return }
+        guard beginQuotaRefresh(.commandCode, reason: reason) else { return }
         let alertEntryVersion = primaryQuotaAlertVersion(for: .commandCode)
         let alertSettingsVersion = SettingsStore.shared.quotaAlertRuntimeVersion
         defer { commandCodeRefreshState.inFlight = false }
 
         guard let session = commandCodeAccount else {
-            markCommandCodeFailure(noAccountMessage)
+            markQuotaFailure(.commandCode, noAccountMessage)
             return
         }
 
-        let result = await CommandCodeQuotaClient.fetch(accessToken: session.accessToken)
-        switch result {
-        case .success(let response):
+        func apply(_ response: CommandCodeQuotaClient.FetchResult, entryVersion: UInt64) {
             // 版本只决定是否提醒；token 轮换或切号期间取到的额度照常展示，与原有行为一致。
             // 回填 userID 会递增版本，须在写回账号前判断。
-            let alertCurrent = primaryQuotaAlertVersion(for: .commandCode) == alertEntryVersion
+            let alertCurrent = primaryQuotaAlertVersion(for: .commandCode) == entryVersion
             if var current = commandCodeAccount {
                 current.login = response.accountDetails.login
                 current.name = response.accountDetails.name
@@ -2416,104 +2373,115 @@ final class AppState {
                 current.userID = response.accountDetails.userID
                 commandCodeAccount = current
             }
-            storeCommandCode(snapshot: response.snapshot, source: .api)
+            storeQuota(.commandCode, snapshot: response.snapshot, source: .api)
             if alertCurrent { observePrimaryQuota(response.snapshot, settingsVersion: alertSettingsVersion) }
-        // 被代理 / 网关拦截时同样会拿到 401 / 403,但那说明请求根本没到 API,
-        // 不能据此告诉用户"凭据已失效"让他去重新登录。
-        case .failure(let error) where (error.httpStatusCode == 401 || error.httpStatusCode == 403)
-            && !error.looksLikeInterceptedResponse:
-            let previousToken = session.accessToken
-            await loadCommandCode()
-            guard let reloaded = commandCodeAccount, reloaded.accessToken != previousToken else {
-                markCommandCodeFailure(
+        }
+
+        switch await CommandCodeQuotaClient.fetch(accessToken: session.accessToken) {
+        case .success(let response):
+            apply(response, entryVersion: alertEntryVersion)
+        case .failure(let error):
+            let reload = await reloadCredentialAfterRejection(
+                error,
+                rejectedStatusCodes: [401, 403],
+                current: session,
+                key: \.accessToken,
+                reload: { await self.loadCommandCode(); return self.commandCodeAccount }
+            )
+            switch reload {
+            case .notRejected:
+                markQuotaFailure(.commandCode, error.userMessage, error: error)
+            case .unchanged:
+                markQuotaFailure(
+                    .commandCode,
                     tr("Sign-in is no longer valid — sign in again", "登录已失效,请重新登录"),
                     error: error
                 )
-                return
-            }
-            let retryEntryVersion = primaryQuotaAlertVersion(for: .commandCode)
-            let retried = await CommandCodeQuotaClient.fetch(accessToken: reloaded.accessToken)
-            switch retried {
-            case .success(let response):
-                let alertCurrent = primaryQuotaAlertVersion(for: .commandCode) == retryEntryVersion
-                if var current = commandCodeAccount {
-                    current.login = response.accountDetails.login
-                    current.name = response.accountDetails.name
-                    current.email = response.accountDetails.email
-                    current.orgID = response.accountDetails.orgID
-                    current.planType = response.accountDetails.planType
-                    current.userID = response.accountDetails.userID
-                    commandCodeAccount = current
+            case .changed(let reloaded):
+                let retryEntryVersion = primaryQuotaAlertVersion(for: .commandCode)
+                switch await CommandCodeQuotaClient.fetch(accessToken: reloaded.accessToken) {
+                case .success(let response):
+                    apply(response, entryVersion: retryEntryVersion)
+                case .failure(let retryError):
+                    markQuotaFailure(.commandCode, retryError.userMessage, error: retryError)
                 }
-                storeCommandCode(snapshot: response.snapshot, source: .api)
-                if alertCurrent { observePrimaryQuota(response.snapshot, settingsVersion: alertSettingsVersion) }
-            case .failure(let retryError):
-                markCommandCodeFailure(retryError.userMessage, error: retryError)
             }
-        case .failure(let error):
-            markCommandCodeFailure(error.userMessage, error: error)
         }
-    }
-
-    private func beginOpenCodeGoRefresh(reason: QuotaRefreshReason) -> Bool {
-        guard !isPreparingForTermination else { return false }
-        let now = Date()
-        guard !opencodeGoRefreshState.inFlight else { return false }
-        if let backoffUntil = opencodeGoRefreshState.backoffUntil, backoffUntil > now {
-            markOpenCodeGoFailure(backoffMessage(until: backoffUntil))
-            return false
-        }
-        if reason == .periodic,
-           let lastSuccessAt = opencodeGoRefreshState.lastSuccessAt,
-           now.timeIntervalSince(lastSuccessAt) < minSuccessInterval
-        {
-            return false
-        }
-        opencodeGoRefreshState.inFlight = true
-        opencodeGoRefreshState.lastAttemptAt = now
-        return true
     }
 
     private func loadOpenCodeGoQuota(reason: QuotaRefreshReason) async {
-        guard beginOpenCodeGoRefresh(reason: reason) else { return }
+        guard beginQuotaRefresh(.opencodeGo, reason: reason) else { return }
         let alertEntryVersion = primaryQuotaAlertVersion(for: .opencodeGo)
         let alertSettingsVersion = SettingsStore.shared.quotaAlertRuntimeVersion
         defer { opencodeGoRefreshState.inFlight = false }
 
         guard let session = opencodeGoAccount else {
-            markOpenCodeGoFailure(noAccountMessage)
+            markQuotaFailure(.opencodeGo, noAccountMessage)
             return
         }
 
-        let result = await OpenCodeGoQuotaClient.fetch(apiKey: session.apiKey)
-        switch result {
-        case .success(let snapshot):
-            let alertCurrent = primaryQuotaAlertVersion(for: .opencodeGo) == alertEntryVersion
-            storeOpenCodeGo(snapshot: snapshot, source: .api)
+        func apply(_ snapshot: QuotaSnapshot, entryVersion: UInt64) {
+            let alertCurrent = primaryQuotaAlertVersion(for: .opencodeGo) == entryVersion
+            storeQuota(.opencodeGo, snapshot: snapshot, source: .api)
             if alertCurrent { observePrimaryQuota(snapshot, settingsVersion: alertSettingsVersion) }
-        // 与 Command Code 相同：被代理拦截的 401 / 403 不说明 key 失效。
-        // key 可能已在 OpenCode / Pi 里更换，重读一次，变了才用新 key 重试。
-        case .failure(let error) where (error.httpStatusCode == 401 || error.httpStatusCode == 403)
-            && !error.looksLikeInterceptedResponse:
-            let previousKey = session.apiKey
-            await loadOpenCodeGo()
-            guard let reloaded = opencodeGoAccount, reloaded.apiKey != previousKey else {
-                markOpenCodeGoFailure(openCodeGoAuthFailureMessage(error), error: error)
-                return
-            }
-            let retryEntryVersion = primaryQuotaAlertVersion(for: .opencodeGo)
-            let retried = await OpenCodeGoQuotaClient.fetch(apiKey: reloaded.apiKey)
-            switch retried {
-            case .success(let snapshot):
-                let alertCurrent = primaryQuotaAlertVersion(for: .opencodeGo) == retryEntryVersion
-                storeOpenCodeGo(snapshot: snapshot, source: .api)
-                if alertCurrent { observePrimaryQuota(snapshot, settingsVersion: alertSettingsVersion) }
-            case .failure(let retryError):
-                markOpenCodeGoFailure(openCodeGoAuthFailureMessage(retryError), error: retryError)
-            }
-        case .failure(let error):
-            markOpenCodeGoFailure(error.userMessage, error: error)
         }
+
+        switch await OpenCodeGoQuotaClient.fetch(apiKey: session.apiKey) {
+        case .success(let snapshot):
+            apply(snapshot, entryVersion: alertEntryVersion)
+        case .failure(let error):
+            // key 可能已在 OpenCode / Pi 里更换，重读一次，变了才用新 key 重试。
+            let reload = await reloadCredentialAfterRejection(
+                error,
+                rejectedStatusCodes: [401, 403],
+                current: session,
+                key: \.apiKey,
+                reload: { await self.loadOpenCodeGo(); return self.opencodeGoAccount }
+            )
+            switch reload {
+            case .notRejected:
+                markQuotaFailure(.opencodeGo, error.userMessage, error: error)
+            case .unchanged:
+                markQuotaFailure(.opencodeGo, openCodeGoAuthFailureMessage(error), error: error)
+            case .changed(let reloaded):
+                let retryEntryVersion = primaryQuotaAlertVersion(for: .opencodeGo)
+                switch await OpenCodeGoQuotaClient.fetch(apiKey: reloaded.apiKey) {
+                case .success(let snapshot):
+                    apply(snapshot, entryVersion: retryEntryVersion)
+                case .failure(let retryError):
+                    markQuotaFailure(.opencodeGo, openCodeGoAuthFailureMessage(retryError), error: retryError)
+                }
+            }
+        }
+    }
+
+    /// `reloadCredentialAfterRejection` 的结果。
+    private enum CredentialReload<Credential> {
+        /// 不是凭据被拒（状态码不符，或被代理 / 网关拦截），按普通失败处理。
+        case notRejected
+        /// 重读后凭据没变或已读不到，不重试。
+        case unchanged
+        /// 凭据已在原应用里更换，用它重试一次。
+        case changed(Credential)
+    }
+
+    /// 凭据由其他应用持有的服务（Cursor、Command Code、OpenCode Go）被服务端拒绝后：
+    /// 重读一次本地凭据，确实换了才让调用方重试一次；不做 OAuth 续期。
+    /// 代理 / 网关返回的 401 / 403 说明请求没到 API，不能据此判断凭据失效，也不重读。
+    private func reloadCredentialAfterRejection<Credential, Key: Equatable>(
+        _ error: QuotaError,
+        rejectedStatusCodes: Set<Int>,
+        current: Credential,
+        key: (Credential) -> Key,
+        reload: () async -> Credential?
+    ) async -> CredentialReload<Credential> {
+        guard let status = error.httpStatusCode,
+              rejectedStatusCodes.contains(status),
+              !error.looksLikeInterceptedResponse
+        else { return .notRejected }
+        let previousKey = key(current)
+        guard let reloaded = await reload(), key(reloaded) != previousKey else { return .unchanged }
+        return .changed(reloaded)
     }
 
     /// 403 且响应含 `EntitlementError` 表示 key 有效但没有 Go 订阅（例如只开通了 Zen），
@@ -2567,7 +2535,7 @@ final class AppState {
         let now = Date()
         if let claudeFallbackBackoffUntil, claudeFallbackBackoffUntil > now {
             // CLI 兜底在冷却中是内部实现细节;用户要看的是最初那次取数为什么失败。
-            markClaudeFailure(apiError.userMessage, error: apiError)
+            markQuotaFailure(.claude, apiError.userMessage, error: apiError)
             return
         }
 
@@ -2575,237 +2543,126 @@ final class AppState {
         let result = await ClaudeCLIFallbackQuotaClient.fetch()
         switch result {
         case .success(let snapshot):
-            storeClaude(snapshot: snapshot, source: .cliFallback)
+            storeQuota(.claude, snapshot: snapshot, source: .cliFallback)
             // CLI 输出未携带可核实的账号身份，不能归给当前 API 账号产生提醒。
         case .failure(let err):
             // 同上:兜底自己为什么失败留在日志里,UI 只说最初的失败原因。
             AppLog.warn(.quota, "claude CLI fallback failed: \(Redact.message(err.description))")
-            markClaudeFailure(apiError.userMessage, error: apiError)
+            markQuotaFailure(.claude, apiError.userMessage, error: apiError)
         }
     }
 
-    private func beginCodexRefresh(reason: QuotaRefreshReason) -> Bool {
+    // MARK: - 主服务额度刷新状态机
+    //
+    // 六个主服务共用。各服务真正不同的行为集中在 `QuotaRefreshPolicy`（最短间隔、成功后是否清退避）
+    // 和 `quotaCacheAccountID(for:)`、`storeQuota` 里的历史 / 周期分支；导入的 Codex 账号状态按
+    // account.id 另存，仍用自己的 begin / store / markFailure，只共用 `QuotaRefreshGate` 的判断。
+
+    private func beginQuotaRefresh(_ app: QuotaApp, reason: QuotaRefreshReason) -> Bool {
         guard !isPreparingForTermination else { return false }
         let now = Date()
-        guard !codexRefreshState.inFlight else { return false }
-        if let backoffUntil = codexRefreshState.backoffUntil, backoffUntil > now {
-            markCodexFailure(backoffMessage(until: backoffUntil))
+        switch QuotaRefreshGate.decide(
+            state: refreshState(for: app),
+            reason: reason,
+            now: now,
+            minSuccessInterval: QuotaRefreshPolicy.minSuccessInterval(for: app)
+        ) {
+        case .skip:
             return false
-        }
-        if reason == .periodic,
-           let lastSuccessAt = codexRefreshState.lastSuccessAt,
-           now.timeIntervalSince(lastSuccessAt) < minSuccessInterval
-        {
+        case .backingOff(let until):
+            markQuotaFailure(app, backoffMessage(until: until))
             return false
+        case .start:
+            updatePrimaryState(app) { state in
+                state.refresh.inFlight = true
+                state.refresh.lastAttemptAt = now
+            }
+            return true
         }
-        codexRefreshState.inFlight = true
-        codexRefreshState.lastAttemptAt = now
-        return true
     }
 
-    private func beginClaudeRefresh(reason: QuotaRefreshReason) -> Bool {
-        guard !isPreparingForTermination else { return false }
-        let now = Date()
-        guard !claudeRefreshState.inFlight else { return false }
-        if let backoffUntil = claudeRefreshState.backoffUntil, backoffUntil > now {
-            markClaudeFailure(backoffMessage(until: backoffUntil))
-            return false
-        }
-        if reason == .periodic,
-           let lastSuccessAt = claudeRefreshState.lastSuccessAt,
-           now.timeIntervalSince(lastSuccessAt) < minSuccessInterval
-        {
-            return false
-        }
-        claudeRefreshState.inFlight = true
-        claudeRefreshState.lastAttemptAt = now
-        return true
-    }
-
-    private func beginCursorRefresh(reason: QuotaRefreshReason) -> Bool {
-        guard !isPreparingForTermination else { return false }
-        let now = Date()
-        guard !cursorRefreshState.inFlight else { return false }
-        if let backoffUntil = cursorRefreshState.backoffUntil, backoffUntil > now {
-            markCursorFailure(backoffMessage(until: backoffUntil))
-            return false
-        }
-        if reason == .periodic,
-           let lastSuccessAt = cursorRefreshState.lastSuccessAt,
-           now.timeIntervalSince(lastSuccessAt) < minSuccessInterval
-        {
-            return false
-        }
-        cursorRefreshState.inFlight = true
-        cursorRefreshState.lastAttemptAt = now
-        return true
-    }
-
-    private func storeCodex(snapshot: QuotaSnapshot, source: QuotaSnapshotSource) {
+    private func storeQuota(_ app: QuotaApp, snapshot: QuotaSnapshot, source: QuotaSnapshotSource) {
         let updatedAt = Date()
-        let mergedSnapshot = snapshot.preservingFutureResetDates(from: codexQuota, now: updatedAt)
-        codexQuota = mergedSnapshot
-        codexQuotaSource = source
-        codexQuotaError = nil
-        codexRefreshState.lastSuccessAt = updatedAt
-        codexRefreshState.lastError = nil
-        codexRefreshState.lastErrorIsNetwork = false
-        codexRefreshState.backoffUntil = nil
-        codexRefreshState.source = source
-        let accountKey = QuotaHistoryAccountKey.codexPrimary(accountId: codexAccount?.accountId)
-        quotaCache.codex = QuotaCacheRecord(
+        let mergedSnapshot = snapshot.preservingFutureResetDates(from: quotaSnapshot(for: app), now: updatedAt)
+        updatePrimaryState(app) { state in
+            state.snapshot = mergedSnapshot
+            state.source = source
+            state.error = nil
+            state.refresh.lastSuccessAt = updatedAt
+            state.refresh.lastError = nil
+            state.refresh.lastErrorIsNetwork = false
+            if QuotaRefreshPolicy.clearsBackoffOnSuccess(app, source: source) {
+                state.refresh.backoffUntil = nil
+            }
+            state.refresh.source = source
+        }
+        let accountID = quotaCacheAccountID(for: app)
+        quotaCache.providers[app] = QuotaCacheRecord(
             snapshot: mergedSnapshot,
             source: source,
             updatedAt: updatedAt,
-            accountID: accountKey
+            accountID: accountID
         )
         saveQuotaCache()
-        recordCodexQuotaHistory(snapshot: mergedSnapshot, sampledAt: updatedAt)
-        recordQuotaCycles(
-            accountKey: accountKey,
-            app: .codex,
-            snapshot: mergedSnapshot,
-            source: source,
-            sampledAt: updatedAt
-        )
-    }
-
-    private func storeClaude(snapshot: QuotaSnapshot, source: QuotaSnapshotSource) {
-        let updatedAt = Date()
-        let mergedSnapshot = snapshot.preservingFutureResetDates(from: claudeQuota, now: updatedAt)
-        claudeQuota = mergedSnapshot
-        claudeQuotaSource = source
-        claudeQuotaError = nil
-        claudeRefreshState.lastSuccessAt = updatedAt
-        claudeRefreshState.lastError = nil
-        claudeRefreshState.lastErrorIsNetwork = false
-        if source == .api {
-            claudeRefreshState.backoffUntil = nil
+        // 额度历史只记 Codex、Claude、Antigravity；周期记录只记 Codex、Claude。
+        switch app {
+        case .codex:
+            recordCodexQuotaHistory(snapshot: mergedSnapshot, sampledAt: updatedAt)
+        case .claude:
+            recordClaudeQuotaHistory(snapshot: mergedSnapshot, sampledAt: updatedAt)
+        case .antigravity:
+            recordAntigravityQuotaHistory(snapshot: mergedSnapshot, sampledAt: updatedAt)
+        case .cursor, .commandCode, .opencodeGo:
+            break
         }
-        claudeRefreshState.source = source
-        let accountKey = QuotaHistoryAccountKey.claudePrimary(
-            email: claudeAccount?.email,
-            accountUuid: claudeAccount?.accountUuid
-        )
-        quotaCache.claude = QuotaCacheRecord(
-            snapshot: mergedSnapshot,
-            source: source,
-            updatedAt: updatedAt,
-            accountID: accountKey
-        )
-        saveQuotaCache()
-        recordClaudeQuotaHistory(snapshot: mergedSnapshot, sampledAt: updatedAt)
-        recordQuotaCycles(
-            accountKey: accountKey,
-            app: .claude,
-            snapshot: mergedSnapshot,
-            source: source,
-            sampledAt: updatedAt
-        )
-    }
-
-    private func storeCursor(snapshot: QuotaSnapshot, source: QuotaSnapshotSource) {
-        let updatedAt = Date()
-        let mergedSnapshot = snapshot.preservingFutureResetDates(from: cursorQuota, now: updatedAt)
-        cursorQuota = mergedSnapshot
-        cursorQuotaSource = source
-        cursorQuotaError = nil
-        cursorRefreshState.lastSuccessAt = updatedAt
-        cursorRefreshState.lastError = nil
-        cursorRefreshState.lastErrorIsNetwork = false
-        cursorRefreshState.backoffUntil = nil
-        cursorRefreshState.source = source
-        quotaCache.cursor = QuotaCacheRecord(
-            snapshot: mergedSnapshot,
-            source: source,
-            updatedAt: updatedAt,
-            accountID: cursorAccount?.userID
-        )
-        saveQuotaCache()
-    }
-
-    private func storeCommandCode(snapshot: QuotaSnapshot, source: QuotaSnapshotSource) {
-        let updatedAt = Date()
-        let mergedSnapshot = snapshot.preservingFutureResetDates(from: commandCodeQuota, now: updatedAt)
-        commandCodeQuota = mergedSnapshot
-        commandCodeQuotaSource = source
-        commandCodeQuotaError = nil
-        commandCodeRefreshState.lastSuccessAt = updatedAt
-        commandCodeRefreshState.lastError = nil
-        commandCodeRefreshState.lastErrorIsNetwork = false
-        commandCodeRefreshState.backoffUntil = nil
-        commandCodeRefreshState.source = source
-        quotaCache.commandCode = QuotaCacheRecord(
-            snapshot: mergedSnapshot,
-            source: source,
-            updatedAt: updatedAt,
-            accountID: commandCodeAccount?.accountKey
-        )
-        saveQuotaCache()
-    }
-
-    private func storeOpenCodeGo(snapshot: QuotaSnapshot, source: QuotaSnapshotSource) {
-        let updatedAt = Date()
-        let mergedSnapshot = snapshot.preservingFutureResetDates(from: opencodeGoQuota, now: updatedAt)
-        opencodeGoQuota = mergedSnapshot
-        opencodeGoQuotaSource = source
-        opencodeGoQuotaError = nil
-        opencodeGoRefreshState.lastSuccessAt = updatedAt
-        opencodeGoRefreshState.lastError = nil
-        opencodeGoRefreshState.lastErrorIsNetwork = false
-        opencodeGoRefreshState.backoffUntil = nil
-        opencodeGoRefreshState.source = source
-        quotaCache.opencodeGo = QuotaCacheRecord(
-            snapshot: mergedSnapshot,
-            source: source,
-            updatedAt: updatedAt,
-            accountID: opencodeGoAccount?.accountKey
-        )
-        saveQuotaCache()
-    }
-
-    private func markCodexFailure(_ message: String, error: QuotaError? = nil) {
-        codexQuotaError = message
-        codexRefreshState.lastError = message
-        codexRefreshState.lastErrorIsNetwork = error?.isNetworkFailure == true
-        if error?.isRateLimited == true {
-            codexRefreshState.backoffUntil = Date().addingTimeInterval(rateLimitBackoff)
+        let cycleApp: UsageApp?
+        switch app {
+        case .codex: cycleApp = .codex
+        case .claude: cycleApp = .claude
+        case .antigravity, .cursor, .commandCode, .opencodeGo: cycleApp = nil
+        }
+        if let cycleApp, let accountID {
+            recordQuotaCycles(
+                accountKey: accountID,
+                app: cycleApp,
+                snapshot: mergedSnapshot,
+                source: source,
+                sampledAt: updatedAt
+            )
         }
     }
 
-    private func markClaudeFailure(_ message: String, error: QuotaError? = nil) {
-        claudeQuotaError = message
-        claudeRefreshState.lastError = message
-        claudeRefreshState.lastErrorIsNetwork = error?.isNetworkFailure == true
-        if error?.isRateLimited == true {
-            claudeRefreshState.backoffUntil = Date().addingTimeInterval(rateLimitBackoff)
+    /// 写入额度缓存的账号绑定。Codex / Claude 用周期账号键（同时用于周期记录），
+    /// 其余服务用各自能核对账号的字段；启动和换号时据此判断缓存是否属于当前账号。
+    private func quotaCacheAccountID(for app: QuotaApp) -> String? {
+        switch app {
+        case .codex:
+            return QuotaHistoryAccountKey.codexPrimary(accountId: codexAccount?.accountId)
+        case .claude:
+            return QuotaHistoryAccountKey.claudePrimary(
+                email: claudeAccount?.email,
+                accountUuid: claudeAccount?.accountUuid
+            )
+        case .antigravity:
+            return antigravityAccount?.email
+        case .cursor:
+            return cursorAccount?.userID
+        case .commandCode:
+            return commandCodeAccount?.accountKey
+        case .opencodeGo:
+            return opencodeGoAccount?.accountKey
         }
     }
 
-    private func markCursorFailure(_ message: String, error: QuotaError? = nil) {
-        cursorQuotaError = message
-        cursorRefreshState.lastError = message
-        cursorRefreshState.lastErrorIsNetwork = error?.isNetworkFailure == true
-        if error?.isRateLimited == true {
-            cursorRefreshState.backoffUntil = Date().addingTimeInterval(rateLimitBackoff)
-        }
-    }
-
-    private func markCommandCodeFailure(_ message: String, error: QuotaError? = nil) {
-        commandCodeQuotaError = message
-        commandCodeRefreshState.lastError = message
-        commandCodeRefreshState.lastErrorIsNetwork = error?.isNetworkFailure == true
-        if error?.isRateLimited == true {
-            commandCodeRefreshState.backoffUntil = Date().addingTimeInterval(rateLimitBackoff)
-        }
-    }
-
-    private func markOpenCodeGoFailure(_ message: String, error: QuotaError? = nil) {
-        opencodeGoQuotaError = message
-        opencodeGoRefreshState.lastError = message
-        opencodeGoRefreshState.lastErrorIsNetwork = error?.isNetworkFailure == true
-        if error?.isRateLimited == true {
-            opencodeGoRefreshState.backoffUntil = Date().addingTimeInterval(rateLimitBackoff)
+    /// 取数失败：保留已有快照，只记错误；429 进入退避。
+    private func markQuotaFailure(_ app: QuotaApp, _ message: String, error: QuotaError? = nil) {
+        updatePrimaryState(app) { state in
+            state.error = message
+            state.refresh.lastError = message
+            state.refresh.lastErrorIsNetwork = error?.isNetworkFailure == true
+            if error?.isRateLimited == true {
+                state.refresh.backoffUntil = Date().addingTimeInterval(rateLimitBackoff)
+            }
         }
     }
 

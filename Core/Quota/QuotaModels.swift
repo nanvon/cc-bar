@@ -150,7 +150,7 @@ nonisolated struct QuotaRefreshState: Sendable, Equatable {
     var lastError: String?
     /// `lastError` 是不是网络类失败。`lastError` 只是一句展示文案,结构信息在这里留一份,
     /// 让 header 能判断"所有服务都败在网络上"并说"网络不可用",而不是笼统的"刷新失败"。
-    /// 与 `lastError` 同生共死:每个 `markXxxFailure` 设值,每个 `storeXxx` 清零。
+    /// 与 `lastError` 同生共死:`markQuotaFailure` / `markImportedCodexFailure` 设值,`storeQuota` / `storeImportedCodex` 清零。
     var lastErrorIsNetwork: Bool = false
     var inFlight: Bool = false
     var source: QuotaSnapshotSource?

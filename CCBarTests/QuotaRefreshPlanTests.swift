@@ -210,3 +210,81 @@ final class QuotaRefreshPlanTests: XCTestCase {
         XCTAssertTrue(appState.importedCodexAccountMirrorsPrimary(imported))
     }
 }
+
+/// 「是否开始刷新」的纯函数与各服务差异表（改进建议 2026-11 第 3 条）。
+final class QuotaRefreshGateTests: XCTestCase {
+    private let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+    private func decide(
+        _ state: QuotaRefreshState,
+        reason: QuotaRefreshReason = .periodic,
+        interval: TimeInterval = QuotaRefreshPolicy.defaultMinSuccessInterval
+    ) -> QuotaRefreshGate.Decision {
+        QuotaRefreshGate.decide(state: state, reason: reason, now: now, minSuccessInterval: interval)
+    }
+
+    func testStartsWithFreshState() {
+        XCTAssertEqual(decide(QuotaRefreshState()), .start)
+    }
+
+    func testSkipsWhileInFlight() {
+        var state = QuotaRefreshState()
+        state.inFlight = true
+        XCTAssertEqual(decide(state), .skip)
+        XCTAssertEqual(decide(state, reason: .userInitiated), .skip)
+    }
+
+    func testBackoffBlocksPeriodicAndManualRefresh() {
+        var state = QuotaRefreshState()
+        let until = now.addingTimeInterval(300)
+        state.backoffUntil = until
+        XCTAssertEqual(decide(state), .backingOff(until: until))
+        XCTAssertEqual(decide(state, reason: .userInitiated), .backingOff(until: until))
+    }
+
+    func testExpiredBackoffAllowsRefresh() {
+        var state = QuotaRefreshState()
+        state.backoffUntil = now.addingTimeInterval(-1)
+        XCTAssertEqual(decide(state), .start)
+    }
+
+    func testInFlightTakesPrecedenceOverBackoff() {
+        var state = QuotaRefreshState()
+        state.inFlight = true
+        state.backoffUntil = now.addingTimeInterval(300)
+        XCTAssertEqual(decide(state), .skip)
+    }
+
+    func testMinSuccessIntervalOnlyLimitsPeriodicRefresh() {
+        var state = QuotaRefreshState()
+        state.lastSuccessAt = now.addingTimeInterval(-30)
+        XCTAssertEqual(decide(state), .skip)
+        XCTAssertEqual(decide(state, reason: .userInitiated), .start)
+    }
+
+    func testPeriodicRefreshStartsAfterMinSuccessInterval() {
+        var state = QuotaRefreshState()
+        state.lastSuccessAt = now.addingTimeInterval(-60)
+        XCTAssertEqual(decide(state), .start)
+    }
+
+    func testAntigravityUsesLongerMinSuccessInterval() {
+        XCTAssertEqual(QuotaRefreshPolicy.minSuccessInterval(for: .antigravity), 120)
+        for app in QuotaApp.allCases where app != .antigravity {
+            XCTAssertEqual(QuotaRefreshPolicy.minSuccessInterval(for: app), 60, "\(app)")
+        }
+        var state = QuotaRefreshState()
+        state.lastSuccessAt = now.addingTimeInterval(-90)
+        XCTAssertEqual(decide(state, interval: QuotaRefreshPolicy.minSuccessInterval(for: .antigravity)), .skip)
+        XCTAssertEqual(decide(state, interval: QuotaRefreshPolicy.minSuccessInterval(for: .codex)), .start)
+    }
+
+    func testClaudeKeepsBackoffAfterCLIFallbackSuccess() {
+        XCTAssertTrue(QuotaRefreshPolicy.clearsBackoffOnSuccess(.claude, source: .api))
+        XCTAssertFalse(QuotaRefreshPolicy.clearsBackoffOnSuccess(.claude, source: .cliFallback))
+        for app in QuotaApp.allCases where app != .claude {
+            XCTAssertTrue(QuotaRefreshPolicy.clearsBackoffOnSuccess(app, source: .api), "\(app)")
+            XCTAssertTrue(QuotaRefreshPolicy.clearsBackoffOnSuccess(app, source: .antigravityCLI), "\(app)")
+        }
+    }
+}
