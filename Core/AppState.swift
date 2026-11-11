@@ -456,6 +456,16 @@ final class AppState {
         guard !didBootstrap else { return }
         didBootstrap = true
 
+        // 原子写中途被终止留下的 `*.sb-*` 临时文件，只删 24 小时以前的，不阻塞启动。
+        Task.detached(priority: .utility) {
+            let removed = AtomicWriteLeftoverCleaner.removeStaleLeftovers(
+                in: AtomicWriteLeftoverCleaner.productionDirectories()
+            )
+            if !removed.isEmpty {
+                AppLog.info(.persistence, "removed atomic-write leftovers count=\(removed.count)")
+            }
+        }
+
         loadQuotaCache()
         loadQuotaHistory()
         loadQuotaCycles()
