@@ -123,3 +123,12 @@ xcodebuild -project ccbar.xcodeproj -scheme ccbar -configuration Debug -destinat
 - 打错 tag 可撤销：`git tag -d vX.Y.Z && git push origin :vX.Y.Z`。
 - `git push origin vX.Y.Z` 成功即代表本地发版操作完成；只汇报版本号、提交、Actions / Release 链接和本版更新说明全文，**不得主动查询、等待或轮询** CI、Release 或产物状态。只有用户明确要求“看进度”“确认发布成功”或“检查产物”时，才查询远端状态。
 - 如果用户只是单独说「打个正式版」但没有前面步骤的上下文（比如工作区本来就是干净的），照样按这四步走，第 1 步无改动则跳过、直接从第 2 步开始。
+
+### 只改价格（不发版）
+
+价格数据在 `Resources/pricing-rules.json`，`Core/Usage/Pricing.swift` 只有取价算法。新增模型价、调价、加分段价时：
+
+- 只改规则文件，并把 `revision` 加 1；不改 `MARKETING_VERSION`，不打 tag，不写 `release-notes`。
+- 价格写成十进制字符串，分段时间写 UTC 的 ISO 8601 时刻；格式与校验规则见 `docs/技术实现.md` §7.6，发布流程见 `docs/打包发布.md`「价格规则发布」。
+- 改动合入 main 后由 `.github/workflows/pricing-rules.yml` 签名并上传到固定 tag `pricing-rules` 的 prerelease，用户 App 自动拉取。提交、推送仍按协作规则等用户指令。
+- 数据文件表达不了的新计价方式要改代码并提高 `PricingRules.supportedSchemaVersion`，走正常发版；过渡期内不要把远端文件的 `schemaVersion` 提高。
