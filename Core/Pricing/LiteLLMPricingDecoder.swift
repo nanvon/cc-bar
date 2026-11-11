@@ -59,7 +59,7 @@ nonisolated enum LiteLLMPricingDecoder {
     }
 
     /// `input`/`output` 必须同时存在才纳入；`cacheRead`/`cacheCreation` 缺失按 0
-    /// （不猜价格，与本地 `Pricing.table` 里 GPT-5 系 `cacheCreation: 0` 的既有约定一致）。
+    /// （不猜价格，与本地价格规则 `pricing-rules.json` 里 GPT-5 系 `cacheCreation: 0` 的既有约定一致）。
     nonisolated private static func parseStandardRates(_ entry: [String: Any]) -> ModelPrice? {
         guard let input = decimal(entry["input_cost_per_token"]),
               let output = decimal(entry["output_cost_per_token"])

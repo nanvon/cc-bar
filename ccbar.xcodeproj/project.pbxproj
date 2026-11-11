@@ -116,6 +116,9 @@
 		49C1B197000000000001AABB /* UsageLogWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B197000000000001AAAA /* UsageLogWatcher.swift */; };
 		49C1BA11000000000001AABB /* CycleUsage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BA11000000000001AAAA /* CycleUsage.swift */; };
 		49C1B157000000000001AABB /* PricingCatalogModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B157000000000001AAAA /* PricingCatalogModels.swift */; };
+		49C2B102000000000001AAAA /* PricingRules.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C2B101000000000001AAAA /* PricingRules.swift */; };
+		49C2B104000000000001AAAA /* PricingRulesStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C2B103000000000001AAAA /* PricingRulesStore.swift */; };
+		49C2B106000000000001AAAA /* pricing-rules.json in Resources */ = {isa = PBXBuildFile; fileRef = 49C2B105000000000001AAAA /* pricing-rules.json */; };
 		49C1B158000000000001AABB /* LiteLLMPricingDecoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B158000000000001AAAA /* LiteLLMPricingDecoder.swift */; };
 		49C1B159000000000001AABB /* ModelsDevPricingDecoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B159000000000001AAAA /* ModelsDevPricingDecoder.swift */; };
 		49C1B15A000000000001AABB /* PricingCatalogStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B15A000000000001AAAA /* PricingCatalogStore.swift */; };
@@ -143,6 +146,7 @@
 		49C1B195000000000001AABB /* CodexResetCreditsDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B195000000000001AAAA /* CodexResetCreditsDetailView.swift */; };
 		49C1B196000000000001AABB /* ImportedUsageBackfill.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B196000000000001AAAA /* ImportedUsageBackfill.swift */; };
 		49C1B300000000000001AABB /* QuotaParsingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B300000000000001AAAA /* QuotaParsingTests.swift */; };
+		49C2B108000000000001AAAA /* PricingRulesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C2B107000000000001AAAA /* PricingRulesTests.swift */; };
 		49C1BC12000000000001AABB /* CursorAuthTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BC12000000000001AAAA /* CursorAuthTests.swift */; };
 		49C1BC15000000000001AABB /* CursorUsageFetcherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1BC15000000000001AAAA /* CursorUsageFetcherTests.swift */; };
 		49C1B31000000000000FAABB /* PiJSONLScannerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B31000000000000FAAAA /* PiJSONLScannerTests.swift */; };
@@ -282,6 +286,9 @@
 		49C1B197000000000001AAAA /* UsageLogWatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageLogWatcher.swift; sourceTree = "<group>"; };
 		49C1BA11000000000001AAAA /* CycleUsage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CycleUsage.swift; sourceTree = "<group>"; };
 		49C1B157000000000001AAAA /* PricingCatalogModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PricingCatalogModels.swift; sourceTree = "<group>"; };
+		49C2B101000000000001AAAA /* PricingRules.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PricingRules.swift; sourceTree = "<group>"; };
+		49C2B103000000000001AAAA /* PricingRulesStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PricingRulesStore.swift; sourceTree = "<group>"; };
+		49C2B105000000000001AAAA /* pricing-rules.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "pricing-rules.json"; sourceTree = "<group>"; };
 		49C1B158000000000001AAAA /* LiteLLMPricingDecoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiteLLMPricingDecoder.swift; sourceTree = "<group>"; };
 		49C1B159000000000001AAAA /* ModelsDevPricingDecoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelsDevPricingDecoder.swift; sourceTree = "<group>"; };
 		49C1B15A000000000001AAAA /* PricingCatalogStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PricingCatalogStore.swift; sourceTree = "<group>"; };
@@ -308,6 +315,7 @@
 		49C1B195000000000001AAAA /* CodexResetCreditsDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexResetCreditsDetailView.swift; sourceTree = "<group>"; };
 		49C1B196000000000001AAAA /* ImportedUsageBackfill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportedUsageBackfill.swift; sourceTree = "<group>"; };
 		49C1B300000000000001AAAA /* QuotaParsingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaParsingTests.swift; sourceTree = "<group>"; };
+		49C2B107000000000001AAAA /* PricingRulesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PricingRulesTests.swift; sourceTree = "<group>"; };
 		49C1BC12000000000001AAAA /* CursorAuthTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CursorAuthTests.swift; sourceTree = "<group>"; };
 		49C1BC15000000000001AAAA /* CursorUsageFetcherTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CursorUsageFetcherTests.swift; sourceTree = "<group>"; };
 		49C1B31000000000000FAAAA /* PiJSONLScannerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiJSONLScannerTests.swift; sourceTree = "<group>"; };
@@ -413,6 +421,7 @@
 			children = (
 				4931AC522FC02A4200EE598C /* Assets.xcassets */,
 				49C1B142000000000001AAAA /* Logos */,
+				49C2B105000000000001AAAA /* pricing-rules.json */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -522,6 +531,8 @@
 			isa = PBXGroup;
 			children = (
 				49C1B157000000000001AAAA /* PricingCatalogModels.swift */,
+				49C2B101000000000001AAAA /* PricingRules.swift */,
+				49C2B103000000000001AAAA /* PricingRulesStore.swift */,
 				49C1B158000000000001AAAA /* LiteLLMPricingDecoder.swift */,
 				49C1B159000000000001AAAA /* ModelsDevPricingDecoder.swift */,
 				49C1B15A000000000001AAAA /* PricingCatalogStore.swift */,
@@ -601,6 +612,7 @@
 				C1A0DE01000000000001AAAA /* ClaudeAuthTests.swift */,
 				49C2AD06000000000001AAAA /* QuotaAlertTests.swift */,
 				49C1B300000000000001AAAA /* QuotaParsingTests.swift */,
+				49C2B107000000000001AAAA /* PricingRulesTests.swift */,
 				49C1BC12000000000001AAAA /* CursorAuthTests.swift */,
 				49C1BC15000000000001AAAA /* CursorUsageFetcherTests.swift */,
 				49C1BF02000000000001AAAA /* QuotaRefreshPlanTests.swift */,
@@ -758,6 +770,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				4931AC592FC02A4200EE598C /* Assets.xcassets in Resources */,
+				49C2B106000000000001AAAA /* pricing-rules.json in Resources */,
 				49C1B140000000000001AABB /* codex.svg in Resources */,
 				49C1B141000000000001AABB /* claude.svg in Resources */,
 				49C1B143000000000001AABB /* antigravity.svg in Resources */,
@@ -864,6 +877,8 @@
 				49C1B197000000000001AABB /* UsageLogWatcher.swift in Sources */,
 				49C1BA11000000000001AABB /* CycleUsage.swift in Sources */,
 				49C1B157000000000001AABB /* PricingCatalogModels.swift in Sources */,
+				49C2B102000000000001AAAA /* PricingRules.swift in Sources */,
+				49C2B104000000000001AAAA /* PricingRulesStore.swift in Sources */,
 				49C1B158000000000001AABB /* LiteLLMPricingDecoder.swift in Sources */,
 				49C1B159000000000001AABB /* ModelsDevPricingDecoder.swift in Sources */,
 				49C1B15A000000000001AABB /* PricingCatalogStore.swift in Sources */,
@@ -897,6 +912,7 @@
 			files = (
 				49C2AD06000000000001AABB /* QuotaAlertTests.swift in Sources */,
 				49C1B300000000000001AABB /* QuotaParsingTests.swift in Sources */,
+				49C2B108000000000001AAAA /* PricingRulesTests.swift in Sources */,
 				C1A0DE02000000000001AAAA /* ClaudeAuthTests.swift in Sources */,
 				49C1BC12000000000001AABB /* CursorAuthTests.swift in Sources */,
 				49C1BC15000000000001AABB /* CursorUsageFetcherTests.swift in Sources */,

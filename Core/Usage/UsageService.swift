@@ -466,8 +466,9 @@ final class UsageService {
             lastError = Self.restrictedHistoryMessage
         }
         publishTotals()
-        // 远端价格目录后台刷新：非阻塞，isDue 内部判断是否真的需要发请求，刷新结果由下次扫描自然拾取。
+        // 远端价格目录与价格规则后台刷新：非阻塞，内部判断是否真的需要发请求，刷新结果由下次扫描自然拾取。
         PricingCatalogStore.shared.refreshIfNeeded()
+        PricingRulesStore.shared.refreshIfNeeded()
     }
 
     /// 只有从未建立新存储且没有新快照证据时，才允许旧格式迁移。
@@ -914,6 +915,9 @@ final class UsageService {
             // 借用量扫描的既有节奏当远端价格目录 24h 到期检查的心跳，不新开定时器；非阻塞。
             PricingCatalogStore.shared.refreshIfNeeded()
             PricingCatalogStore.shared.commitPending()
+            // 价格规则在同一个安全边界切换；规则变化后本地指纹不同，本轮扫描后由重建基准触发完整重建。
+            PricingRulesStore.shared.refreshIfNeeded()
+            PricingRulesStore.shared.commitPending()
             if historyRecoveryState != .complete {
                 await handleRestrictedRecovery()
                 continue
@@ -1590,9 +1594,11 @@ final class UsageService {
         }
         lastRebuildOutcome = nil
         PricingCatalogStore.shared.refreshIfNeeded()
+        PricingRulesStore.shared.refreshIfNeeded()
         // 手动重算同样是一次完整扫描：先提交已经刷好的 pending，避免用户刚点击重算
         // 却仍按旧 active 价格扫描；本次刚发起的网络刷新则留给下一次扫描。
         PricingCatalogStore.shared.commitPending()
+        PricingRulesStore.shared.commitPending()
         guard !storeWriteDisabled else {
             lastRebuildOutcome = .commitFailed("usage history store is read-only")
             return
@@ -2160,7 +2166,7 @@ final class UsageService {
         )
     }
 
-    /// 设置页手动更新在线价格目录：绕过 24 小时拉取最新目录，新价格在下一轮扫描的
+    /// 设置页手动更新在线价格目录和价格规则：绕过检查间隔拉取最新数据，新价格在下一轮扫描的
     /// 安全边界提交生效。成功后立即扫描一轮；用到的模型价格有变化时，自动重建不等 24 小时间隔。
     @discardableResult
     func refreshPricingCatalog() async -> Bool {
@@ -2168,9 +2174,13 @@ final class UsageService {
         guard !isRefreshingPricingCatalog else { return false }
         isRefreshingPricingCatalog = true
         defer { isRefreshingPricingCatalog = false }
-        let succeeded = await PricingCatalogStore.shared.forceRefresh()
+        // 价格规则文件一并检查；采纳了更新的规则也算更新成功，下一轮扫描开始时切换。
+        async let catalogRefreshed = PricingCatalogStore.shared.forceRefresh()
+        async let rulesAdopted = PricingRulesStore.shared.forceRefresh()
+        let (catalogSucceeded, rulesSucceeded) = await (catalogRefreshed, rulesAdopted)
+        let succeeded = catalogSucceeded || rulesSucceeded
         if succeeded, automaticRebuildEnabled {
-            catalogUpdateRequestedByUser = true
+            if catalogSucceeded { catalogUpdateRequestedByUser = true }
             Task { await scanNow() }
         }
         return succeeded

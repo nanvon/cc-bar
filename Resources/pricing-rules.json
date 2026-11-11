@@ -1,0 +1,371 @@
+{
+  "schemaVersion": 1,
+  "revision": 1,
+  "notes": [
+    "价格单位为 USD / 百万 token，一律写成字符串，避免浮点误差。时间为 UTC 的 ISO 8601 时刻。",
+    "每次修改都要把 revision 加 1；App 只采纳 revision 更大的远端文件。note 字段只作说明，不参与计价和指纹。",
+    "standard.fixedKeys：已审计的固定本地价，远端目录不能覆盖（gpt-5.5-pro；claude-sonnet-5 的 $2 / $10 为官方固定价）。",
+    "fast.fixedKeys：历史价或已核对的上游偏差，固定用本地 Fast 价（LiteLLM 的 GPT-5.5 Priority 仍是旧价；Opus 4.7 / 4.6 只用于历史日志）。",
+    "timedPrices / timedContextTiers / codexTimedPrices / codexLongContextTimedPrices 的每个 key 必须在对应基础表里有最早时段的价格，分段按 from 升序。",
+    "fast.codexMultipliers 是 ChatGPT credit 倍率；fast.claudeMultipliers 是 Fast / Standard API 价比。claudeCacheCreation1hMultiplier 是 1h 缓存写入相对基础输入价的倍数。",
+    "codex-auto-review 是内部 review，官方未公开计费，不入表（cost 为 0，token 仍记录）。"
+  ],
+  "claudeCacheCreation1hMultiplier": "2",
+  "standard": {
+    "prices": {
+      "claude-3-5-haiku": { "input": "0.8", "output": "4", "cacheRead": "0.08", "cacheCreation": "1" },
+      "claude-3-5-sonnet": { "input": "3", "output": "15", "cacheRead": "0.3", "cacheCreation": "3.75" },
+      "claude-3-opus": { "input": "15", "output": "75", "cacheRead": "1.5", "cacheCreation": "18.75" },
+      "claude-fable-5": { "input": "10", "output": "50", "cacheRead": "1", "cacheCreation": "12.5" },
+      "claude-fable-5-1": { "input": "10", "output": "50", "cacheRead": "0.25", "cacheCreation": "12.5" },
+      "claude-fable-5-2": { "input": "8", "output": "40", "cacheRead": "0.2", "cacheCreation": "10" },
+      "claude-fable-5.1": { "input": "10", "output": "50", "cacheRead": "0.25", "cacheCreation": "12.5", "note": "Fable 5.1 自发布起缓存读取即为 0.025x 基础输入价（$0.25）；Fable 5 仍为 0.1x。" },
+      "claude-fable-5.2": { "input": "8", "output": "40", "cacheRead": "0.2", "cacheCreation": "10", "note": "Fable 5.2（2026-11-09 发布）输入 / 输出 $8 / $40；缓存读取 0.025x（$0.20），5m 写入 1.25x（$10）。" },
+      "claude-haiku-4": { "input": "0.8", "output": "4", "cacheRead": "0.08", "cacheCreation": "1" },
+      "claude-haiku-4-5": { "input": "1", "output": "5", "cacheRead": "0.1", "cacheCreation": "1.25" },
+      "claude-haiku-5-5": { "input": "0.1", "output": "0.5", "cacheRead": "0.01", "cacheCreation": "0.125", "note": "≤100K 为短上下文价，超过 100K 整次请求按长上下文价，见 contextTiers。" },
+      "claude-haiku-5.5": { "input": "0.1", "output": "0.5", "cacheRead": "0.01", "cacheCreation": "0.125" },
+      "claude-mythos-5": { "input": "10", "output": "50", "cacheRead": "1", "cacheCreation": "12.5" },
+      "claude-mythos-5-1": { "input": "10", "output": "50", "cacheRead": "0.25", "cacheCreation": "12.5" },
+      "claude-mythos-5-2": { "input": "8", "output": "40", "cacheRead": "0.2", "cacheCreation": "10" },
+      "claude-mythos-5.1": { "input": "10", "output": "50", "cacheRead": "0.25", "cacheCreation": "12.5", "note": "Mythos 5 / 5.1 与 Fable 5 / 5.1 同价：Mythos 5.1 缓存读取 0.025x，Mythos 5 为 0.1x。" },
+      "claude-mythos-5.2": { "input": "8", "output": "40", "cacheRead": "0.2", "cacheCreation": "10", "note": "与 Fable 5.2 同期发布、同价，需通过 Anthropic 验证计划。" },
+      "claude-mythos-preview": { "input": "25", "output": "125", "cacheRead": "2.5", "cacheCreation": "31.25", "note": "Mythos 5 之前的邀请制版本，$25 / $125（缓存读 0.1x、5m 写入 1.25x）。" },
+      "claude-opus-4": { "input": "15", "output": "75", "cacheRead": "1.5", "cacheCreation": "18.75" },
+      "claude-opus-4-1": { "input": "15", "output": "75", "cacheRead": "1.5", "cacheCreation": "18.75" },
+      "claude-opus-4-5": { "input": "5", "output": "25", "cacheRead": "0.5", "cacheCreation": "6.25" },
+      "claude-opus-4-6": { "input": "5", "output": "25", "cacheRead": "0.5", "cacheCreation": "6.25" },
+      "claude-opus-4-7": { "input": "5", "output": "25", "cacheRead": "0.5", "cacheCreation": "6.25" },
+      "claude-opus-4-8": { "input": "5", "output": "25", "cacheRead": "0.5", "cacheCreation": "6.25" },
+      "claude-opus-5": { "input": "5", "output": "25", "cacheRead": "0.5", "cacheCreation": "6.25" },
+      "claude-opus-5-5": { "input": "4", "output": "20", "cacheRead": "0.2", "cacheCreation": "5" },
+      "claude-opus-5.5": { "input": "4", "output": "20", "cacheRead": "0.2", "cacheCreation": "5", "note": "缓存读取为 0.05x 基础输入价。" },
+      "claude-sonnet-4": { "input": "3", "output": "15", "cacheRead": "0.3", "cacheCreation": "3.75" },
+      "claude-sonnet-4-5": { "input": "3", "output": "15", "cacheRead": "0.3", "cacheCreation": "3.75" },
+      "claude-sonnet-4-6": { "input": "3", "output": "15", "cacheRead": "0.3", "cacheCreation": "3.75" },
+      "claude-sonnet-4-7": { "input": "3", "output": "15", "cacheRead": "0.3", "cacheCreation": "3.75" },
+      "claude-sonnet-5": { "input": "2", "output": "10", "cacheRead": "0.2", "cacheCreation": "2.5", "note": "官方已确认 $2 / $10 为固定标准价（原定 2026-09-01 涨价已取消），列入 standard.fixedKeys。" },
+      "claude-sonnet-5-5": { "input": "2", "output": "10", "cacheRead": "0.2", "cacheCreation": "2.5", "note": "上市价与 Sonnet 5 相同；2026-10-07 起缓存读取见 timedPrices。定价总表仍印 $0.20，以缓存章节和 10 月 7 日公告的 $0.10 为准。" },
+      "claude-sonnet-5.5": { "input": "2", "output": "10", "cacheRead": "0.2", "cacheCreation": "2.5" },
+      "codex-mini-latest": { "input": "1.5", "output": "6", "cacheRead": "0.375", "cacheCreation": "0" },
+      "composer-2.5": { "input": "0.5", "output": "2.5", "cacheRead": "0.2", "cacheCreation": "0", "note": "标准档；产品内默认走 Fast 档 composer-2.5-fast。Cursor 官方无缓存写入费。" },
+      "composer-2.5-fast": { "input": "3", "output": "15", "cacheRead": "0.5", "cacheCreation": "0" },
+      "cursor-composer-2-5": { "input": "0.5", "output": "2.5", "cacheRead": "0.2", "cacheCreation": "0" },
+      "cursor-sdk:composer-2.5:-:fast": { "input": "3", "output": "15", "cacheRead": "0.5", "cacheCreation": "0" },
+      "cursor-sdk:composer-2.5:-:slow": { "input": "0.5", "output": "2.5", "cacheRead": "0.2", "cacheCreation": "0", "note": "Pi Cursor SDK 的显式速度 / 上下文别名按 Cursor 对应档位计价。" },
+      "cursor-sdk:grok-4.7:256k:fast": { "input": "4", "output": "12", "cacheRead": "1", "cacheCreation": "0" },
+      "cursor-sdk:grok-4.7:256k:slow": { "input": "2", "output": "6", "cacheRead": "0.5", "cacheCreation": "0" },
+      "cursor-sdk:grok-4.7:500k:fast": { "input": "6", "output": "18", "cacheRead": "1.5", "cacheCreation": "0" },
+      "cursor-sdk:grok-4.7:500k:slow": { "input": "4", "output": "12", "cacheRead": "1", "cacheCreation": "0" },
+      "deepseek-chat": { "input": "0.27", "output": "1.1", "cacheRead": "0.07", "cacheCreation": "0" },
+      "deepseek-flash": { "input": "0.14", "output": "0.28", "cacheRead": "0.0028", "cacheCreation": "0", "note": "官方现名；deepseek-v4.1-flash 是本机 DSH / CLI 日志标识。与 deepseek-v4-flash 同价，写成重复行，不引入别名映射。" },
+      "deepseek-reasoner": { "input": "0.55", "output": "2.19", "cacheRead": "0.14", "cacheCreation": "0" },
+      "deepseek-v3": { "input": "0.28", "output": "1.11", "cacheRead": "0.028", "cacheCreation": "0" },
+      "deepseek-v3.1": { "input": "0.55", "output": "1.67", "cacheRead": "0.055", "cacheCreation": "0" },
+      "deepseek-v3.2": { "input": "0.28", "output": "0.42", "cacheRead": "0.028", "cacheCreation": "0" },
+      "deepseek-v4-flash": { "input": "0.14", "output": "0.28", "cacheRead": "0.0028", "cacheCreation": "0" },
+      "deepseek-v4-flash-fast": { "input": "0.28", "output": "0.56", "cacheRead": "0.07", "cacheCreation": "0" },
+      "deepseek-v4-flash-vision-exp": { "input": "0.14", "output": "0.28", "cacheRead": "0.0028", "cacheCreation": "0" },
+      "deepseek-v4-pro": { "input": "0.435", "output": "0.87", "cacheRead": "0.003625", "cacheCreation": "0", "note": "最早时段基础价（官方 CNY 按 1 USD ≈ 7.14 折算），2026-08-16 起的官方价见 timedPrices。Anthropic 兼容端点的 input 不含 cache_read。" },
+      "deepseek-v4.1-flash": { "input": "0.14", "output": "0.28", "cacheRead": "0.0028", "cacheCreation": "0" },
+      "deepseek-v4.1-flash-fast": { "input": "0.32", "output": "1.16", "cacheRead": "0.032", "cacheCreation": "0", "note": "*-fast 变体只有 Command Code 在售，价取其定价页；分时计价按高峰价单行入表，不进 timedPrices。" },
+      "gemini-2.5-flash": { "input": "0.3", "output": "2.5", "cacheRead": "0.03", "cacheCreation": "0" },
+      "gemini-2.5-flash-lite": { "input": "0.1", "output": "0.4", "cacheRead": "0.01", "cacheCreation": "0" },
+      "gemini-2.5-pro": { "input": "1.25", "output": "10", "cacheRead": "0.125", "cacheCreation": "0", "note": "完整输入超过 200K 时整次请求按长上下文价，见 contextTiers。" },
+      "gemini-3-flash-preview": { "input": "0.5", "output": "3", "cacheRead": "0.05", "cacheCreation": "0" },
+      "gemini-3.1-flash-lite": { "input": "0.25", "output": "1.5", "cacheRead": "0.025", "cacheCreation": "0" },
+      "gemini-3.1-pro": { "input": "2", "output": "12", "cacheRead": "0.2", "cacheCreation": "0", "note": "完整输入超过 200K 时整次请求按长上下文价，见 contextTiers。" },
+      "gemini-3.5-flash-lite": { "input": "0.3", "output": "2.5", "cacheRead": "0.03", "cacheCreation": "0" },
+      "gemini-3.6-flash": { "input": "0.75", "output": "3.75", "cacheRead": "0.075", "cacheCreation": "0" },
+      "gemini-3.7-flash": { "input": "0.75", "output": "3.75", "cacheRead": "0.075", "cacheCreation": "0" },
+      "gemini-3.8-flash": { "input": "0.75", "output": "3.75", "cacheRead": "0.075", "cacheCreation": "0", "note": "3.6 / 3.7 / 3.8 Flash 为促销价，到 2026-12-31；原价见 timedPrices。远端目录不收 Google，只能靠本表。" },
+      "gemini-4-argon": { "input": "2", "output": "10", "cacheRead": "0.1", "cacheCreation": "0", "note": "促销价，2026-12-01 起的原价见 timedPrices。" },
+      "glm-5.2": { "input": "1.4", "output": "4.4", "cacheRead": "0.26", "cacheCreation": "0" },
+      "glm-5.3": { "input": "1.4", "output": "4.4", "cacheRead": "0.26", "cacheCreation": "0", "note": "Z.ai 官方价，GLM-5.2 与 5.3 同价。缓存存储费官方限时免费，不入表。" },
+      "glm-5.3-flash": { "input": "0.15", "output": "0.5", "cacheRead": "0.03", "cacheCreation": "0" },
+      "glm-5.3-flashx": { "input": "0.37", "output": "1.25", "cacheRead": "0.075", "cacheCreation": "0" },
+      "gpt-4o": { "input": "2.5", "output": "10", "cacheRead": "1.25", "cacheCreation": "0" },
+      "gpt-4o-mini": { "input": "0.15", "output": "0.6", "cacheRead": "0.075", "cacheCreation": "0" },
+      "gpt-5": { "input": "1.25", "output": "10", "cacheRead": "0.125", "cacheCreation": "0" },
+      "gpt-5-codex": { "input": "1.25", "output": "10", "cacheRead": "0.125", "cacheCreation": "0" },
+      "gpt-5-mini": { "input": "0.25", "output": "2", "cacheRead": "0.025", "cacheCreation": "0" },
+      "gpt-5-nano": { "input": "0.05", "output": "0.4", "cacheRead": "0.005", "cacheCreation": "0" },
+      "gpt-5.1": { "input": "1.25", "output": "10", "cacheRead": "0.125", "cacheCreation": "0" },
+      "gpt-5.1-codex": { "input": "1.25", "output": "10", "cacheRead": "0.125", "cacheCreation": "0" },
+      "gpt-5.2": { "input": "1.75", "output": "14", "cacheRead": "0.175", "cacheCreation": "0" },
+      "gpt-5.2-codex": { "input": "1.75", "output": "14", "cacheRead": "0.175", "cacheCreation": "0" },
+      "gpt-5.3": { "input": "1.75", "output": "14", "cacheRead": "0.175", "cacheCreation": "0", "note": "GPT-5.2 起该档位为 $1.75 / $14，5.3 系沿用。" },
+      "gpt-5.3-codex": { "input": "1.75", "output": "14", "cacheRead": "0.175", "cacheCreation": "0" },
+      "gpt-5.4": { "input": "2.5", "output": "15", "cacheRead": "0.25", "cacheCreation": "0" },
+      "gpt-5.4-codex": { "input": "2.5", "output": "15", "cacheRead": "0.25", "cacheCreation": "0" },
+      "gpt-5.4-mini": { "input": "0.75", "output": "4.5", "cacheRead": "0.075", "cacheCreation": "0" },
+      "gpt-5.4-nano": { "input": "0.2", "output": "1.25", "cacheRead": "0.02", "cacheCreation": "0" },
+      "gpt-5.5": { "input": "5", "output": "30", "cacheRead": "0.5", "cacheCreation": "0" },
+      "gpt-5.5-codex": { "input": "5", "output": "30", "cacheRead": "0.5", "cacheCreation": "0" },
+      "gpt-5.5-pro": { "input": "30", "output": "180", "cacheRead": "30", "cacheCreation": "0" },
+      "gpt-5.6": { "input": "5", "output": "30", "cacheRead": "0.5", "cacheCreation": "6.25" },
+      "gpt-5.6-cyber": { "input": "12.5", "output": "75", "cacheRead": "1.25", "cacheCreation": "15.625" },
+      "gpt-5.6-luna": { "input": "0.2", "output": "1.2", "cacheRead": "0.02", "cacheCreation": "0.25" },
+      "gpt-5.6-sol": { "input": "5", "output": "30", "cacheRead": "0.5", "cacheCreation": "6.25" },
+      "gpt-5.6-terra": { "input": "2", "output": "12", "cacheRead": "0.2", "cacheCreation": "2.5" },
+      "gpt-6-astra": { "input": "10", "output": "50", "cacheRead": "1", "cacheCreation": "12.5" },
+      "gpt-6-luna": { "input": "0.1", "output": "0.5", "cacheRead": "0.01", "cacheCreation": "0.125" },
+      "gpt-6-sol": { "input": "2", "output": "10", "cacheRead": "0.2", "cacheCreation": "2.5" },
+      "gpt-6.1-sol": { "input": "2", "output": "10", "cacheRead": "0.1", "cacheCreation": "2.5", "note": "2026-09-29 发布：输入 / 输出与 GPT-6 Sol 同价，缓存输入 $0.10。Codex 的 input 含 cache_read，调用侧已扣。" },
+      "gpt-6.1-terra": { "input": "1", "output": "5", "cacheRead": "0.05", "cacheCreation": "1.25" },
+      "grok-4-5": { "input": "2", "output": "6", "cacheRead": "0.5", "cacheCreation": "0" },
+      "grok-4-6": { "input": "2", "output": "6", "cacheRead": "0.5", "cacheCreation": "0" },
+      "grok-4.7": { "input": "2", "output": "6", "cacheRead": "0.5", "cacheCreation": "0", "note": "输入超过 256K 时整次请求按 2 倍标准价，见 contextTiers。Cursor 自身费用用服务端 chargedCents。" },
+      "kimi-k3.1-pro": { "input": "2", "output": "10", "cacheRead": "0.2", "cacheCreation": "2", "note": "官方价；DSH 不区分缓存 TTL，写入统一按默认 5 分钟价估算。" },
+      "minimax-m2.7": { "input": "0.3", "output": "1.2", "cacheRead": "0.06", "cacheCreation": "0.375", "note": "官方单列缓存写入费。" },
+      "minimax-m2.7-highspeed": { "input": "0.6", "output": "2.4", "cacheRead": "0.06", "cacheCreation": "0.375" },
+      "minimax-m3": { "input": "0.3", "output": "1.2", "cacheRead": "0.06", "cacheCreation": "0", "note": "永久五折后的实付价。官方另有 >512K 的 2 倍档，Command Code 两档都按短上下文价，这里保持短上下文价。" },
+      "minimax-m3.1-flash": { "input": "0.15", "output": "0.6", "cacheRead": "0.015", "cacheCreation": "0", "note": "固定价，官方未列缓存写入费。" },
+      "o1": { "input": "15", "output": "60", "cacheRead": "7.5", "cacheCreation": "0" },
+      "o1-mini": { "input": "1.1", "output": "4.4", "cacheRead": "0.55", "cacheCreation": "0" },
+      "o3": { "input": "2", "output": "8", "cacheRead": "1", "cacheCreation": "0" },
+      "o3-mini": { "input": "1.1", "output": "4.4", "cacheRead": "0.55", "cacheCreation": "0" },
+      "o4-mini": { "input": "1.1", "output": "4.4", "cacheRead": "0.55", "cacheCreation": "0" }
+    },
+    "contextTiers": {
+      "claude-haiku-5-5": {
+        "threshold": 100000,
+        "short": { "input": "0.1", "output": "0.5", "cacheRead": "0.01", "cacheCreation": "0.125" },
+        "long": { "input": "0.5", "output": "2.5", "cacheRead": "0.05", "cacheCreation": "0.625" },
+        "note": "不超过 100K 用短价，超过 100K 整次请求用长价。1h 缓存写入仍按当时输入价的 2 倍。"
+      },
+      "claude-haiku-5.5": {
+        "threshold": 100000,
+        "short": { "input": "0.1", "output": "0.5", "cacheRead": "0.01", "cacheCreation": "0.125" },
+        "long": { "input": "0.5", "output": "2.5", "cacheRead": "0.05", "cacheCreation": "0.625" }
+      },
+      "gemini-2.5-pro": {
+        "threshold": 200000,
+        "short": { "input": "1.25", "output": "10", "cacheRead": "0.125", "cacheCreation": "0" },
+        "long": { "input": "2.5", "output": "15", "cacheRead": "0.25", "cacheCreation": "0" }
+      },
+      "gemini-3.1-pro": {
+        "threshold": 200000,
+        "short": { "input": "2", "output": "12", "cacheRead": "0.2", "cacheCreation": "0" },
+        "long": { "input": "4", "output": "18", "cacheRead": "0.4", "cacheCreation": "0" },
+        "note": "远端目录不收 Google，Gemini 的阶梯只能在这里表达。"
+      },
+      "gpt-5.4": {
+        "threshold": 272000,
+        "short": { "input": "2.5", "output": "15", "cacheRead": "0.25", "cacheCreation": "0" },
+        "long": { "input": "5", "output": "22.5", "cacheRead": "0.5", "cacheCreation": "0" }
+      },
+      "gpt-5.4-codex": {
+        "threshold": 272000,
+        "short": { "input": "2.5", "output": "15", "cacheRead": "0.25", "cacheCreation": "0" },
+        "long": { "input": "5", "output": "22.5", "cacheRead": "0.5", "cacheCreation": "0" }
+      },
+      "gpt-5.5": {
+        "threshold": 272000,
+        "short": { "input": "5", "output": "30", "cacheRead": "0.5", "cacheCreation": "0" },
+        "long": { "input": "10", "output": "45", "cacheRead": "1", "cacheCreation": "0" }
+      },
+      "gpt-5.5-codex": {
+        "threshold": 272000,
+        "short": { "input": "5", "output": "30", "cacheRead": "0.5", "cacheCreation": "0" },
+        "long": { "input": "10", "output": "45", "cacheRead": "1", "cacheCreation": "0" }
+      },
+      "gpt-5.6": {
+        "threshold": 272000,
+        "short": { "input": "5", "output": "30", "cacheRead": "0.5", "cacheCreation": "6.25" },
+        "long": { "input": "10", "output": "45", "cacheRead": "1", "cacheCreation": "12.5" },
+        "note": "gpt-5.6 是 Sol 的别名；这里是 2026-08-21 促销前的原价，促销价见 timedContextTiers。"
+      },
+      "gpt-5.6-luna": {
+        "threshold": 272000,
+        "short": { "input": "0.2", "output": "1.2", "cacheRead": "0.02", "cacheCreation": "0.25" },
+        "long": { "input": "0.4", "output": "1.8", "cacheRead": "0.04", "cacheCreation": "0.5" }
+      },
+      "gpt-5.6-sol": {
+        "threshold": 272000,
+        "short": { "input": "5", "output": "30", "cacheRead": "0.5", "cacheCreation": "6.25" },
+        "long": { "input": "10", "output": "45", "cacheRead": "1", "cacheCreation": "12.5" },
+        "note": "2026-08-21 促销前的原价，促销价见 timedContextTiers。"
+      },
+      "gpt-5.6-terra": {
+        "threshold": 272000,
+        "short": { "input": "2", "output": "12", "cacheRead": "0.2", "cacheCreation": "2.5" },
+        "long": { "input": "4", "output": "18", "cacheRead": "0.4", "cacheCreation": "5" }
+      },
+      "gpt-6-astra": {
+        "threshold": 272000,
+        "short": { "input": "10", "output": "50", "cacheRead": "1", "cacheCreation": "12.5" },
+        "long": { "input": "20", "output": "75", "cacheRead": "2", "cacheCreation": "25" }
+      },
+      "gpt-6-luna": {
+        "threshold": 272000,
+        "short": { "input": "0.1", "output": "0.5", "cacheRead": "0.01", "cacheCreation": "0.125" },
+        "long": { "input": "0.2", "output": "0.75", "cacheRead": "0.02", "cacheCreation": "0.25" }
+      },
+      "gpt-6-sol": {
+        "threshold": 272000,
+        "short": { "input": "2", "output": "10", "cacheRead": "0.2", "cacheCreation": "2.5" },
+        "long": { "input": "4", "output": "15", "cacheRead": "0.4", "cacheCreation": "5" }
+      },
+      "gpt-6.1-sol": {
+        "threshold": 272000,
+        "short": { "input": "2", "output": "10", "cacheRead": "0.1", "cacheCreation": "2.5" },
+        "long": { "input": "4", "output": "15", "cacheRead": "0.2", "cacheCreation": "5" }
+      },
+      "gpt-6.1-terra": {
+        "threshold": 272000,
+        "short": { "input": "1", "output": "5", "cacheRead": "0.05", "cacheCreation": "1.25" },
+        "long": { "input": "2", "output": "7.5", "cacheRead": "0.1", "cacheCreation": "2.5" }
+      },
+      "grok-4.7": {
+        "threshold": 256000,
+        "short": { "input": "2", "output": "6", "cacheRead": "0.5", "cacheCreation": "0" },
+        "long": { "input": "4", "output": "12", "cacheRead": "1", "cacheCreation": "0" }
+      }
+    },
+    "timedContextTiers": {
+      "gpt-5.6": [
+        {
+          "from": "2026-08-21T00:00:00Z",
+          "threshold": 272000,
+          "short": { "input": "4", "output": "20", "cacheRead": "0.4", "cacheCreation": "5" },
+          "long": { "input": "8", "output": "30", "cacheRead": "0.8", "cacheCreation": "10" },
+          "note": "OpenAI 2026-08-21 起的促销价 $4 / $20，官方称至少持续到 2026-11-21；结束后追加新分段。"
+        }
+      ],
+      "gpt-5.6-sol": [
+        {
+          "from": "2026-08-21T00:00:00Z",
+          "threshold": 272000,
+          "short": { "input": "4", "output": "20", "cacheRead": "0.4", "cacheCreation": "5" },
+          "long": { "input": "8", "output": "30", "cacheRead": "0.8", "cacheCreation": "10" },
+          "note": "OpenAI 2026-08-21 起的促销价 $4 / $20，官方称至少持续到 2026-11-21；结束后追加新分段。"
+        }
+      ]
+    },
+    "timedPrices": {
+      "claude-sonnet-5-5": [
+        { "from": "2026-10-07T00:00:00Z", "input": "2", "output": "10", "cacheRead": "0.1", "cacheCreation": "2.5", "note": "2026-10-07（UTC 0 点）起缓存读取从 $0.20 降到 $0.10，其余费率不变。" }
+      ],
+      "claude-sonnet-5.5": [
+        { "from": "2026-10-07T00:00:00Z", "input": "2", "output": "10", "cacheRead": "0.1", "cacheCreation": "2.5", "note": "2026-10-07（UTC 0 点）起缓存读取从 $0.20 降到 $0.10，其余费率不变。" }
+      ],
+      "deepseek-flash": [
+        { "from": "2026-08-16T16:00:00Z", "input": "0.44", "output": "1.32", "cacheRead": "0.014", "cacheCreation": "0", "note": "2026-08-16 16:00 UTC 起改为峰谷价，两段都取高峰价，金额是估算上界。cacheCreation 官方未收。" },
+        { "from": "2026-09-10T04:00:00Z", "input": "0.3", "output": "1.2", "cacheRead": "0.006", "cacheCreation": "0", "note": "2026-09-10 04:00 UTC 起降价。" }
+      ],
+      "deepseek-v4-flash": [
+        { "from": "2026-08-16T16:00:00Z", "input": "0.44", "output": "1.32", "cacheRead": "0.014", "cacheCreation": "0", "note": "2026-08-16 16:00 UTC 起改为峰谷价，两段都取高峰价，金额是估算上界。cacheCreation 官方未收。" },
+        { "from": "2026-09-10T04:00:00Z", "input": "0.3", "output": "1.2", "cacheRead": "0.006", "cacheCreation": "0", "note": "2026-09-10 04:00 UTC 起降价。" }
+      ],
+      "deepseek-v4-flash-vision-exp": [
+        { "from": "2026-08-16T16:00:00Z", "input": "0.44", "output": "1.32", "cacheRead": "0.014", "cacheCreation": "0", "note": "2026-08-16 16:00 UTC 起改为峰谷价，两段都取高峰价，金额是估算上界。cacheCreation 官方未收。" },
+        { "from": "2026-09-10T04:00:00Z", "input": "0.3", "output": "1.2", "cacheRead": "0.006", "cacheCreation": "0", "note": "2026-09-10 04:00 UTC 起降价。" }
+      ],
+      "deepseek-v4-pro": [
+        { "from": "2026-08-16T16:00:00Z", "input": "1.32", "output": "3.96", "cacheRead": "0.044", "cacheCreation": "0", "note": "官方 2026-08-16 起即为该价，此后未调整。" }
+      ],
+      "deepseek-v4.1-flash": [
+        { "from": "2026-08-16T16:00:00Z", "input": "0.44", "output": "1.32", "cacheRead": "0.014", "cacheCreation": "0", "note": "2026-08-16 16:00 UTC 起改为峰谷价，两段都取高峰价，金额是估算上界。cacheCreation 官方未收。" },
+        { "from": "2026-09-10T04:00:00Z", "input": "0.3", "output": "1.2", "cacheRead": "0.006", "cacheCreation": "0", "note": "2026-09-10 04:00 UTC 起降价。" }
+      ],
+      "gemini-3.6-flash": [
+        { "from": "2027-01-01T00:00:00Z", "input": "1.5", "output": "7.5", "cacheRead": "0.15", "cacheCreation": "0", "note": "2027-01-01 起恢复原价 $1.5 / $7.5，缓存读取回到 $0.15。" }
+      ],
+      "gemini-3.7-flash": [
+        { "from": "2027-01-01T00:00:00Z", "input": "1.5", "output": "7.5", "cacheRead": "0.15", "cacheCreation": "0", "note": "2027-01-01 起恢复原价 $1.5 / $7.5，缓存读取回到 $0.15。" }
+      ],
+      "gemini-3.8-flash": [
+        { "from": "2027-01-01T00:00:00Z", "input": "1.5", "output": "7.5", "cacheRead": "0.15", "cacheCreation": "0", "note": "2027-01-01 起恢复原价 $1.5 / $7.5，缓存读取回到 $0.15。" }
+      ],
+      "gemini-4-argon": [
+        { "from": "2026-12-01T00:00:00Z", "input": "4", "output": "20", "cacheRead": "0.2", "cacheCreation": "0", "note": "2026-12-01 起的原价 $4 / $20。" }
+      ]
+    },
+    "fixedKeys": ["claude-sonnet-5", "gpt-5.5-pro"]
+  },
+  "fast": {
+    "codexPrices": {
+      "gpt-5.4": { "input": "5", "output": "30", "cacheRead": "0.5", "cacheCreation": "0" },
+      "gpt-5.4-codex": { "input": "5", "output": "30", "cacheRead": "0.5", "cacheCreation": "0" },
+      "gpt-5.5": { "input": "12.5", "output": "75", "cacheRead": "1.25", "cacheCreation": "0" },
+      "gpt-5.5-codex": { "input": "12.5", "output": "75", "cacheRead": "1.25", "cacheCreation": "0" },
+      "gpt-5.6": { "input": "10", "output": "60", "cacheRead": "1", "cacheCreation": "12.5" },
+      "gpt-5.6-luna": { "input": "0.4", "output": "2.4", "cacheRead": "0.04", "cacheCreation": "0.5" },
+      "gpt-5.6-sol": { "input": "10", "output": "60", "cacheRead": "1", "cacheCreation": "12.5" },
+      "gpt-5.6-terra": { "input": "4", "output": "24", "cacheRead": "0.4", "cacheCreation": "5" },
+      "gpt-6-astra": { "input": "20", "output": "100", "cacheRead": "2", "cacheCreation": "25" },
+      "gpt-6-luna": { "input": "0.2", "output": "1", "cacheRead": "0.02", "cacheCreation": "0.25" },
+      "gpt-6-sol": { "input": "4", "output": "20", "cacheRead": "0.4", "cacheCreation": "5" },
+      "gpt-6.1-sol": { "input": "4", "output": "20", "cacheRead": "0.2", "cacheCreation": "5" },
+      "gpt-6.1-terra": { "input": "2", "output": "10", "cacheRead": "0.1", "cacheCreation": "2.5" }
+    },
+    "claudePrices": {
+      "claude-fable-5-2": { "input": "16", "output": "80", "cacheRead": "0.4", "cacheCreation": "20" },
+      "claude-fable-5.2": { "input": "16", "output": "80", "cacheRead": "0.4", "cacheCreation": "20", "note": "Fable / Mythos 5.2 Fast：各项均为 Standard 的 2 倍。" },
+      "claude-mythos-5-2": { "input": "16", "output": "80", "cacheRead": "0.4", "cacheCreation": "20" },
+      "claude-mythos-5.2": { "input": "16", "output": "80", "cacheRead": "0.4", "cacheCreation": "20" },
+      "claude-opus-4-6": { "input": "30", "output": "150", "cacheRead": "3", "cacheCreation": "37.5", "note": "仅用于 2026-06-29 停止支持 Fast 前产生的历史日志计价。" },
+      "claude-opus-4-7": { "input": "30", "output": "150", "cacheRead": "3", "cacheCreation": "37.5", "note": "仅用于 2026-07-24 移除 Fast 前产生的历史日志计价。" },
+      "claude-opus-4-8": { "input": "10", "output": "50", "cacheRead": "1", "cacheCreation": "12.5" },
+      "claude-opus-5": { "input": "10", "output": "50", "cacheRead": "1", "cacheCreation": "12.5" },
+      "claude-opus-5-5": { "input": "8", "output": "40", "cacheRead": "0.4", "cacheCreation": "10" },
+      "claude-opus-5.5": { "input": "8", "output": "40", "cacheRead": "0.4", "cacheCreation": "10" }
+    },
+    "fixedKeys": ["claude-opus-4-6", "claude-opus-4-7", "gpt-5.5", "gpt-5.5-codex"],
+    "codexTimedPrices": {
+      "gpt-5.6": [
+        { "from": "2026-08-21T00:00:00Z", "input": "8", "output": "40", "cacheRead": "0.8", "cacheCreation": "10", "note": "促销期 Fast 价。命中这里的模型不读远端 Fast 价，避免改写促销前的历史。" }
+      ],
+      "gpt-5.6-sol": [
+        { "from": "2026-08-21T00:00:00Z", "input": "8", "output": "40", "cacheRead": "0.8", "cacheCreation": "10", "note": "促销期 Fast 价。命中这里的模型不读远端 Fast 价，避免改写促销前的历史。" }
+      ]
+    },
+    "codexLongContextPrices": {
+      "gpt-5.6": { "input": "20", "output": "90", "cacheRead": "2", "cacheCreation": "25", "note": "2026-08-21 促销前的价，促销价见 codexLongContextTimedPrices。" },
+      "gpt-5.6-luna": { "input": "0.8", "output": "3.6", "cacheRead": "0.08", "cacheCreation": "1" },
+      "gpt-5.6-sol": { "input": "20", "output": "90", "cacheRead": "2", "cacheCreation": "25" },
+      "gpt-5.6-terra": { "input": "8", "output": "36", "cacheRead": "0.8", "cacheCreation": "10" },
+      "gpt-6-astra": { "input": "40", "output": "150", "cacheRead": "4", "cacheCreation": "50" },
+      "gpt-6-luna": { "input": "0.4", "output": "1.5", "cacheRead": "0.04", "cacheCreation": "0.5" },
+      "gpt-6-sol": { "input": "8", "output": "30", "cacheRead": "0.8", "cacheCreation": "10" },
+      "gpt-6.1-sol": { "input": "8", "output": "30", "cacheRead": "0.4", "cacheCreation": "10", "note": "完整输入超过 272K 时的 Fast 价，为 Standard 长上下文的 2 倍。GPT-5.5 / 5.4 不收录，超阈值返回缺价。" },
+      "gpt-6.1-terra": { "input": "4", "output": "15", "cacheRead": "0.2", "cacheCreation": "5" }
+    },
+    "codexLongContextTimedPrices": {
+      "gpt-5.6": [
+        { "from": "2026-08-21T00:00:00Z", "input": "16", "output": "60", "cacheRead": "1.6", "cacheCreation": "20", "note": "促销期 Fast 长上下文价：输入 $16、输出 $60，缓存读写按 2 倍促销长上下文价。" }
+      ],
+      "gpt-5.6-sol": [
+        { "from": "2026-08-21T00:00:00Z", "input": "16", "output": "60", "cacheRead": "1.6", "cacheCreation": "20", "note": "促销期 Fast 长上下文价：输入 $16、输出 $60，缓存读写按 2 倍促销长上下文价。" }
+      ]
+    },
+    "codexMultipliers": {
+      "gpt-5.4": "2",
+      "gpt-5.4-codex": "2",
+      "gpt-5.5": "2.5",
+      "gpt-5.5-codex": "2.5",
+      "gpt-5.6": "2.5",
+      "gpt-5.6-luna": "2.5",
+      "gpt-5.6-sol": "2.5",
+      "gpt-5.6-terra": "2.5",
+      "gpt-6-astra": "2.5",
+      "gpt-6-luna": "2.5",
+      "gpt-6-sol": "2.5",
+      "gpt-6.1-sol": "2.5",
+      "gpt-6.1-terra": "2.5"
+    },
+    "claudeMultipliers": {
+      "claude-fable-5-2": "2",
+      "claude-fable-5.2": "2",
+      "claude-mythos-5-2": "2",
+      "claude-mythos-5.2": "2",
+      "claude-opus-4-6": "6",
+      "claude-opus-4-7": "6",
+      "claude-opus-4-8": "2",
+      "claude-opus-5": "2",
+      "claude-opus-5-5": "2",
+      "claude-opus-5.5": "2"
+    }
+  }
+}
