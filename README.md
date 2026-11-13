@@ -17,6 +17,7 @@
 
 <p align="center">
   <a href="https://github.com/nanvon/cc-bar/releases/latest">下载安装</a> ·
+  <a href="#-界面预览">界面预览</a> ·
   <a href="#-服务支持矩阵">服务支持</a> ·
   <a href="#-核心特性">核心特性</a> ·
   <a href="#-数据与隐私安全">安全说明</a> ·
@@ -29,6 +30,27 @@
   <img src="docs/Screenshots/popover-light.png" width="360" alt="Popover 总览 - 浅色模式">
   <img src="docs/Screenshots/popover-dark.png" width="360" alt="Popover 总览 - 深色模式"><br>
   <sub>菜单栏、桌面悬浮窗与 Popover · 浅色 / 深色模式</sub>
+</p>
+
+---
+
+## 📸 界面预览
+
+<p align="center">
+  <img src="docs/Screenshots/statistics-overview.png" width="400" alt="用量概览">
+  <img src="docs/Screenshots/statistics-conversations.png" width="400" alt="对话明细"><br>
+  <sub>用量概览 · 对话明细</sub>
+</p>
+
+<p align="center">
+  <img src="docs/Screenshots/statistics-projects.png" width="400" alt="项目分析">
+  <img src="docs/Screenshots/statistics-quota.png" width="400" alt="额度页"><br>
+  <sub>项目分析 · 额度页</sub>
+</p>
+
+<p align="center">
+  <img src="docs/Screenshots/settings.png" width="400" alt="服务与账号设置"><br>
+  <sub>服务与账号设置</sub>
 </p>
 
 ---
@@ -58,36 +80,19 @@ cc-bar 展示两类数据：**订阅额度**直连各服务官方接口获取剩
 * **多账号无缝并存** — Codex 支持粘贴 `auth.json` 或 PAT 导入多个账号同屏查看剩余额度与额外重置次数，不影响 CLI 登录状态。
 
 ### 📊 本地离线用量与项目分析
-* **多维度统计分析** — 概览、对话、项目与额度四个页面，支持日 / 周 / 月粒度与自定义时间范围：
+* **多维度统计分析** — 概览、对话、项目与额度四个页面，支持日 / 周 / 月粒度与自定义时间范围，Token 可按「万 / 亿」或「k / M / B」显示：
   * **用量概览**：堆叠图展示总 Tokens、费用与同期变化，按服务、Provider、模型或项目分析构成，统计缓存命中率。
   * **对话明细**：检索历史会话，查看输入、输出、缓存读写明细、请求数、模型构成与 Standard / Fast 速度档位费用拆分。
   * **项目分析**：按项目汇总用量趋势、高消耗对话与分支分布；Git worktree 自动归入主仓库。
-  * **额度对比与预估**：对比当前周期的本机用量、用满预估与官方已用比例；支持开启「包含其他 Agent 中的 Codex 订阅用量」，将 Pi、OpenCode、DSH 中消耗的 Codex 额度合并计入。
-* **规则变更自动重算** — 价格表或统计规则变化后自动重新计费；会话日志已清理的对话自动保留历史用量，不影响统计连续性。
-
-<p align="center">
-  <img src="docs/Screenshots/statistics-overview.png" width="720" alt="用量概览">
-</p>
-
-<details>
-  <summary><b>展开查看对话明细、项目分析与额度监控截图</b></summary>
-  <br>
-  <p align="center">
-    <img src="docs/Screenshots/statistics-conversations.png" width="720" alt="对话明细"><br><br>
-    <img src="docs/Screenshots/statistics-projects.png" width="720" alt="项目分析"><br><br>
-    <img src="docs/Screenshots/statistics-quota.png" width="720" alt="额度监控">
-  </p>
-</details>
+  * **额度对比与预估**：对比当前周期的本机用量、用满预估与官方已用比例；「历史周期」展示最近 12 个已结束周期的用满预估与实际用量；支持开启「包含其他 Agent 中的 Codex 订阅用量」，将 Pi、OpenCode、DSH 中消耗的 Codex 额度合并计入。
+* **价格规则在线更新** — 价格规则随应用内置，新模型价格和调价可在线下发，经签名校验后生效，无需升级应用。
+* **规则变更自动重算** — 价格或统计规则变化后自动重新计费；会话日志已清理的对话自动保留历史用量，不影响统计连续性。
 
 ### 💻 原生体验与隐私控制
-* **一页管理与拖拽排序** — 「设置 → 服务与账号」一页开关所有服务，可整行拖拽自定义服务在菜单栏、Popover、悬浮窗与统计页的全局展示顺序。
-* **截图隐私模式** — 一键匿名遮挡账号邮箱、项目路径、Git 分支与会话 ID，保留真实金额与图表，截图分享无负担。
+* **一页管理与拖拽排序** — 「设置 → 服务与账号」一页开关所有服务，关闭的服务同时停止本机用量采集；可整行拖拽自定义服务在菜单栏、Popover、悬浮窗与统计页的全局展示顺序。
+* **截图隐私模式** — 一键匿名遮挡账号邮箱、项目路径、Git 分支与会话 ID，保留真实金额与图表，截图分享无负担；只截 Popover 时，也可单独关闭「弹出面板显示邮箱」。
 * **应用内平滑升级** — 集成 Sparkle 更新器，直接在应用内查看更新说明、一键下载安装并自动重启。
 * **本地诊断与零追踪** — 日志自动轮转且关键字段全脱敏；可手动导出诊断包，应用不含任何用户行为遥测。
-
-<p align="center">
-  <img src="docs/Screenshots/settings.png" width="720" alt="服务与账号设置">
-</p>
 
 ---
 
@@ -116,7 +121,7 @@ cc-bar 展示两类数据：**订阅额度**直连各服务官方接口获取剩
 
 ## 🔒 数据与隐私安全
 
-用量日志在本机解析与保存；额度、Cursor 远端计量、服务状态及价格目录通过对应服务的网络接口查询。应用不上传本机会话日志或项目数据。
+用量日志在本机解析与保存；额度、Cursor 远端计量、服务状态、价格目录及价格规则通过对应服务的网络接口查询。应用不上传本机会话日志或项目数据。
 
 ### 凭据读取与刷新策略
 

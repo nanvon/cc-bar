@@ -17,6 +17,7 @@
 
 <p align="center">
   <a href="https://github.com/nanvon/cc-bar/releases/latest">Download</a> ·
+  <a href="#-screenshots">Screenshots</a> ·
   <a href="#-service-support-matrix">Service Matrix</a> ·
   <a href="#-features">Features</a> ·
   <a href="#-data-and-privacy-security">Security</a> ·
@@ -29,6 +30,27 @@
   <img src="docs/Screenshots/popover-light.png" width="360" alt="Popover Overview - Light Mode">
   <img src="docs/Screenshots/popover-dark.png" width="360" alt="Popover Overview - Dark Mode"><br>
   <sub>Menu bar, floating HUD, and Popover · Light / Dark mode</sub>
+</p>
+
+---
+
+## 📸 Screenshots
+
+<p align="center">
+  <img src="docs/Screenshots/statistics-overview.png" width="400" alt="Usage Overview">
+  <img src="docs/Screenshots/statistics-conversations.png" width="400" alt="Conversation Details"><br>
+  <sub>Usage Overview · Conversation Details</sub>
+</p>
+
+<p align="center">
+  <img src="docs/Screenshots/statistics-projects.png" width="400" alt="Project Analytics">
+  <img src="docs/Screenshots/statistics-quota.png" width="400" alt="Quota Page"><br>
+  <sub>Project Analytics · Quota Page</sub>
+</p>
+
+<p align="center">
+  <img src="docs/Screenshots/settings.png" width="400" alt="Services & Accounts"><br>
+  <sub>Services & Accounts Settings</sub>
 </p>
 
 ---
@@ -58,36 +80,19 @@ cc-bar presents two types of data: **Subscription Quotas** queried directly from
 * **Seamless Multi-Account Support** — Paste `auth.json` or PAT into Codex to monitor multiple accounts side-by-side with quota expiration and available reset credits, without affecting CLI sign-in.
 
 ### 📊 Local Offline Usage & Project Analytics
-* **Multi-Dimensional Analytics** — Four pages (Overview, Conversations, Projects, Quota) with day / week / month granularity and custom date ranges:
+* **Multi-Dimensional Analytics** — Four pages (Overview, Conversations, Projects, Quota) with day / week / month granularity and custom date ranges; large token counts can be shown in k / M / B or 万 / 亿 units:
   * **Overview**: Stacked charts for total tokens, costs, and period-over-period changes; breakdown by service, provider, model, or project; cache hit rates.
   * **Conversations**: Search past sessions, view input, output, cache read/write breakdowns, request counts, models, and Standard / Fast speed tier cost splits.
   * **Projects**: Project-level usage trends, top conversations, and branch distributions; recognized Git worktrees roll up into the main repository.
-  * **Quota Comparison & Projections**: Compare current cycle local usage, projected usage, and official quota usage percentages; optionally include Codex subscription usage from Pi, OpenCode, and DSH.
+  * **Quota Comparison & Projections**: Compare current cycle local usage, projected usage, and official quota usage percentages; Cycle History shows projected and actual usage for the last 12 completed cycles; optionally include Codex subscription usage from Pi, OpenCode, and DSH.
+* **Online Pricing Rule Updates** — Pricing rules ship with the app; new model prices and price changes are delivered online and applied after signature verification, without an app update.
 * **Automatic Recalculation on Rule Changes** — History is automatically re-priced when pricing or accounting rules change; usage from cleaned-up source logs is preserved.
 
-<p align="center">
-  <img src="docs/Screenshots/statistics-overview.png" width="720" alt="Usage Overview">
-</p>
-
-<details>
-  <summary><b>View screenshots for Conversations, Projects, and Quota</b></summary>
-  <br>
-  <p align="center">
-    <img src="docs/Screenshots/statistics-conversations.png" width="720" alt="Conversation Details"><br><br>
-    <img src="docs/Screenshots/statistics-projects.png" width="720" alt="Project Analytics"><br><br>
-    <img src="docs/Screenshots/statistics-quota.png" width="720" alt="Quota Monitoring">
-  </p>
-</details>
-
 ### 💻 Native Experience & Privacy Controls
-* **Single-Page Management & Drag Reordering** — Toggle all services on one page in Settings → Services & Accounts; drag rows to customize global order across the menu bar, popover, HUD, and statistics.
-* **Screenshot Privacy Mode** — One-click redaction of account emails, paths, branches, and session IDs while preserving real amounts, tokens, and charts for safe sharing.
+* **Single-Page Management & Drag Reordering** — Toggle all services on one page in Settings → Services & Accounts; turning a service off also stops its local usage collection. Drag rows to customize global order across the menu bar, popover, HUD, and statistics.
+* **Screenshot Privacy Mode** — One-click redaction of account emails, paths, branches, and session IDs while preserving real amounts, tokens, and charts for safe sharing. To share just the popover, you can also turn off "Show email in popover" on its own.
 * **Seamless In-App Updates** — Built-in Sparkle updater to view release notes, download, install, and automatically restart.
 * **Local Diagnostics & Zero Telemetry** — Automatic log rotation with redacted sensitive fields; export diagnostic bundles locally with zero user behavior telemetry.
-
-<p align="center">
-  <img src="docs/Screenshots/settings.png" width="720" alt="Services & Accounts">
-</p>
 
 ---
 
@@ -116,7 +121,7 @@ Upgrading to a version with the in-app updater for the first time requires manua
 
 ## 🔒 Data and Privacy Security
 
-Usage logs are parsed and stored locally. Quotas, Cursor remote metering, service status, and pricing catalogs are fetched through their respective network APIs. The app does not upload local session logs or project data.
+Usage logs are parsed and stored locally. Quotas, Cursor remote metering, service status, pricing catalogs, and pricing rules are fetched through their respective network APIs. The app does not upload local session logs or project data.
 
 ### Credential Reading & Refresh Policy
 
