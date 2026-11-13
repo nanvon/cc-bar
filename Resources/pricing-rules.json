@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "revision": 1,
+  "revision": 2,
   "notes": [
     "价格单位为 USD / 百万 token，一律写成字符串，避免浮点误差。时间为 UTC 的 ISO 8601 时刻。",
     "每次修改都要把 revision 加 1；App 只采纳 revision 更大的远端文件。note 字段只作说明，不参与计价和指纹。",
@@ -75,11 +75,14 @@
       "gemini-3-flash-preview": { "input": "0.5", "output": "3", "cacheRead": "0.05", "cacheCreation": "0" },
       "gemini-3.1-flash-lite": { "input": "0.25", "output": "1.5", "cacheRead": "0.025", "cacheCreation": "0" },
       "gemini-3.1-pro": { "input": "2", "output": "12", "cacheRead": "0.2", "cacheCreation": "0", "note": "完整输入超过 200K 时整次请求按长上下文价，见 contextTiers。" },
+      "gemini-3.1-pro-preview": { "input": "2", "output": "12", "cacheRead": "0.2", "cacheCreation": "0", "note": "官方 API ID，与 gemini-3.1-pro 同价。" },
       "gemini-3.5-flash-lite": { "input": "0.3", "output": "2.5", "cacheRead": "0.03", "cacheCreation": "0" },
       "gemini-3.6-flash": { "input": "0.75", "output": "3.75", "cacheRead": "0.075", "cacheCreation": "0" },
       "gemini-3.7-flash": { "input": "0.75", "output": "3.75", "cacheRead": "0.075", "cacheCreation": "0" },
       "gemini-3.8-flash": { "input": "0.75", "output": "3.75", "cacheRead": "0.075", "cacheCreation": "0", "note": "3.6 / 3.7 / 3.8 Flash 为促销价，到 2026-12-31；原价见 timedPrices。远端目录不收 Google，只能靠本表。" },
       "gemini-4-argon": { "input": "2", "output": "10", "cacheRead": "0.1", "cacheCreation": "0", "note": "促销价，2026-12-01 起的原价见 timedPrices。" },
+      "gemini-4-carbon": { "input": "2", "output": "10", "cacheRead": "0.1", "cacheCreation": "0", "note": "2026-11-10 发布，与 Argon 同价：促销价到 2026-11-30，2026-12-01 起的原价见 timedPrices。仅隐式缓存。" },
+      "gemini-4-hydrogen": { "input": "1.5", "output": "7.5", "cacheRead": "0.075", "cacheCreation": "0", "note": "2026-11-12 发布，固定价，无促销。仅隐式缓存。" },
       "glm-5.2": { "input": "1.4", "output": "4.4", "cacheRead": "0.26", "cacheCreation": "0" },
       "glm-5.3": { "input": "1.4", "output": "4.4", "cacheRead": "0.26", "cacheCreation": "0", "note": "Z.ai 官方价，GLM-5.2 与 5.3 同价。缓存存储费官方限时免费，不入表。" },
       "glm-5.3-flash": { "input": "0.15", "output": "0.5", "cacheRead": "0.03", "cacheCreation": "0" },
@@ -103,6 +106,7 @@
       "gpt-5.5": { "input": "5", "output": "30", "cacheRead": "0.5", "cacheCreation": "0" },
       "gpt-5.5-codex": { "input": "5", "output": "30", "cacheRead": "0.5", "cacheCreation": "0" },
       "gpt-5.5-pro": { "input": "30", "output": "180", "cacheRead": "30", "cacheCreation": "0" },
+      "gpt-rosalind-research": { "input": "5", "output": "25", "cacheRead": "0.5", "cacheCreation": "0", "note": "2026-09-08 发布，2026-10-05 起计费。" },
       "gpt-5.6": { "input": "5", "output": "30", "cacheRead": "0.5", "cacheCreation": "6.25" },
       "gpt-5.6-cyber": { "input": "12.5", "output": "75", "cacheRead": "1.25", "cacheCreation": "15.625" },
       "gpt-5.6-luna": { "input": "0.2", "output": "1.2", "cacheRead": "0.02", "cacheCreation": "0.25" },
@@ -113,19 +117,40 @@
       "gpt-6-sol": { "input": "2", "output": "10", "cacheRead": "0.2", "cacheCreation": "2.5" },
       "gpt-6.1-sol": { "input": "2", "output": "10", "cacheRead": "0.1", "cacheCreation": "2.5", "note": "2026-09-29 发布：输入 / 输出与 GPT-6 Sol 同价，缓存输入 $0.10。Codex 的 input 含 cache_read，调用侧已扣。" },
       "gpt-6.1-terra": { "input": "1", "output": "5", "cacheRead": "0.05", "cacheCreation": "1.25" },
-      "grok-4-5": { "input": "2", "output": "6", "cacheRead": "0.5", "cacheCreation": "0" },
+      "grok-4-5": { "input": "2", "output": "6", "cacheRead": "0.3", "cacheCreation": "0", "note": "xAI 官方 Grok 4.5 缓存读取 $0.30，与 4.6 / 4.7 不同。" },
       "grok-4-6": { "input": "2", "output": "6", "cacheRead": "0.5", "cacheCreation": "0" },
-      "grok-4.7": { "input": "2", "output": "6", "cacheRead": "0.5", "cacheCreation": "0", "note": "输入超过 256K 时整次请求按 2 倍标准价，见 contextTiers。Cursor 自身费用用服务端 chargedCents。" },
+      "grok-4.3": { "input": "1.25", "output": "2.5", "cacheRead": "0.2", "cacheCreation": "0", "note": "grok-4.3 / grok-build-0.1 / grok-4.5 / 4.6 / 4.7：提示达到 200K token 时整次请求按长上下文价，见 contextTiers。" },
+      "grok-4.5": { "input": "2", "output": "6", "cacheRead": "0.3", "cacheCreation": "0" },
+      "grok-4.6": { "input": "2", "output": "6", "cacheRead": "0.5", "cacheCreation": "0" },
+      "grok-4.7": { "input": "2", "output": "6", "cacheRead": "0.5", "cacheCreation": "0", "note": "提示达到 200K token 时整次请求按 2 倍标准价，见 contextTiers。Cursor 自身费用用服务端 chargedCents。" },
+      "grok-build-0.1": { "input": "1", "output": "2", "cacheRead": "0.2", "cacheCreation": "0" },
+      "kimi-k3": { "input": "3", "output": "15", "cacheRead": "0.3", "cacheCreation": "3", "note": "K3 系列无上下文分档；缓存写入按默认 5 分钟价。" },
       "kimi-k3.1-pro": { "input": "2", "output": "10", "cacheRead": "0.2", "cacheCreation": "2", "note": "官方价；DSH 不区分缓存 TTL，写入统一按默认 5 分钟价估算。" },
+      "kimi-k3.1-pro-highspeed": { "input": "4", "output": "20", "cacheRead": "0.2", "cacheCreation": "4" },
       "minimax-m2.7": { "input": "0.3", "output": "1.2", "cacheRead": "0.06", "cacheCreation": "0.375", "note": "官方单列缓存写入费。" },
       "minimax-m2.7-highspeed": { "input": "0.6", "output": "2.4", "cacheRead": "0.06", "cacheCreation": "0.375" },
       "minimax-m3": { "input": "0.3", "output": "1.2", "cacheRead": "0.06", "cacheCreation": "0", "note": "永久五折后的实付价。官方另有 >512K 的 2 倍档，Command Code 两档都按短上下文价，这里保持短上下文价。" },
       "minimax-m3.1-flash": { "input": "0.15", "output": "0.6", "cacheRead": "0.015", "cacheCreation": "0", "note": "固定价，官方未列缓存写入费。" },
+      "mimo-v2.6-flash": { "input": "0.14", "output": "0.28", "cacheRead": "0.0028", "cacheCreation": "0", "note": "小米 MiMo 海外美元价；缓存写入官方限时免费。mimo-v2.5 系列已于 2026-10-21 弃用，官方不再列价。" },
+      "mimo-v2.6-pro": { "input": "0.435", "output": "0.87", "cacheRead": "0.0036", "cacheCreation": "0" },
+      "mimo-v2.6-pro-ultraspeed": { "input": "4.35", "output": "8.7", "cacheRead": "0.036", "cacheCreation": "0" },
+      "muse-ember-1.0": { "input": "0.1", "output": "0.5", "cacheRead": "0.004", "cacheCreation": "0", "note": "输入超过 200K 时整次请求按长上下文价，见 contextTiers。" },
+      "muse-spark-1.1": { "input": "1.25", "output": "4.25", "cacheRead": "0.15", "cacheCreation": "0", "note": "Meta Muse Spark 官方价，1.1 / 1.2 / 1.3 同价。" },
+      "muse-spark-1.2": { "input": "1.25", "output": "4.25", "cacheRead": "0.15", "cacheCreation": "0" },
+      "muse-spark-1.2-contributor": { "input": "0.1", "output": "0.2", "cacheRead": "0.002", "cacheCreation": "0", "note": "Contributor 模式官方价，1.2 / 1.3 同价。" },
+      "muse-spark-1.3": { "input": "1.25", "output": "4.25", "cacheRead": "0.15", "cacheCreation": "0" },
+      "muse-spark-1.3-contributor": { "input": "0.1", "output": "0.2", "cacheRead": "0.002", "cacheCreation": "0" },
+      "muse-wonder-1.0": { "input": "4", "output": "20", "cacheRead": "0.2", "cacheCreation": "0" },
       "o1": { "input": "15", "output": "60", "cacheRead": "7.5", "cacheCreation": "0" },
       "o1-mini": { "input": "1.1", "output": "4.4", "cacheRead": "0.55", "cacheCreation": "0" },
       "o3": { "input": "2", "output": "8", "cacheRead": "1", "cacheCreation": "0" },
       "o3-mini": { "input": "1.1", "output": "4.4", "cacheRead": "0.55", "cacheCreation": "0" },
-      "o4-mini": { "input": "1.1", "output": "4.4", "cacheRead": "0.55", "cacheCreation": "0" }
+      "o4-mini": { "input": "1.1", "output": "4.4", "cacheRead": "0.55", "cacheCreation": "0" },
+      "qwen3.7-flash": { "input": "0.1", "output": "0.4", "cacheRead": "0.01", "cacheCreation": "0.125", "note": "官方三档（≤32K / ≤256K / ≤1M）；规则只能表达两档，短档取 32K–256K 价，≤32K 请求会偏高。" },
+      "qwen3.7-max": { "input": "2.5", "output": "7.5", "cacheRead": "0.25", "cacheCreation": "3.125" },
+      "qwen3.7-plus": { "input": "0.4", "output": "1.6", "cacheRead": "0.04", "cacheCreation": "0.5", "note": "官方标注限时八折，无截止日。输入超过 256K 按长上下文价，见 contextTiers。" },
+      "qwen3.8-flash": { "input": "0.15", "output": "0.47", "cacheRead": "0.015", "cacheCreation": "0.1875" },
+      "qwen3.8-max": { "input": "2", "output": "6", "cacheRead": "0.2", "cacheCreation": "2.5", "note": "通义国际站（新加坡）价。缓存命中按输入价 10%、显式缓存创建按 125%。" }
     },
     "contextTiers": {
       "claude-haiku-5-5": {
@@ -149,6 +174,11 @@
         "short": { "input": "2", "output": "12", "cacheRead": "0.2", "cacheCreation": "0" },
         "long": { "input": "4", "output": "18", "cacheRead": "0.4", "cacheCreation": "0" },
         "note": "远端目录不收 Google，Gemini 的阶梯只能在这里表达。"
+      },
+      "gemini-3.1-pro-preview": {
+        "threshold": 200000,
+        "short": { "input": "2", "output": "12", "cacheRead": "0.2", "cacheCreation": "0" },
+        "long": { "input": "4", "output": "18", "cacheRead": "0.4", "cacheCreation": "0" }
       },
       "gpt-5.4": {
         "threshold": 272000,
@@ -217,13 +247,75 @@
         "short": { "input": "1", "output": "5", "cacheRead": "0.05", "cacheCreation": "1.25" },
         "long": { "input": "2", "output": "7.5", "cacheRead": "0.1", "cacheCreation": "2.5" }
       },
-      "grok-4.7": {
-        "threshold": 256000,
+      "grok-4-5": {
+        "threshold": 199999,
+        "short": { "input": "2", "output": "6", "cacheRead": "0.3", "cacheCreation": "0" },
+        "long": { "input": "4", "output": "12", "cacheRead": "0.6", "cacheCreation": "0" },
+        "note": "xAI 官方按提示达到 200K token 计长上下文价，规则按“超过阈值”判断，所以写 199999。"
+      },
+      "grok-4-6": {
+        "threshold": 199999,
         "short": { "input": "2", "output": "6", "cacheRead": "0.5", "cacheCreation": "0" },
         "long": { "input": "4", "output": "12", "cacheRead": "1", "cacheCreation": "0" }
+      },
+      "grok-4.3": {
+        "threshold": 199999,
+        "short": { "input": "1.25", "output": "2.5", "cacheRead": "0.2", "cacheCreation": "0" },
+        "long": { "input": "2.5", "output": "5", "cacheRead": "0.4", "cacheCreation": "0" }
+      },
+      "grok-4.5": {
+        "threshold": 199999,
+        "short": { "input": "2", "output": "6", "cacheRead": "0.3", "cacheCreation": "0" },
+        "long": { "input": "4", "output": "12", "cacheRead": "0.6", "cacheCreation": "0" }
+      },
+      "grok-4.6": {
+        "threshold": 199999,
+        "short": { "input": "2", "output": "6", "cacheRead": "0.5", "cacheCreation": "0" },
+        "long": { "input": "4", "output": "12", "cacheRead": "1", "cacheCreation": "0" }
+      },
+      "grok-4.7": {
+        "threshold": 199999,
+        "short": { "input": "2", "output": "6", "cacheRead": "0.5", "cacheCreation": "0" },
+        "long": { "input": "4", "output": "12", "cacheRead": "1", "cacheCreation": "0" }
+      },
+      "grok-build-0.1": {
+        "threshold": 199999,
+        "short": { "input": "1", "output": "2", "cacheRead": "0.2", "cacheCreation": "0" },
+        "long": { "input": "2", "output": "4", "cacheRead": "0.4", "cacheCreation": "0" }
+      },
+      "muse-ember-1.0": {
+        "threshold": 200000,
+        "short": { "input": "0.1", "output": "0.5", "cacheRead": "0.004", "cacheCreation": "0" },
+        "long": { "input": "0.3", "output": "1.5", "cacheRead": "0.012", "cacheCreation": "0" }
+      },
+      "qwen3.7-flash": {
+        "threshold": 256000,
+        "short": { "input": "0.1", "output": "0.4", "cacheRead": "0.01", "cacheCreation": "0.125" },
+        "long": { "input": "0.2", "output": "0.8", "cacheRead": "0.02", "cacheCreation": "0.25" }
+      },
+      "qwen3.7-plus": {
+        "threshold": 256000,
+        "short": { "input": "0.4", "output": "1.6", "cacheRead": "0.04", "cacheCreation": "0.5" },
+        "long": { "input": "1.2", "output": "4.8", "cacheRead": "0.12", "cacheCreation": "1.5" }
       }
     },
     "timedContextTiers": {
+      "gemini-2.5-pro": [
+        {
+          "from": "2026-12-01T00:00:00Z",
+          "threshold": 200000,
+          "short": { "input": "0.75", "output": "3.75", "cacheRead": "0.075", "cacheCreation": "0" },
+          "long": { "input": "0.75", "output": "3.75", "cacheRead": "0.075", "cacheCreation": "0" },
+          "note": "2026-12-01 起请求转到 Gemini 3.8 Flash，按 3.8 Flash 价计费（不分上下文档）。"
+        },
+        {
+          "from": "2027-01-01T00:00:00Z",
+          "threshold": 200000,
+          "short": { "input": "1.5", "output": "7.5", "cacheRead": "0.15", "cacheCreation": "0" },
+          "long": { "input": "1.5", "output": "7.5", "cacheRead": "0.15", "cacheCreation": "0" },
+          "note": "3.8 Flash 促销结束，按原价 $1.5 / $7.5。"
+        }
+      ],
       "gpt-5.6": [
         {
           "from": "2026-08-21T00:00:00Z",
@@ -279,6 +371,9 @@
         { "from": "2027-01-01T00:00:00Z", "input": "1.5", "output": "7.5", "cacheRead": "0.15", "cacheCreation": "0", "note": "2027-01-01 起恢复原价 $1.5 / $7.5，缓存读取回到 $0.15。" }
       ],
       "gemini-4-argon": [
+        { "from": "2026-12-01T00:00:00Z", "input": "4", "output": "20", "cacheRead": "0.2", "cacheCreation": "0", "note": "2026-12-01 起的原价 $4 / $20。" }
+      ],
+      "gemini-4-carbon": [
         { "from": "2026-12-01T00:00:00Z", "input": "4", "output": "20", "cacheRead": "0.2", "cacheCreation": "0", "note": "2026-12-01 起的原价 $4 / $20。" }
       ]
     },

@@ -3988,7 +3988,7 @@ final class QuotaParsingTests: XCTestCase {
         // 原名本身有价时不能被去后缀改写：Command Code 的 Fast 变体单独定价。
         XCTAssertEqual(price("commandcode/deepseek/deepseek-v4.1-flash-fast"),
                        CostBreakdown(input: 0.32, output: 1.16, cacheRead: 0.032, cacheCreation: 0))
-        XCTAssertNil(price("opencode/mimo-v2.6-flash-free"))
+        XCTAssertNil(price("opencode/mimo-v2.5-free"))
         XCTAssertNil(price("codex-auto-review", app: .codex))
 
         XCTAssertEqual(Pricing.pricingKey(model: "trae-cn/deepseek-v4.1-flash-1017-max"),
@@ -3996,7 +3996,7 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertEqual(ModelIdentity.parse("trae-cn/deepseek-v4.1-flash-1017-max").model, "deepseek-v4.1-flash")
         XCTAssertEqual(ModelIdentity.parse("composer-2.5-fast").model, "composer-2.5")
         XCTAssertEqual(ModelIdentity.parse("grok-4.7-high-fast").model, "grok-4.7")
-        XCTAssertEqual(ModelIdentity.parse("opencode/mimo-v2.6-flash-free").model, "mimo-v2.6-flash-free")
+        XCTAssertEqual(ModelIdentity.parse("opencode/mimo-v2.5-free").model, "mimo-v2.5-free")
     }
 
     func testGPT55StandardLongContextProAndFastRates() throws {
