@@ -12,7 +12,7 @@ struct QuotaCycleCardsSection: View {
 
     /// 只有显示 Codex 卡时才需要交代其他 Agent 的口径。
     private var includesOtherAgents: Bool {
-        apps.contains(.codex) && SettingsStore.shared.cycleIncludesOtherAgents
+        apps.contains(.codex) && !SettingsStore.shared.enabledCodexSubscriptionSources.isEmpty
     }
 
     var body: some View {
@@ -22,8 +22,8 @@ struct QuotaCycleCardsSection: View {
                     .font(.system(size: 13, weight: .semibold))
                 Text(includesOtherAgents
                     ? tr(
-                        "Estimated from local usage (including Codex subscription usage in Pi, OpenCode and DSH) and the official used percentage. For reference only.",
-                        "按本机用量（含 Pi、OpenCode、DSH 中的 Codex 订阅用量）和官方已用比例估算，仅供参考。"
+                        "Estimated from local usage, including Codex subscription usage in enabled agents, and the official used percentage.",
+                        "按本机用量（含已启用 Agent 的 Codex 订阅用量）和官方已用比例估算。"
                     )
                     : tr(
                         "Estimated from local usage and the official used percentage. For reference only.",
@@ -225,7 +225,7 @@ struct QuotaCycleCardsSection: View {
             cycles: appState.quotaCycles.records,
             kind: kind,
             app: app,
-            includeOtherAgents: SettingsStore.shared.cycleIncludesOtherAgents
+            otherAgentSources: SettingsStore.shared.enabledCodexSubscriptionSources
         )
     }
 
@@ -316,7 +316,7 @@ struct QuotaCycleHistorySection: View {
             cycles: appState.quotaCycles.records,
             kind: kind,
             app: app,
-            includeOtherAgents: SettingsStore.shared.cycleIncludesOtherAgents,
+            otherAgentSources: SettingsStore.shared.enabledCodexSubscriptionSources,
             now: now
         )
         return Array(

@@ -433,12 +433,12 @@ final class CycleUsageAggregator {
     }
 
     /// 只计订阅消耗：Codex / Claude 自己日志里非订阅模型的桶不计入（见 `isSubscriptionUsage`）。
-    /// - Parameter includeOtherAgents: false 时只计周期服务自己的日志（如 Codex 周期只算 Codex 自己的日志）。
+    /// - Parameter otherAgentSources: 额外计入 Codex 周期的来源。空集合时只计服务自己的日志。
     func summaries(
         cycles: [QuotaCycleRecord],
         kind: QuotaLimitKind,
         app: UsageApp?,
-        includeOtherAgents: Bool = false,
+        otherAgentSources: Set<UsageApp> = [],
         now: Date = Date()
     ) -> [CycleUsageSummary] {
         let grouped = Dictionary(grouping: buckets.values, by: \.cycleID)
@@ -450,7 +450,7 @@ final class CycleUsageAggregator {
                 var currentAllowanceTotals = UsageTotals.zero
                 var quality: CycleUsageQuality = cycle.boundaryQuality == .observed ? .exact : .estimated
                 for bucket in grouped[cycle.id] ?? []
-                    where (includeOtherAgents || bucket.app == cycle.app)
+                    where (bucket.app == cycle.app || (cycle.app == .codex && otherAgentSources.contains(bucket.app)))
                         && Self.isSubscriptionUsage(app: bucket.app, model: bucket.model) {
                     totals.add(bucket.usageTotals)
                     if bucket.allowanceSegmentID == cycle.latestAllowanceSegment?.id {

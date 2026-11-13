@@ -66,6 +66,7 @@ nonisolated struct UsageHistoryRecoveryNotice: Sendable, Equatable {
     var isDshFrozen: Bool = false
     var isUnavailable: Bool = false
     var verificationRejected: Bool = false
+    var recoveryRequiresEnabledApps: Bool = false
 
     /// 允许重试核对，不承诺日志变化或缺失时能恢复。
     var canRetryVerification: Bool { isRestricted && !isReadOnly }
@@ -207,6 +208,7 @@ final class UsageService {
 
     private let historyStore: UsageSnapshotStore
     private let roots: UsageScanRoots
+    private let localUsageApps: @MainActor () -> Set<UsageApp>
     private let legacyLocations: LegacyUsageHistoryLocations
     /// 个人历史补录文件位置；nil 走生产路径。测试注入不存在的路径，保证不读用户真实数据。
     private let backfillURL: URL?
@@ -260,13 +262,15 @@ final class UsageService {
         roots: UsageScanRoots = .production,
         legacyLocations: LegacyUsageHistoryLocations = .production,
         backfillURL: URL? = nil,
-        cursorCacheDirectory: URL? = nil
+        cursorCacheDirectory: URL? = nil,
+        localUsageApps: @escaping @MainActor () -> Set<UsageApp> = { Set(UsageApp.localApps) }
     ) {
         self.historyStore = historyStore
         self.roots = roots
         self.legacyLocations = legacyLocations
         self.backfillURL = backfillURL
         self.cursorCacheDirectory = cursorCacheDirectory
+        self.localUsageApps = localUsageApps
     }
 
     /// 统计页读取的完整 Cursor 自然日覆盖范围。只有身份匹配的独立远端缓存会进入此集合。
@@ -288,14 +292,16 @@ final class UsageService {
         let readOnly = storeWriteDisabled
         if readOnly, let snapshot = committedSnapshot { restoredAt = snapshot.committedAt }
         let restricted = historyRecoveryState != .complete
-        guard restoredAt != nil || restricted || readOnly || isDshHistoryFrozen else { return nil }
+        let dshFrozen = isDshHistoryFrozen && localUsageApps().contains(.dsh)
+        guard restoredAt != nil || restricted || readOnly || dshFrozen else { return nil }
         return UsageHistoryRecoveryNotice(
             restoredFromPreviousAt: restoredAt,
             isRestricted: restricted,
             isReadOnly: readOnly,
-            isDshFrozen: isDshHistoryFrozen,
+            isDshFrozen: dshFrozen,
             isUnavailable: historyRecoveryState == .unavailable,
-            verificationRejected: historyRecoveryState == .verificationRejected
+            verificationRejected: historyRecoveryState == .verificationRejected,
+            recoveryRequiresEnabledApps: restricted && recoveryRequiresEnabledApps
         )
     }
 
@@ -606,6 +612,7 @@ final class UsageService {
         "usage history preserved without verified scan progress; automatic rescan paused"
 
     private func mergeImportedBackfill() {
+        guard localUsageApps().contains(.claude) else { return }
         let existingClaudeDays = Set(aggregator.snapshotLocal().filter { $0.app == .claude }.map(\.day))
         aggregator.ingestLocal(
             ImportedUsageBackfill.loadMissingEntries(
@@ -892,7 +899,7 @@ final class UsageService {
     /// 不受门控影响，用户点了就一定扫。
     func scanPeriodically() async {
         guard !suspendedForTermination, !isPersistingForTermination else { return }
-        guard UsageLogWatcher.shared.shouldScan() else {
+        guard UsageLogWatcher.shared.shouldScan(apps: localUsageApps()) else {
             AppLog.debug(.usage, "usage scan skipped; no log changes since last scan")
             return
         }
@@ -918,6 +925,7 @@ final class UsageService {
             // 价格规则在同一个安全边界切换；规则变化后本地指纹不同，本轮扫描后由重建基准触发完整重建。
             PricingRulesStore.shared.refreshIfNeeded()
             PricingRulesStore.shared.commitPending()
+            guard !localUsageApps().isEmpty else { return }
             if historyRecoveryState != .complete {
                 await handleRestrictedRecovery()
                 continue
@@ -936,7 +944,7 @@ final class UsageService {
     /// 受限恢复：历史可用但进度不可信。
     /// 本进程只做一次完整核对；不通过就保留历史并停止自动重扫，避免每轮发起昂贵全量扫描。
     private func handleRestrictedRecovery() async {
-        guard restrictedVerificationAttempted == false else { return }
+        guard !restrictedVerificationAttempted, !recoveryRequiresEnabledApps else { return }
         restrictedVerificationAttempted = true
         let outcome = await runCandidateRebuild(purpose: .restrictedRecovery)
         switch outcome {
@@ -945,12 +953,33 @@ final class UsageService {
             historyDegradeReasons = []
             lastRebuildOutcome = .recoveredFromRestrictedHistory
             AppLog.info(.usage, "usage history restored: scanned candidate matches preserved history")
+        case .sourcesChanged:
+            restrictedVerificationAttempted = false
+            scanQueued = true
         default:
             historyRecoveryState = .verificationRejected
             lastRebuildOutcome = .restrictedRecoveryRejected
             lastError = Self.restrictedHistoryMessage
             AppLog.warn(.usage, "usage history recovery verification rejected; history preserved")
         }
+    }
+
+    private var recoveryRequiresEnabledApps: Bool {
+        let disabledApps = Set(UsageApp.localApps).subtracting(localUsageApps())
+        guard !disabledApps.isEmpty else { return false }
+        let conversations = conversationAggregator.snapshot()
+        return aggregator.snapshotLocal().contains { disabledApps.contains($0.app) }
+            || conversations.infos.contains { disabledApps.contains($0.app) }
+            || conversations.buckets.contains { disabledApps.contains($0.app) }
+            || cycleAggregator.snapshot().contains { disabledApps.contains($0.app) }
+    }
+
+    func localUsageSettingsDidChange(app: UsageApp, enabled: Bool) async {
+        UsageLogWatcher.shared.updateSources(localUsageApps())
+        guard enabled, localUsageApps().contains(app) else { return }
+        restrictedVerificationAttempted = false
+        await scanNow()
+        await rebuildCycleUsageIfNeeded()
     }
 
     /// 受限重建的日志回溯窗口。5h / weekly 周期滚动涉及的条目必然落在最近一个周期内，
@@ -1058,8 +1087,11 @@ final class UsageService {
         let piRoot = roots.piRoot
         let opencodeDatabaseURL = roots.opencodeDatabaseURL
         let dshRoot = roots.dshRoot
-        let dshFrozen = isDshHistoryFrozen
-        async let claudeTask = Task.detached(priority: .utility) {
+        let affectedCycles = cycles.filter { affectedCycleIDs.contains($0.id) }
+        let apps = Self.requiredCycleSourceApps(cycles: affectedCycles).intersection(localUsageApps())
+            .subtracting(isDshHistoryFrozen ? [.dsh] : [])
+        guard !apps.isEmpty else { return }
+        async let claudeTask: ClaudeJSONLScanner.Result? = Self.scanIfEnabled(.claude, in: apps, skipped: nil) {
             ClaudeJSONLScanner.scan(
                 previous: [:],
                 seenMessageIds: [],
@@ -1069,10 +1101,10 @@ final class UsageService {
                 minimumMtime: dateFrom,
                 onProgress: progress
             )
-        }.value
+        }
         // Pi / OpenCode / DSH 里的 Codex 订阅用量同样归入 Codex 周期，要一起重灌。
         // OpenCode 是 SQLite 库，没有按文件时间过滤的入口，只能整库读取。
-        async let piTask = Task.detached(priority: .utility) {
+        async let piTask: PiJSONLScanner.Result? = Self.scanIfEnabled(.pi, in: apps, skipped: nil) {
             PiJSONLScanner.scan(
                 previous: [:],
                 seenEntryIds: [],
@@ -1080,26 +1112,19 @@ final class UsageService {
                 minimumMtime: dateFrom,
                 onProgress: progress
             )
-        }.value
-        async let opencodeTask = Task.detached(priority: .utility) {
+        }
+        async let opencodeTask: OpencodeScanner.Result? = Self.scanIfEnabled(.opencode, in: apps, skipped: nil) {
             OpencodeScanner.scan(
                 previous: nil,
                 databaseURL: opencodeDatabaseURL,
                 onProgress: progress
             )
-        }.value
+        }
         // DSH 冻结时常规扫描不采集新用量，这里也不重灌，保留其旧桶。
-        async let dshTask = Task.detached(priority: .utility) { () -> DshSessionScanner.Result? in
-            dshFrozen
-                ? nil
-                : DshSessionScanner.scan(
-                    previous: [:],
-                    root: dshRoot,
-                    minimumMtime: dateFrom,
-                    onProgress: progress
-                )
-        }.value
-        async let codexTask = Task.detached(priority: .utility) {
+        async let dshTask: DshSessionScanner.Result? = Self.scanIfEnabled(.dsh, in: apps, skipped: nil) {
+            DshSessionScanner.scan(previous: [:], root: dshRoot, minimumMtime: dateFrom, onProgress: progress)
+        }
+        async let codexTask: CodexJSONLScanner.Result? = Self.scanIfEnabled(.codex, in: apps, skipped: nil) {
             await CodexJSONLScanner.scan(
                 previous: [:],
                 // 本轮从空 seen 起扫，跨文件去重只在本次扫到的文件之间生效。
@@ -1111,15 +1136,18 @@ final class UsageService {
                 minimumMtime: dateFrom,
                 onProgress: progress
             )
-        }.value
+        }
         let claude = await claudeTask
         var codex = await codexTask
-        if usesLegacyCodexModels { codex = Self.legacyCodexResult(codex) }
+        if usesLegacyCodexModels { codex = codex.map(Self.legacyCodexResult) }
         let pi = await piTask
         let opencode = await opencodeTask
         let dsh = await dshTask
         let scanEnded = Date()
-        let affectedCycles = cycles.filter { affectedCycleIDs.contains($0.id) }
+        guard localUsageApps().isSuperset(of: apps) else {
+            requestCycleUsageRebuild(reasons: mergedReasons)
+            return
+        }
         let failedApps = Self.cycleSourceFailedApps(
             Self.cycleRebuildFailedApps(
                 claude: claude,
@@ -1135,17 +1163,15 @@ final class UsageService {
             requestedCycleIDs: affectedCycleIDs,
             failedApps: failedApps
         )
+        let entries = [claude?.entries, codex?.entries, pi?.entries, opencode?.entries, dsh?.entries]
+            .compactMap { $0 }.flatMap { $0 }
         await commitCycleAggregation(
-            exactEntries: (claude.entries + codex.entries + pi.entries + opencode.entries + (dsh?.entries ?? []))
-                .filter { !failedApps.contains($0.app) },
+            exactEntries: entries.filter { !failedApps.contains($0.app) },
             cycles: cycles,
             accountSegments: accountSegments,
             failedApps: failedApps,
             rebuildRange: rebuildableCycleIDs,
-            sourceApps: Set<UsageApp>([.claude, .codex])
-                .union(CycleUsageAggregator.otherAgentSourceApps)
-                .subtracting(failedApps)
-                .subtracting(dshFrozen ? [.dsh] : [])
+            sourceApps: apps.subtracting(failedApps)
         )
         // 全过程计时：commitCycleAggregation 自己的日志只计聚合与落盘，不含前面的日志重扫。
         let finished = Date()
@@ -1281,13 +1307,7 @@ final class UsageService {
     /// watermark 不会再返回同一批条目。失效状态沿用常规扫描的全量重建语义。
     private func drainPendingUsageBeforeCycleRebuild() async -> Bool {
         guard !storeWriteDisabled, historyRecoveryState == .complete else { return false }
-        let cacheResult = await resolveScanState()
-        if case .invalidated = cacheResult {
-            clearUsageAggregatesForFullRebuild()
-        }
-        guard await runScan(prev: cacheResult.state) else { return false }
-        requiresFullRebuild = false
-        return true
+        return await drainPendingIncrements()
     }
 
     private func clearUsageAggregatesForFullRebuild() {
@@ -1438,14 +1458,14 @@ final class UsageService {
         guard !Self.pendingInitialCycleRebuildApps(
             cycles: appState.quotaCycles.records,
             completedApps: cycleInitialRebuildCompletedApps
-        ).isEmpty else { return }
+        ).isDisjoint(with: localUsageApps()) else { return }
         while isScanning || isCycleRebuilding {
             try? await Task.sleep(nanoseconds: 150_000_000)
             guard !suspendedForTermination, !isPersistingForTermination else { return }
             if Self.pendingInitialCycleRebuildApps(
                 cycles: appState.quotaCycles.records,
                 completedApps: cycleInitialRebuildCompletedApps
-            ).isEmpty { return }
+            ).isDisjoint(with: localUsageApps()) { return }
         }
 
         isCycleRebuilding = true
@@ -1466,19 +1486,19 @@ final class UsageService {
         let pendingApps = Self.pendingInitialCycleRebuildApps(
             cycles: cycles,
             completedApps: cycleInitialRebuildCompletedApps
-        )
+        ).intersection(localUsageApps())
         guard !pendingApps.isEmpty else { return }
         let claudeRoot = roots.claudeRoot
-        let claudeIndex = roots.claudeConversationIndex()
+        let claudeIndex = roots.claudeConversationIndex
         let codexRoots = roots.codexRoots
-        let codexTitles = roots.codexTitles()
+        let codexTitles = roots.codexTitles
         let claudeTask: Task<ClaudeJSONLScanner.Result, Never>? = pendingApps.contains(.claude)
             ? Task.detached(priority: .utility) {
                 ClaudeJSONLScanner.scan(
                     previous: [:],
                     seenMessageIds: [],
                     root: claudeRoot,
-                    conversationIndex: claudeIndex,
+                    conversationIndex: claudeIndex(),
                     onProgress: progress
                 )
             }
@@ -1489,7 +1509,7 @@ final class UsageService {
                     previous: [:],
                     seenTokenIds: [],
                     roots: codexRoots,
-                    indexedTitles: codexTitles,
+                    indexedTitles: codexTitles(),
                     onProgress: progress
                 )
             }
@@ -1548,6 +1568,10 @@ final class UsageService {
         )
         let entries: [UsageEntry] = [claude?.entries, codex?.entries, pi?.entries, opencode?.entries, dsh?.entries]
             .compactMap { $0 }.flatMap { $0 }
+        guard localUsageApps().isSuperset(of: pendingApps) else {
+            Task { await rebuildCycleUsageIfNeeded() }
+            return
+        }
         await commitCycleAggregation(
             exactEntries: entries.filter { !failedApps.contains($0.app) },
             cycles: cycles,
@@ -1593,6 +1617,7 @@ final class UsageService {
             if scanQueued { Task { await scanNow() } }
         }
         lastRebuildOutcome = nil
+        guard !localUsageApps().isEmpty else { return }
         PricingCatalogStore.shared.refreshIfNeeded()
         PricingRulesStore.shared.refreshIfNeeded()
         // 手动重算同样是一次完整扫描：先提交已经刷好的 pending，避免用户刚点击重算
@@ -1605,12 +1630,18 @@ final class UsageService {
         }
 
         if historyRecoveryState != .complete {
+            if recoveryRequiresEnabledApps {
+                lastRebuildOutcome = .restrictedRecoveryRequiresEnabledApps
+                return
+            }
             let outcome = await runCandidateRebuild(purpose: .restrictedRecovery)
             switch outcome {
             case .replaced:
                 historyRecoveryState = .complete
                 historyDegradeReasons = []
                 lastRebuildOutcome = .recoveredFromRestrictedHistory
+            case .sourcesChanged:
+                lastRebuildOutcome = .sourcesChanged
             default:
                 historyRecoveryState = .verificationRejected
                 lastRebuildOutcome = .restrictedRecoveryRejected
@@ -1622,8 +1653,11 @@ final class UsageService {
         isRebuildingHistory = true
         defer { isRebuildingHistory = false }
         // 基准必须与磁盘一致：先把上一次常规扫描之后积压的增量提交掉。
+        let appsBeforeDrain = localUsageApps()
         guard await drainPendingIncrements() else {
-            lastRebuildOutcome = .commitFailed(lastError ?? "pending changes could not be committed")
+            lastRebuildOutcome = localUsageApps().isSuperset(of: appsBeforeDrain)
+                ? .commitFailed(lastError ?? "pending changes could not be committed")
+                : .sourcesChanged
             return
         }
 
@@ -1639,7 +1673,10 @@ final class UsageService {
             case .commitFailed(let detail):
                 // 第一轮已提交且有效；第二轮失败不能伪装成整轮成功。
                 outcome = .partiallyCommitted("pricing refresh round failed: \(detail); first round kept")
-            case .recoveredFromRestrictedHistory, .restrictedRecoveryRejected, .partiallyCommitted:
+            case .sourcesChanged:
+                outcome = .partiallyCommitted("enabled sources changed during the pricing refresh; first round kept")
+            case .recoveredFromRestrictedHistory, .restrictedRecoveryRejected, .restrictedRecoveryRequiresEnabledApps,
+                 .partiallyCommitted:
                 outcome = first
             }
         }
@@ -1675,7 +1712,8 @@ final class UsageService {
             unpricedKeys: pricingUsageKeys(from: buckets.filter(\.hasUnpricedUsage)),
             userRequestedCatalog: catalogUpdateRequestedByUser,
             now: now,
-            minimumInterval: Self.automaticRebuildInterval
+            minimumInterval: Self.automaticRebuildInterval,
+            apps: localUsageApps()
         )
         catalogUpdateRequestedByUser = false
         guard let reason else { return }
@@ -1695,7 +1733,7 @@ final class UsageService {
             didCommitFullRebuild()
             // 设置页上一次手动重算的失败提示已被这次重建取代。
             lastRebuildOutcome = nil
-        } else {
+        } else if outcome != .sourcesChanged {
             lastAutomaticRebuildFailureAt = now
             AppLog.warn(.usage, "usage automatic rebuild not committed reason=\(reason.rawValue); retry after 24h")
         }
@@ -1748,14 +1786,18 @@ final class UsageService {
         guard !storeWriteDisabled else {
             return .commitFailed("usage history store is read-only")
         }
+        let apps = localUsageApps()
+        guard !apps.isEmpty else { return .sourcesChanged }
         // 标识迁移尚未提交时（含没有可信进度的旧快照）按旧 Codex 身份严格核对。
         var candidate = await buildRebuildCandidate(
+            apps: apps,
             useLegacyCodexModels: usesLegacyCodexModels,
             preserveDeletedConversations: purpose != .restrictedRecovery
         )
         #if DEBUG
         await candidateReadyForTesting?()
         #endif
+        guard localUsageApps().isSuperset(of: apps) else { return .sourcesChanged }
         if let incomplete = candidate.incompleteSources {
             lastRebuildDiagnostic = "sources=(\(incomplete))"
             AppLog.warn(.usage, "usage rebuild rejected sources=\(incomplete)")
@@ -1784,8 +1826,10 @@ final class UsageService {
             }
             if !origins.isEmpty, !hasExistingSplit {
                 candidate = await buildRebuildCandidate(
+                    apps: apps,
                     preserveDeletedConversations: true, cursorLegacyOrigins: origins
                 )
+                guard localUsageApps().isSuperset(of: apps) else { return .sourcesChanged }
                 if let incomplete = candidate.incompleteSources {
                     lastRebuildDiagnostic = "sources=(\(incomplete))"
                     AppLog.warn(.usage, "usage rebuild rejected sources=\(incomplete)")
@@ -1886,6 +1930,7 @@ final class UsageService {
     /// - Parameter preserveDeletedConversations: 手动重建传 true，按 `UsageRebuildMerge` 保留日志已删除的对话；
     ///   受限恢复的核对传 false，候选只来自现有日志，才能和基准逐项比对。
     private func buildRebuildCandidate(
+        apps: Set<UsageApp>,
         useLegacyCodexModels: Bool = false,
         preserveDeletedConversations: Bool,
         cursorLegacyOrigins: Set<String> = []
@@ -1894,22 +1939,25 @@ final class UsageService {
             DispatchQueue.main.async { self?.scanProgress = progress }
         }
         let claudeRoot = roots.claudeRoot
-        let claudeIndex = roots.claudeConversationIndex()
+        let claudeIndex = roots.claudeConversationIndex
         let codexRoots = roots.codexRoots
-        let codexTitles = roots.codexTitles()
+        let codexTitles = roots.codexTitles
         let piRoot = roots.piRoot
         let opencodeDatabaseURL = roots.opencodeDatabaseURL
         let dshRoot = roots.dshRoot
         let antigravityRoots = roots.antigravityRoots
         let dshFrozen = isDshHistoryFrozen
-        let preservedDshState = cachedScanState?.dsh ?? [:]
+        let previous = cachedScanState ?? ScanState()
+        let preservedDshState = previous.dsh
+        let disabledApps = Set(UsageApp.localApps).subtracting(apps)
+        let rebuildDsh = apps.contains(.dsh) && !dshFrozen
 
         // 日志已删除、且账本里有消息 ID 的对话：先把这些 ID 放进去重集合，续接 / 分叉对话复制过去的
         // 同一批消息就不会被重扫再计一次，合并时原用量可以全部保留。基准建立之前账本不完整，不能这样用。
         var ledgerBackedKeys: [UsageApp: Set<String>] = [:]
         if preserveDeletedConversations, rebuildBasis != nil {
             let deleted = UsageRebuildMerge.deletedConversations(
-                conversationAggregator.snapshot().infos,
+                conversationAggregator.snapshot().infos.filter { apps.contains($0.app) },
                 sourceExists: JSONLDirectoryEnumerator.sourceExists(atPath:)
             )
             for info in deleted where messageLedger.contains(info.key, app: info.app) {
@@ -1921,28 +1969,37 @@ final class UsageService {
         let piKnown = messageLedger.ids(for: ledgerBackedKeys[.pi] ?? [], app: .pi)
         let ledgerSnapshot = messageLedger
 
-        async let claudeTask = Task.detached(priority: .utility) {
+        async let claudeTask = Self.scanIfEnabled(.claude, in: apps, skipped: ClaudeJSONLScanner.Result(
+            entries: [], conversationSeeds: [], newState: previous.claude,
+            newSeenIds: previous.claudeSeenMessageIds, filesScanned: 0, linesParsed: 0, failedFileCount: 0
+        )) {
             ClaudeJSONLScanner.scan(
                 previous: [:],
                 seenMessageIds: [],
                 knownIDs: claudeKnown,
                 knownOwner: { ledgerSnapshot.conversationKey(containing: $0, app: .claude) },
                 root: claudeRoot,
-                conversationIndex: claudeIndex,
+                conversationIndex: claudeIndex(),
                 onProgress: progress
             )
-        }.value
-        async let codexTask = Task.detached(priority: .utility) {
+        }
+        async let codexTask = Self.scanIfEnabled(.codex, in: apps, skipped: CodexJSONLScanner.Result(
+            entries: [], conversationSeeds: [], newState: previous.codex,
+            newSeenIds: previous.codexSeenTokenIds, filesScanned: 0, linesParsed: 0, failedFileCount: 0
+        )) {
             await CodexJSONLScanner.scan(
                 previous: [:],
                 seenTokenIds: [],
                 knownIDs: codexKnown,
                 roots: codexRoots,
-                indexedTitles: codexTitles,
+                indexedTitles: codexTitles(),
                 onProgress: progress
             )
-        }.value
-        async let piTask = Task.detached(priority: .utility) {
+        }
+        async let piTask = Self.scanIfEnabled(.pi, in: apps, skipped: PiJSONLScanner.Result(
+            entries: [], conversationSeeds: [], newState: previous.pi,
+            newSeenIds: previous.piSeenEntryIds, filesScanned: 0, linesParsed: 0
+        )) {
             PiJSONLScanner.scan(
                 previous: [:],
                 seenEntryIds: [],
@@ -1950,22 +2007,22 @@ final class UsageService {
                 root: piRoot,
                 onProgress: progress
             )
-        }.value
-        async let opencodeTask = Task.detached(priority: .utility) {
+        }
+        async let opencodeTask = Self.scanIfEnabled(.opencode, in: apps, skipped: OpencodeScanner.Result(newState: previous.opencode)) {
             OpencodeScanner.scan(
                 previous: nil,
                 databaseURL: opencodeDatabaseURL,
                 onProgress: progress
             )
-        }.value
-        async let dshTask = Task.detached(priority: .utility) {
-            dshFrozen
-                ? DshSessionScanner.frozenResult(preserving: preservedDshState)
-                : DshSessionScanner.scan(previous: [:], root: dshRoot, onProgress: progress)
-        }.value
-        async let antigravityTask = Task.detached(priority: .utility) {
+        }
+        async let dshTask = Self.scanIfEnabled(
+            .dsh, in: rebuildDsh ? apps : [], skipped: DshSessionScanner.frozenResult(preserving: preservedDshState)
+        ) {
+            DshSessionScanner.scan(previous: [:], root: dshRoot, onProgress: progress)
+        }
+        async let antigravityTask = Self.scanIfEnabled(.antigravity, in: apps, skipped: AntigravityScanner.Result(newState: previous.antigravity)) {
             AntigravityScanner.scan(previous: nil, roots: antigravityRoots, onProgress: progress)
-        }.value
+        }
 
         let claude = await claudeTask
         if claude.hasDeferredMessages { UsageLogWatcher.shared.requestRescan() }
@@ -1990,10 +2047,10 @@ final class UsageService {
         if codex.failedFileCount > 0 { incomplete.append("Codex") }
         // OpenCode 库从未存在（本机没装）是正常状态；只有库在却读不开才算来源不完整。
         let opencodeProblem = opencode.error != nil || !opencode.isComplete
-        if opencodeProblem, FileManager.default.fileExists(atPath: opencodeDatabaseURL.path) {
+        if apps.contains(.opencode), opencodeProblem, FileManager.default.fileExists(atPath: opencodeDatabaseURL.path) {
             incomplete.append("OpenCode")
         }
-        if !dshFrozen, !dsh.isComplete { incomplete.append("DSH") }
+        if rebuildDsh, !dsh.isComplete { incomplete.append("DSH") }
 
         // 需要保留的历史分区（源库中已删除会话、DSH 历史贡献）先按基准装载，
         // 再由完整扫描结果覆盖；不能用空聚合器直接覆盖历史。
@@ -2003,11 +2060,11 @@ final class UsageService {
         let baselineCycles = cycleAggregator.snapshot()
         let candidateDaily = UsageAggregator()
         let candidateConversations = ConversationAggregator()
-        let sessionReplacedApps: Set<UsageApp> = [.opencode, .dsh, .antigravity]
-        candidateDaily.load(from: baselineDay.filter { sessionReplacedApps.contains($0.app) })
+        let preservedApps = disabledApps.union([.opencode, .dsh, .antigravity])
+        candidateDaily.load(from: baselineDay.filter { preservedApps.contains($0.app) })
         candidateConversations.load(
-            infos: baselineConversation.infos.filter { sessionReplacedApps.contains($0.app) },
-            buckets: baselineConversation.buckets.filter { sessionReplacedApps.contains($0.app) }
+            infos: baselineConversation.infos.filter { preservedApps.contains($0.app) },
+            buckets: baselineConversation.buckets.filter { preservedApps.contains($0.app) }
         )
 
         candidateDaily.ingestLocal(claude.entries)
@@ -2029,12 +2086,12 @@ final class UsageService {
         )
         // OpenCode / DSH 从空状态扫描，给出的是现存会话的完整用量；DSH 冻结时不重灌。
         let cycleEntries = claude.entries + codex.entries + pi.entries + opencode.entries
-            + (dshFrozen ? [] : dsh.entries)
-        let freshDshContributions = dshFrozen
-            ? dshContributions
-            : DshContributionStore.apply(scan: dsh, to: dshContributions).contributions
+            + dsh.entries
+        let freshDshContributions = rebuildDsh
+            ? DshContributionStore.apply(scan: dsh, to: dshContributions).contributions
+            : dshContributions
         let dshRollup = DshContributionRollup.reduce(freshDshContributions)
-        if !dshFrozen {
+        if rebuildDsh {
             candidateDaily.replaceLocal(app: .dsh, buckets: dshRollup.dayBuckets)
             candidateConversations.replaceLocal(
                 app: .dsh,
@@ -2046,17 +2103,21 @@ final class UsageService {
         let cycles = appState?.quotaCycles.records ?? []
         let accountSegments = appState?.quotaCycles.accountSegments ?? []
         let candidateCycles = CycleUsageAggregator()
+        candidateCycles.load(from: baselineCycles.filter { disabledApps.contains($0.app) })
         if !cycles.isEmpty {
-            candidateCycles.rebuild(
+            candidateCycles.rebuildRange(
                 exactEntries: cycleEntries,
                 cycles: cycles,
-                accountSegments: accountSegments
+                accountSegments: accountSegments,
+                affectedCycleIDs: Set(cycles.map(\.id)),
+                sourceApps: apps
             )
             // 与日桶一致：源库中已删除的 OpenCode 会话、日志已删除的 DSH 会话保留原周期桶；
             // DSH 冻结时整份保留。
             let refreshedOpencodeKeys = Set(opencode.refreshedSessionIDs.map { "opencode:\($0)" })
             let refreshedDshKeys = Set(dsh.newState.values.compactMap(\.conversationID).map { "dsh:\($0)" })
             let preserved = baselineCycles.filter {
+                guard apps.contains($0.app) else { return false }
                 switch $0.app {
                 case .opencode:
                     return !refreshedOpencodeKeys.contains($0.conversationKey ?? "")
@@ -2085,7 +2146,7 @@ final class UsageService {
             }
             merged = UsageRebuildMerge.preserveDeletedConversations(
                 baselineDay: baselineDay,
-                baselineInfos: baselineConversation.infos,
+                baselineInfos: baselineConversation.infos.filter { apps.contains($0.app) },
                 baselineConversation: baselineConversation.buckets,
                 baselineCycles: baselineCycles,
                 candidateDay: merged.dayBuckets,
@@ -2100,13 +2161,15 @@ final class UsageService {
         // 补录只填没有任何 Claude 用量的天，必须在保留已删除对话之后判断，否则同一天会补录和保留各算一次。
         let finalDaily = UsageAggregator()
         finalDaily.load(from: merged.dayBuckets)
-        finalDaily.ingestLocal(
-            ImportedUsageBackfill.loadMissingEntries(
-                app: .claude,
-                existingDays: Set(merged.dayBuckets.filter { $0.app == .claude }.map(\.day)),
-                from: backfillURL
+        if apps.contains(.claude) {
+            finalDaily.ingestLocal(
+                ImportedUsageBackfill.loadMissingEntries(
+                    app: .claude,
+                    existingDays: Set(merged.dayBuckets.filter { $0.app == .claude }.map(\.day)),
+                    from: backfillURL
+                )
             )
-        )
+        }
         let candidateDay = finalDaily.snapshotLocal()
         var mismatch = UsageHistoryConsistency.compareUsage(
             baseline: baselineDay,
@@ -2133,17 +2196,23 @@ final class UsageService {
         for (app, keys) in ledgerBackedKeys {
             candidateLedger.record(messageLedger.filtered(keys.intersection(keptKeys), app: app), app: app)
         }
+        for app in UsageMessageLedger.apps where disabledApps.contains(app) {
+            candidateLedger.record(messageLedger.conversations[app] ?? [:], app: app)
+        }
         let scanState = ScanState(
             generationID: UUID().uuidString,
             pricingFingerprint: fingerprint,
             claude: claude.newState,
             codex: codex.newState,
+            claudeSeenMessageIds: apps.contains(.claude) ? [] : claude.newSeenIds,
+            codexSeenTokenIds: apps.contains(.codex) ? [] : codex.newSeenIds,
             pi: pi.newState,
+            piSeenEntryIds: apps.contains(.pi) ? [] : pi.newSeenIds,
             opencode: opencode.newState,
-            dsh: dshFrozen ? preservedDshState : dsh.newState,
+            dsh: dsh.newState,
             antigravity: antigravity.newState
         )
-        let requiredApps = Self.requiredCycleSourceApps(cycles: cycles)
+        let requiredApps = Self.requiredCycleSourceApps(cycles: cycles).intersection(apps)
         let completedApps = incomplete.isEmpty
             ? cycleInitialRebuildCompletedApps.union(requiredApps)
             : cycleInitialRebuildCompletedApps
@@ -2155,12 +2224,12 @@ final class UsageService {
             cycleInitialRebuildCompletedAt: incomplete.isEmpty ? Date() : cycleInitialRebuildCompletedAt,
             cycleInitialRebuildCompletedApps: completedApps,
             dshContributions: freshDshContributions,
-            dshRequiresRebuild: dshFrozen ? true : !dsh.isComplete,
+            dshRequiresRebuild: rebuildDsh ? !dsh.isComplete : dshNeedsFullRescan,
             scanState: scanState,
             incompleteSources: incomplete.isEmpty ? nil : incomplete.joined(separator: ", "),
             mismatch: mismatch,
             messageLedger: candidateLedger,
-            rebuildBasis: .current(usageKeys: usageKeys, at: Date()),
+            rebuildBasis: .current(usageKeys: usageKeys, at: Date(), apps: apps, preserving: rebuildBasis),
             preservedConversations: merged.preservedConversations,
             skippedBuckets: merged.skippedBuckets
         )
@@ -2186,6 +2255,18 @@ final class UsageService {
         return succeeded
     }
 
+    private nonisolated static func scanIfEnabled<Result: Sendable>(
+        _ app: UsageApp,
+        in apps: Set<UsageApp>,
+        skipped: Result,
+        operation: @escaping @Sendable () async -> Result
+    ) async -> Result {
+        guard apps.contains(app) else { return skipped }
+        return await Task.detached(priority: .utility) {
+            await operation()
+        }.value
+    }
+
     // MARK: - 常规扫描实现
 
     /// - Parameter allowDeferredWrite: 允许把本轮聚合结果留在内存里、等到节流窗口到期
@@ -2197,7 +2278,13 @@ final class UsageService {
         reportProgress: Bool = false,
         allowDeferredWrite: Bool = false
     ) async -> Bool {
-        guard await migrateCodexModelIdentityIfNeeded() else { return false }
+        let apps = localUsageApps()
+        guard !apps.isEmpty else { return false }
+        if apps.contains(.codex), !(await migrateCodexModelIdentityIfNeeded()) { return false }
+        guard localUsageApps().isSuperset(of: apps) else {
+            scanQueued = true
+            return false
+        }
         let started = Date()
         let prevSeen = prev.claudeSeenMessageIds
         let progress: ScanProgressCallback?
@@ -2211,9 +2298,9 @@ final class UsageService {
             progress = nil
         }
         let claudeRoot = roots.claudeRoot
-        let claudeIndex = roots.claudeConversationIndex()
+        let claudeIndex = roots.claudeConversationIndex
         let codexRoots = roots.codexRoots
-        let codexTitles = roots.codexTitles()
+        let codexTitles = roots.codexTitles
         let piRoot = roots.piRoot
         let opencodeDatabaseURL = roots.opencodeDatabaseURL
         let dshRoot = roots.dshRoot
@@ -2225,28 +2312,37 @@ final class UsageService {
         let piKnown = messageLedger.knownIDs(for: .pi)
         let ledgerSnapshot = messageLedger
 
-        async let claudeTask = Task.detached(priority: .utility) {
+        async let claudeTask = Self.scanIfEnabled(.claude, in: apps, skipped: ClaudeJSONLScanner.Result(
+            entries: [], conversationSeeds: [], newState: prev.claude, newSeenIds: prevSeen,
+            filesScanned: 0, linesParsed: 0, failedFileCount: 0
+        )) {
             ClaudeJSONLScanner.scan(
                 previous: prev.claude,
                 seenMessageIds: prevSeen,
                 knownIDs: claudeKnown,
                 knownOwner: { ledgerSnapshot.conversationKey(containing: $0, app: .claude) },
                 root: claudeRoot,
-                conversationIndex: claudeIndex,
+                conversationIndex: claudeIndex(),
                 onProgress: progress
             )
-        }.value
-        async let codexTask = Task.detached(priority: .utility) {
+        }
+        async let codexTask = Self.scanIfEnabled(.codex, in: apps, skipped: CodexJSONLScanner.Result(
+            entries: [], conversationSeeds: [], newState: prev.codex, newSeenIds: prev.codexSeenTokenIds,
+            filesScanned: 0, linesParsed: 0, failedFileCount: 0
+        )) {
             await CodexJSONLScanner.scan(
                 previous: prev.codex,
                 seenTokenIds: prev.codexSeenTokenIds,
                 knownIDs: codexKnown,
                 roots: codexRoots,
-                indexedTitles: codexTitles,
+                indexedTitles: codexTitles(),
                 onProgress: progress
             )
-        }.value
-        async let piTask = Task.detached(priority: .utility) {
+        }
+        async let piTask = Self.scanIfEnabled(.pi, in: apps, skipped: PiJSONLScanner.Result(
+            entries: [], conversationSeeds: [], newState: prev.pi, newSeenIds: prev.piSeenEntryIds,
+            filesScanned: 0, linesParsed: 0
+        )) {
             PiJSONLScanner.scan(
                 previous: prev.pi,
                 seenEntryIds: prev.piSeenEntryIds,
@@ -2254,28 +2350,28 @@ final class UsageService {
                 root: piRoot,
                 onProgress: progress
             )
-        }.value
-        async let opencodeTask = Task.detached(priority: .utility) {
+        }
+        async let opencodeTask = Self.scanIfEnabled(.opencode, in: apps, skipped: OpencodeScanner.Result(newState: prev.opencode)) {
             OpencodeScanner.scan(
                 previous: prev.opencode,
                 databaseURL: opencodeDatabaseURL,
                 onProgress: progress
             )
-        }.value
+        }
         // 贡献缓存不可用时 DSH 必须从零全量重扫：只靠 watermark 增量拿不回历史贡献。
         let dshPrevious = dshNeedsFullRescan ? [:] : prev.dsh
-        async let dshTask = Task.detached(priority: .utility) {
+        async let dshTask = Self.scanIfEnabled(.dsh, in: apps, skipped: DshSessionScanner.frozenResult(preserving: prev.dsh)) {
             dshFrozen
                 ? DshSessionScanner.frozenResult(preserving: prev.dsh)
                 : DshSessionScanner.scan(previous: dshPrevious, root: dshRoot, onProgress: progress)
-        }.value
-        async let antigravityTask = Task.detached(priority: .utility) {
+        }
+        async let antigravityTask = Self.scanIfEnabled(.antigravity, in: apps, skipped: AntigravityScanner.Result(newState: prev.antigravity)) {
             AntigravityScanner.scan(
                 previous: prev.antigravity,
                 roots: antigravityRoots,
                 onProgress: progress
             )
-        }.value
+        }
 
         let claude = await claudeTask
         if claude.hasDeferredMessages { UsageLogWatcher.shared.requestRescan() }
@@ -2285,6 +2381,10 @@ final class UsageService {
         let opencode = await opencodeTask
         let dsh = await dshTask
         let antigravity = await antigravityTask
+        guard localUsageApps().isSuperset(of: apps) else {
+            scanQueued = true
+            return false
+        }
         // DSH 的坏帧、坏文件也要能浮出来（§6 决策 4）；pi / opencode 的既有行为不动。
         let failedFileCount = claude.failedFileCount + codex.failedFileCount
             + dsh.failedFileCount + dsh.failedDirectoryCount + dsh.duplicateSessionCount
@@ -2322,7 +2422,7 @@ final class UsageService {
             let initialApps = Self.pendingInitialCycleRebuildApps(
                 cycles: cycles,
                 completedApps: cycleInitialRebuildCompletedApps
-            )
+            ).intersection(apps)
             let initialCycles = Self.cyclesToRebuild(cycles, for: initialApps)
             let failedApps = Self.cycleSourceFailedApps(
                 Self.cycleRebuildFailedApps(
@@ -2333,7 +2433,7 @@ final class UsageService {
                 opencode: opencode,
                 opencodeDatabaseURL: opencodeDatabaseURL,
                 // DSH 只有从零完整扫描才能直接灌入；冻结或带旧 watermark 时留给补算。
-                dshFailed: dshFrozen || !dsh.isComplete || !dshPrevious.isEmpty
+                dshFailed: initialApps.contains(.dsh) && (dshFrozen || !dsh.isComplete || !dshPrevious.isEmpty)
             )
             let initialCycleIDs = Set(initialCycles.map(\.id))
             let rebuildableCycleIDs = Self.cycleRebuildableCycleIDs(
@@ -2380,8 +2480,8 @@ final class UsageService {
 
         // DSH 没有 seen 集合兜底去重，贡献与 watermark 必须同进同退：能提交时两者每轮一起更新内存，
         // 写盘节流只影响磁盘；不能提交（冻结、全量重扫不完整）时两者都停在上一轮。
-        let dshRebuildReady = !dshFrozen && dshNeedsFullRescan && dsh.isComplete
-        let canCommitDsh = !dshFrozen && (!dshNeedsFullRescan || dsh.isComplete)
+        let dshRebuildReady = apps.contains(.dsh) && !dshFrozen && dshNeedsFullRescan && dsh.isComplete
+        let canCommitDsh = apps.contains(.dsh) && !dshFrozen && (!dshNeedsFullRescan || dsh.isComplete)
         let dshUpdate = canCommitDsh
             ? DshContributionStore.apply(scan: dsh, to: dshContributions)
             : DshContributionStore.Update(contributions: dshContributions, changed: false)
@@ -2427,15 +2527,14 @@ final class UsageService {
         // 从零全量扫描（首装、进度失效）的结果本身就按现行规则和价格算出，直接建立基准；
         // 增量扫描新出现的用量键按当时价格计价，补记进基准。
         if prev.generationID.isEmpty {
-            rebuildBasis = .current(usageKeys: usageKeys, at: started)
-        } else if var basis = rebuildBasis, basis.recordNewKeys(usageKeys) {
+            rebuildBasis = .current(usageKeys: usageKeys, at: started, apps: apps)
+        } else if var basis = rebuildBasis, basis.recordNewKeys(Set(usageKeys.filter { apps.contains($0.app) })) {
             rebuildBasis = basis
         }
         // 基准建立后账本完整，seen 列表不再保存（账本没有条数上限）。
-        let ledgerComplete = rebuildBasis != nil
-        let claudeSeen = ledgerComplete ? [] : claude.newSeenIds
-        let codexSeen = ledgerComplete ? [] : codex.newSeenIds
-        let piSeen = ledgerComplete ? [] : pi.newSeenIds
+        let claudeSeen = rebuildBasis?.statsRules[UsageApp.claude.rawValue] == nil ? claude.newSeenIds : []
+        let codexSeen = rebuildBasis?.statsRules[UsageApp.codex.rawValue] == nil ? codex.newSeenIds : []
+        let piSeen = rebuildBasis?.statsRules[UsageApp.pi.rawValue] == nil ? pi.newSeenIds : []
         let dshStateForScan = canCommitDsh ? dsh.newState : prev.dsh
         // watermark 绝不能单独越过尚未落盘的聚合数据：进度落后一轮只是多扫一次，
         // 进度领先则会在重启后拿到「新 watermark + 旧汇总」，中间那段用量永久丢失。
@@ -2517,9 +2616,9 @@ final class UsageService {
             AppLog.warn(.usage, Redact.message(error))
         } else if failedFileCount > 0 {
             lastError = "usage scan incomplete: \(failedFileCount) log source(s) unreadable or conflicting; retrying next scan"
-        } else if dshFrozen {
+        } else if dshFrozen, apps.contains(.dsh) {
             lastError = "DSH usage history preserved; per-session contributions unavailable so new DSH usage is not collected"
-        } else if unverifiedDshCount > 0 {
+        } else if unverifiedDshCount > 0, apps.contains(.dsh) {
             lastError = "DSH historical usage for \(unverifiedDshCount) deleted session(s) could not be verified"
         } else {
             lastError = nil
@@ -2678,11 +2777,17 @@ final class UsageService {
         guard let baseline = committedSnapshot, baseline.codexModelIdentityMigration == nil else { return true }
         guard !storeWriteDisabled, baseline.hasScanProgress, historyRecoveryState == .complete,
               !codexModelIdentityMigrationDeferred else { return true }
+        // 重新启用 Codex 前，其他来源可能有待落盘的增量。用旧快照迁移会覆盖这些增量。
+        guard !hasUnwrittenRollupChanges, cachedScanState == baseline.scanState else { return true }
         let codexRoots = roots.codexRoots
         let evidence = await Task.detached(priority: .utility) {
             await CodexJSONLScanner.scan(previous: [:], roots: codexRoots, indexedTitles: [:],
                                          historicalBoundary: baseline.scanState.codex)
         }.value
+        guard localUsageApps().contains(.codex) else {
+            scanQueued = true
+            return false
+        }
         // 读取失败 / 根目录不可访问 / 扫描中被移走可能下次就恢复，不能当成确定结果提交。
         // 本进程不再重试；在迁移提交前，新调用继续按旧身份入账（见 usesLegacyCodexModels），
         // 下次启动以届时的进度为边界重试，旧键对账仍然成立。
@@ -2900,8 +3005,9 @@ final class UsageService {
     /// 只把“已有 Standard/Fast 用量但当前所有可靠价格源都未命中”的桶视为刷新候选。
     /// Unknown 档位和已知模型的请求级限制（例如 Codex Fast >272K）不会造成无休止刷新。
     private func missingPricingKeys(in buckets: [UsageBucket]) -> Set<PricingUsageKey> {
-        Set(buckets.compactMap { bucket -> PricingUsageKey? in
-            guard bucket.hasUnpricedUsage else { return nil }
+        let apps = localUsageApps()
+        return Set(buckets.compactMap { bucket -> PricingUsageKey? in
+            guard apps.contains(bucket.app), bucket.hasUnpricedUsage else { return nil }
             guard Pricing.needsRemotePriceRefresh(
                 model: bucket.model,
                 app: bucket.app,

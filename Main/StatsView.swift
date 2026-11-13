@@ -636,6 +636,7 @@ struct StatsView: View {
     /// 单选只看该服务；其他服务没有额度周期与额度历史，整页显示空态。
     private var quotaApps: [UsageApp] {
         let ordered: [UsageApp] = SettingsStore.shared.orderedProviders.compactMap { provider in
+            guard SettingsStore.shared.isProviderEnabled(provider.app) else { return nil }
             switch provider.app {
             case .codex: return .codex
             case .claude: return .claude
@@ -1302,6 +1303,12 @@ private struct StatsUsageErrorBanner: View {
             )
         }
         if notice?.isRestricted == true {
+            if notice?.recoveryRequiresEnabledApps == true {
+                return tr(
+                    "Existing data kept. Enable the services with saved usage to verify history and resume collection.",
+                    "现有数据保留。请启用有历史用量的服务，校验后恢复采集。"
+                )
+            }
             return notice?.verificationRejected == true
                 ? tr("History verification failed. Existing data kept; new usage is paused. Restore the logs or fix disk read/write errors, then retry.",
                      "历史校验未通过。现有数据保留，已暂停统计新用量。恢复日志或解决磁盘读写问题后再试。")

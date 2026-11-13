@@ -436,8 +436,8 @@ struct SettingsRootView: View {
             PrefsRow(
                 label: "Include Codex subscription usage in Pi, OpenCode and DSH",
                 chinese: "包含 Pi、OpenCode、DSH 中的 Codex 订阅用量",
-                desc: "When on, the Codex cards in the full-quota estimate and the Codex spend in the popover add Codex subscription usage in Pi, OpenCode and DSH on top of Codex's own usage, all toward the Codex primary account.",
-                chineseDesc: "打开后，额度用满预估的 Codex 卡和弹出面板的 Codex 花费，除了 Codex 本身的用量，还会加上在 Pi、OpenCode、DSH 中使用 Codex 订阅产生的用量，一律算到 Codex 主账号"
+                desc: "Adds Codex subscription usage from enabled agents to the primary Codex account in quota estimates and popover spend.",
+                chineseDesc: "将已启用的 Pi、OpenCode 和 DSH 中的 Codex 订阅用量计入主账号的额度预估和弹出面板花费"
             ) {
                 Toggle("", isOn: Binding(
                     get: { settings.cycleIncludesOtherAgents },
@@ -617,8 +617,8 @@ struct SettingsRootView: View {
             PrefsRow(
                 label: "Recalculate usage",
                 chinese: "重新计算用量",
-                desc: "Recompute history with the latest prices and rules. Usage from deleted logs is kept.",
-                chineseDesc: "用最新价格表和统计规则重算历史；已删除日志的对话保留用量",
+                desc: "Recompute usage for enabled services with the latest prices and rules. Usage from deleted logs is kept.",
+                chineseDesc: "按最新价格和统计规则重算已启用服务的用量，保留已删除日志的历史用量",
                 detail: recalculateOutcomeDetail
             ) {
                 // 自动重建进行中同样显示进度并禁用按钮，避免再排一次完整重建。
@@ -659,7 +659,7 @@ struct SettingsRootView: View {
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
-                    .disabled(recalculating)
+                    .disabled(recalculating || SettingsStore.shared.enabledLocalUsageApps.isEmpty)
                 }
             }
         }
@@ -1102,6 +1102,9 @@ struct SettingsRootView: View {
             get: { settings.isProviderEnabled(app) },
             set: { newValue in
                 settings.setServiceEnabled(newValue, for: app)
+                if let usageApp = app.usageApp, usageApp != .cursor {
+                    Task { await appState.usageService.localUsageSettingsDidChange(app: usageApp, enabled: newValue) }
+                }
                 // Antigravity / Cursor / Command Code / OpenCode Go 开启后立即取一次额度，不等下一轮调度。
                 guard newValue, [QuotaApp.antigravity, .cursor, .commandCode, .opencodeGo].contains(app) else { return }
                 Task { await appState.refreshQuotas(reason: .userInitiated) }
@@ -1126,11 +1129,14 @@ struct SettingsRootView: View {
         )
     }
 
-    /// 仅有用量的服务（Pi / OpenCode / DSH）的「启用」开关，直接对应统计服务可见性。
+    /// 仅有用量的服务（Pi / OpenCode / DSH）由「启用」开关控制采集和统计。
     private func usageStatsBinding(for usageApp: UsageApp, settings: SettingsStore) -> Binding<Bool> {
         Binding(
             get: { settings.isUsageServiceVisible(usageApp) },
-            set: { settings.setUsageServiceVisible($0, for: usageApp) }
+            set: { enabled in
+                settings.setUsageServiceVisible(enabled, for: usageApp)
+                Task { await appState.usageService.localUsageSettingsDidChange(app: usageApp, enabled: enabled) }
+            }
         )
     }
 
@@ -1511,6 +1517,16 @@ struct SettingsRootView: View {
             return tr(
                 "Verification failed. Existing data kept; new usage is paused. Restore the logs or fix disk read/write errors, then retry.",
                 "校验未通过：原数据保留，已暂停统计新用量。恢复日志或解决磁盘读写问题后再试"
+            )
+        case .restrictedRecoveryRequiresEnabledApps:
+            return tr(
+                "Existing data kept. To verify history, enable the services with saved usage and try again.",
+                "现有数据保留。请启用有历史用量的服务，再重新校验"
+            )
+        case .sourcesChanged:
+            return tr(
+                "Services changed during recalculation. Existing data kept. Recalculate again to apply the new selection.",
+                "重算期间服务开关发生变化，现有数据保留。请重新计算"
             )
         case .replaced, .recoveredFromRestrictedHistory, .none:
             // 周期用量与重建前不同是预期结果（以现有日志为准），不再单独提示。
@@ -2027,8 +2043,8 @@ private struct ServiceRow: View {
                 .controlSize(.small)
                 .tint(.green)
                 .help(tr(
-                    "Turning off hides this service's quota and usage. Records are kept.",
-                    "关闭后不再显示这个服务的额度和用量，已有记录保留，重新开启即可看到"
+                    "Turning off stops updates and hides this service's data. Saved usage is kept.",
+                    "关闭后停止更新并隐藏该服务的数据，已保存的用量会保留"
                 ))
                 .frame(width: ServiceRowMetrics.toggle)
         }

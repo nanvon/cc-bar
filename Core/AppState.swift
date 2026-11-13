@@ -300,7 +300,7 @@ final class AppState {
     /// 否则断网期间 Popover 会一直用一个陈旧的绿点声称"服务正常"。
     var serviceStatusUnreachable = false
 
-    let usageService = UsageService()
+    let usageService = UsageService(localUsageApps: { SettingsStore.shared.enabledLocalUsageApps })
     private let scheduler = Scheduler()
     private var codexAlertEntryVersion: UInt64 = 0
     private var primaryAlertEntryVersions: [QuotaApp: UInt64] = [:]
@@ -2499,17 +2499,19 @@ final class AppState {
     /// `snapshot` 只用来推首次拉取的起点，允许为 nil：额度失败时用量仍要刷新，
     /// 此时退化成"最近三天"窗口。
     private func refreshCursorRemoteUsage(snapshot: QuotaSnapshot?) async {
+        guard SettingsStore.shared.isUsageServiceVisible(.cursor) else { return }
         guard let session = cursorAccount else { return }
         let billingWindow = snapshot?.billingCycleWindow
         let initial = await usageService.refreshCursorRemoteUsage(
             session: session,
             billingWindow: billingWindow
         )
-        guard initial?.httpStatusCode == 401 else { return }
+        guard initial?.httpStatusCode == 401, SettingsStore.shared.isUsageServiceVisible(.cursor) else { return }
 
         let previousToken = session.accessToken
         await loadCursor()
-        guard let reloaded = cursorAccount, reloaded.accessToken != previousToken else { return }
+        guard SettingsStore.shared.isUsageServiceVisible(.cursor),
+              let reloaded = cursorAccount, reloaded.accessToken != previousToken else { return }
         _ = await usageService.refreshCursorRemoteUsage(
             session: reloaded,
             billingWindow: billingWindow
@@ -2519,15 +2521,17 @@ final class AppState {
     /// 统计页选中 Cursor 尚未缓存的有限日期范围时按月补拉。仅重读当前 Cursor.app
     /// 登录态来处理 401，不触发 OAuth 刷新，也不影响已成功的额度快照。
     func loadCursorUsageHistory(for range: Range<Date>) async {
+        guard SettingsStore.shared.isUsageServiceVisible(.cursor) else { return }
         guard beginStateOperation() else { return }
         defer { activeStateOperations -= 1 }
         guard let session = cursorAccount else { return }
         let initial = await usageService.loadCursorRemoteUsageHistory(session: session, range: range)
-        guard initial?.httpStatusCode == 401 else { return }
+        guard initial?.httpStatusCode == 401, SettingsStore.shared.isUsageServiceVisible(.cursor) else { return }
 
         let previousToken = session.accessToken
         await loadCursor()
-        guard let reloaded = cursorAccount, reloaded.accessToken != previousToken else { return }
+        guard SettingsStore.shared.isUsageServiceVisible(.cursor),
+              let reloaded = cursorAccount, reloaded.accessToken != previousToken else { return }
         _ = await usageService.loadCursorRemoteUsageHistory(session: reloaded, range: range)
     }
 

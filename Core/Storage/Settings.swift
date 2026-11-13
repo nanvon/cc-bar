@@ -676,6 +676,16 @@ final class SettingsStore {
         usageServiceVisibility[app, default: app == .cursor ? false : true]
     }
 
+    var enabledLocalUsageApps: Set<UsageApp> {
+        Set(UsageApp.localApps.filter { isUsageServiceVisible($0) })
+    }
+
+    /// 额度页和 Popover 对其他 Agent 的订阅用量使用同一份来源清单。
+    var enabledCodexSubscriptionSources: Set<UsageApp> {
+        guard cycleIncludesOtherAgents else { return [] }
+        return CycleUsageAggregator.otherAgentSourceApps.intersection(enabledLocalUsageApps)
+    }
+
     /// 统计页实际采用的可见性：在用户偏好之上叠加运行时账号可用性。
     /// Cursor 没有本地日志，账号消失后远端缓存不会再更新，继续展示只会留下一条空服务行；
     /// 但偏好本身保留，用户重新登录 Cursor 后自动恢复，不需要再去设置页打开一次。

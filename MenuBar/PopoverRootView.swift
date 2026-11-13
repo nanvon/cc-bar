@@ -288,14 +288,13 @@ struct PopoverRootView: View {
             + otherAgentSubscriptionCost(for: app, from: from, to: to)
     }
 
-    /// 开关打开时 Codex 花费按订阅口径算：同时计入 Pi / OpenCode / DSH 里的 Codex 订阅用量。
-    private func includesOtherAgentSubscription(_ app: QuotaApp) -> Bool {
-        app == .codex && SettingsStore.shared.cycleIncludesOtherAgents
-    }
-
     private func otherAgentSubscriptionCost(for app: QuotaApp, from: Date, to: Date) -> Decimal {
-        guard includesOtherAgentSubscription(app), let usageApp = app.usageApp else { return 0 }
-        return appState.usageService.aggregator.otherAgentSubscriptionCost(for: usageApp, from: from, to: to)
+        guard app == .codex else { return 0 }
+        let sources = SettingsStore.shared.enabledCodexSubscriptionSources
+        guard !sources.isEmpty else { return 0 }
+        return appState.usageService.aggregator.otherAgentSubscriptionCost(
+            for: .codex, sources: sources, from: from, to: to
+        )
     }
 
     /// 远端计量按自然日分桶，起点取周期开始那天的 0 点，与补拉范围一致。

@@ -481,10 +481,6 @@ nonisolated enum UsageStatsRules {
         .dsh: 2,
         .antigravity: 2,
     ]
-
-    static var persisted: [String: Int] {
-        Dictionary(uniqueKeysWithValues: versions.map { ($0.key.rawValue, $0.value) })
-    }
 }
 
 /// 自动重建的原因，写日志用。
@@ -514,18 +510,49 @@ nonisolated struct UsageRebuildBasis: Sendable, Codable, Equatable {
     /// 每个用量键计价时采用的远端价格（`Pricing.remotePricingSignature(for:)`），
     /// 键为 `PricingUsageKey.persistedKey`。增量扫描遇到新键时按当时的价格补记。
     var remotePricing: [String: String]
+    /// 部分来源重算时，未参与来源继续使用原来的本地价格指纹与重算时间。
+    var localPricingByApp: [String: String]?
+    var rebuiltAtByApp: [String: Date]?
 
     /// 按现行规则和价格建立基准。
-    static func current(usageKeys: Set<PricingUsageKey>, at date: Date) -> UsageRebuildBasis {
+    static func current(
+        usageKeys: Set<PricingUsageKey>,
+        at date: Date,
+        apps: Set<UsageApp> = Set(UsageApp.localApps),
+        preserving previous: UsageRebuildBasis? = nil
+    ) -> UsageRebuildBasis {
         var remote: [String: String] = [:]
         for key in usageKeys {
-            remote[key.persistedKey] = Pricing.remotePricingSignature(for: key)
+            if apps.contains(key.app) {
+                remote[key.persistedKey] = Pricing.remotePricingSignature(for: key)
+            } else {
+                remote[key.persistedKey] = previous?.remotePricing[key.persistedKey]
+            }
         }
+        let localPricing = Pricing.localPricingFingerprint()
+        var statsRules: [String: Int] = [:]
+        var pricingByApp: [String: String] = [:]
+        var datesByApp: [String: Date] = [:]
+        for app in UsageApp.localApps {
+            let key = app.rawValue
+            if apps.contains(app) {
+                statsRules[key] = UsageStatsRules.versions[app]
+                pricingByApp[key] = localPricing
+                datesByApp[key] = date
+            } else if let previous, let version = previous.statsRules[key] {
+                statsRules[key] = version
+                pricingByApp[key] = previous.localPricingByApp?[key] ?? previous.localPricing
+                datesByApp[key] = previous.rebuiltAtByApp?[key] ?? previous.rebuiltAt
+            }
+        }
+        let partial = !apps.isSuperset(of: UsageApp.localApps)
         return UsageRebuildBasis(
             rebuiltAt: date,
-            statsRules: UsageStatsRules.persisted,
-            localPricing: Pricing.localPricingFingerprint(),
-            remotePricing: remote
+            statsRules: statsRules,
+            localPricing: localPricing,
+            remotePricing: remote,
+            localPricingByApp: partial ? pricingByApp : nil,
+            rebuiltAtByApp: partial ? datesByApp : nil
         )
     }
 
@@ -554,21 +581,29 @@ nonisolated struct UsageRebuildBasis: Sendable, Codable, Equatable {
         unpricedKeys: Set<PricingUsageKey>,
         userRequestedCatalog: Bool,
         now: Date,
-        minimumInterval: TimeInterval
+        minimumInterval: TimeInterval,
+        apps: Set<UsageApp> = Set(UsageApp.localApps)
     ) -> UsageAutomaticRebuildReason? {
+        guard !apps.isEmpty else { return nil }
         guard let basis, basis.version == currentVersion,
-              basis.statsRules == UsageStatsRules.persisted
+              apps.allSatisfy({ basis.statsRules[$0.rawValue] == UsageStatsRules.versions[$0] })
         else { return .statsRules }
-        if basis.localPricing != Pricing.localPricingFingerprint() { return .localPricing }
+        let localPricing = Pricing.localPricingFingerprint()
+        if apps.contains(where: { (basis.localPricingByApp?[$0.rawValue] ?? basis.localPricing) != localPricing }) {
+            return .localPricing
+        }
         // 只比较两边都有的键：Codex 标识迁移等改名后，旧键不再出现在用量里。
         let changed = usageKeys.filter { key in
-            guard let recorded = basis.remotePricing[key.persistedKey] else { return false }
+            guard apps.contains(key.app), let recorded = basis.remotePricing[key.persistedKey] else { return false }
             return recorded != Pricing.remotePricingSignature(for: key)
         }
         guard !changed.isEmpty else { return nil }
         if !changed.isDisjoint(with: unpricedKeys) { return .newlyPriced }
         if userRequestedCatalog { return .catalogUpdatedByUser }
-        return now.timeIntervalSince(basis.rebuiltAt) >= minimumInterval ? .remotePricing : nil
+        return changed.contains {
+            let rebuiltAt = basis.rebuiltAtByApp?[$0.app.rawValue] ?? basis.rebuiltAt
+            return now.timeIntervalSince(rebuiltAt) >= minimumInterval
+        } ? .remotePricing : nil
     }
 }
 
@@ -856,6 +891,10 @@ nonisolated enum UsageRebuildOutcome: Sendable, Equatable {
     case recoveredFromRestrictedHistory
     /// 受限恢复的核对无法确认，保留历史、停止自动全量重扫。
     case restrictedRecoveryRejected
+    /// 核对进度需要先启用有历史数据的来源。
+    case restrictedRecoveryRequiresEnabledApps
+    /// 扫描期间有参与的来源被关闭，丢弃本轮结果。
+    case sourcesChanged
 }
 
 /// 受限恢复（历史可用但没有可信进度）的状态。

@@ -7,30 +7,38 @@ import os
 /// 刻意放在顶层而非嵌套进 `UsageLogWatcher`：嵌套类型会继承外层的 `@MainActor`
 /// 隔离，而这个盒子必须能在 FSEvents 的后台回调里直接访问。
 private final class UsageLogChangeFlag: Sendable {
-    private let state = OSAllocatedUnfairLock(initialState: true)
-    let matcher = UsageLogPathMatcher.standard()
+    private nonisolated struct State: Sendable {
+        var changed = true
+        var matcher = UsageLogPathMatcher(directories: [], files: [])
+    }
+
+    private let state = OSAllocatedUnfairLock(initialState: State())
+
+    func updateMatcher(_ matcher: UsageLogPathMatcher) {
+        state.withLock {
+            $0.matcher = matcher
+            $0.changed = true
+        }
+    }
 
     func mark() {
-        state.withLock { $0 = true }
+        state.withLock { $0.changed = true }
     }
 
     /// FSEvents 回调入口：只有本批事件里有用量日志相关的路径才置位。
     func handle(paths: [String], flags: [FSEventStreamEventFlags]) {
-        guard matcher.shouldMark(paths: paths, flags: flags) else { return }
-        mark()
+        state.withLock {
+            if $0.matcher.shouldMark(paths: paths, flags: flags) { $0.changed = true }
+        }
     }
 
     /// 读取并清零。
     func consume() -> Bool {
         state.withLock { value in
-            let current = value
-            value = false
+            let current = value.changed
+            value.changed = false
             return current
         }
-    }
-
-    func raise() {
-        state.withLock { $0 = true }
     }
 }
 
@@ -47,18 +55,27 @@ nonisolated struct UsageLogPathMatcher: Sendable {
     /// SQLite 库所在目录（Antigravity 每个对话一个库）：其下除 `-shm` 外的写入都算变化。
     var databaseDirectories: [String] = []
 
-    static func standard(roots: UsageScanRoots = .production) -> UsageLogPathMatcher {
-        let directories = [roots.claudeRoot] + roots.codexRoots + [roots.piRoot, roots.dshRoot]
-            + roots.antigravityRoots.map { $0.appendingPathComponent("annotations", isDirectory: true) }
+    static func standard(
+        roots: UsageScanRoots = .production,
+        apps: Set<UsageApp> = Set(UsageApp.localApps)
+    ) -> UsageLogPathMatcher {
+        var directories: [URL] = []
+        if apps.contains(.claude) { directories.append(roots.claudeRoot) }
+        if apps.contains(.codex) { directories.append(contentsOf: roots.codexRoots) }
+        if apps.contains(.pi) { directories.append(roots.piRoot) }
+        if apps.contains(.dsh) { directories.append(roots.dshRoot) }
+        let antigravityRoots = apps.contains(.antigravity) ? roots.antigravityRoots : []
+        directories.append(contentsOf: antigravityRoots.map { $0.appendingPathComponent("annotations") })
         // 只认数据库本体和 WAL；`-shm` 读者也会写，不代表有新数据。
         let database = roots.opencodeDatabaseURL
-        let files = [
-            database,
-            database.deletingLastPathComponent()
-                .appendingPathComponent(database.lastPathComponent + "-wal", isDirectory: false),
-        ] + roots.antigravityRoots.flatMap { root in
+        var files = antigravityRoots.flatMap { root in
             ["agyhub_summaries_proto.pb", "conversation_summaries.db", "conversation_summaries.db-wal"]
                 .map { root.appendingPathComponent($0) }
+        }
+        if apps.contains(.opencode) {
+            files.append(database)
+            files.append(database.deletingLastPathComponent()
+                .appendingPathComponent(database.lastPathComponent + "-wal"))
         }
         // FSEvents 上报的是解析过符号链接的真实路径，两种写法都收下。
         func variants(_ urls: [URL]) -> [String] {
@@ -67,7 +84,7 @@ nonisolated struct UsageLogPathMatcher: Sendable {
         return UsageLogPathMatcher(
             directories: variants(directories),
             files: Set(variants(files)),
-            databaseDirectories: variants(AntigravityScanner.conversationDirectories(roots: roots.antigravityRoots))
+            databaseDirectories: variants(AntigravityScanner.conversationDirectories(roots: antigravityRoots))
         )
     }
 
@@ -121,6 +138,7 @@ final class UsageLogWatcher {
     private var stream: FSEventStreamRef?
     /// 已成功纳入监听的路径；用于判断是否有新出现的日志根需要重建 stream。
     private var watchedRoots: Set<String> = []
+    private var enabledApps: Set<UsageApp> = []
     private var lastScanStartedAt: Date?
     private var suspendedForTermination = false
 
@@ -129,26 +147,42 @@ final class UsageLogWatcher {
     /// 各扫描器的日志根。监听的是 provider 的顶层目录而不是精确的 sessions 子目录：
     /// 子目录可能尚未创建，而 FSEvents 只监听创建 stream 时已存在的路径。
     /// 顶层目录里的无关写入由 `UsageLogPathMatcher` 按文件路径过滤掉。
-    private static func candidateRoots() -> [String] {
+    private static func candidateRoots(apps: Set<UsageApp>) -> [String] {
         let home = FileManager.default.homeDirectoryForCurrentUser
-        return [
-            ".claude",
-            ".codex",
-            ".pi",
-            ".local/share/opencode",
+        let candidates: [(UsageApp, String)] = [
+            (.claude, ".claude"),
+            (.codex, ".codex"),
+            (.pi, ".pi"),
+            (.opencode, ".local/share/opencode"),
             // DSH：默认根 `~/.dsh/sessions`，这里监听顶层目录（sessions 可能尚未创建）。
-            ".dsh",
+            (.dsh, ".dsh"),
             // Antigravity：`~/.gemini/antigravity*/conversations` 与 `~/.config/antigravity`。
-            ".gemini",
-            ".config/antigravity",
-        ].map { home.appendingPathComponent($0, isDirectory: true).path }
+            (.antigravity, ".gemini"),
+            (.antigravity, ".config/antigravity"),
+        ]
+        return candidates.compactMap { app, path in
+            apps.contains(app) ? home.appendingPathComponent(path, isDirectory: true).path : nil
+        }
+    }
+
+    func updateSources(_ apps: Set<UsageApp>) {
+        guard apps != enabledApps else { return }
+        enabledApps = apps
+        stopStream()
+        changeFlag.updateMatcher(.standard(apps: apps))
+        if !apps.isEmpty, !suspendedForTermination { startIfNeeded() }
     }
 
     /// 周期扫描的门控：返回 true 表示这一轮应该真的扫。
     /// 标记在扫描**开始前**清零，扫描期间产生的新事件会重新置位、由下一轮接手。
-    func shouldScan(now: Date = Date()) -> Bool {
+    func shouldScan(apps: Set<UsageApp>, now: Date = Date()) -> Bool {
         guard !suspendedForTermination else { return false }
-        startIfNeeded()
+        if apps == enabledApps {
+            if !apps.isEmpty { startIfNeeded() }
+        } else {
+            updateSources(apps)
+        }
+        guard !apps.isEmpty else { return false }
         let forced = lastScanStartedAt.map { now.timeIntervalSince($0) >= Self.maxSkipInterval } ?? true
         let changed = changeFlag.consume()
         guard changed || forced else { return false }
@@ -158,7 +192,7 @@ final class UsageLogWatcher {
 
     /// 扫描留下了还没读完的内容（例如末尾仍在写的消息）：下一轮周期扫描不受门控跳过。
     func requestRescan() {
-        changeFlag.raise()
+        changeFlag.mark()
     }
 
     func suspendForTermination() {
@@ -168,19 +202,20 @@ final class UsageLogWatcher {
 
     func resumeAfterCancelledTermination() {
         suspendedForTermination = false
-        changeFlag.raise()
-        startIfNeeded()
+        changeFlag.mark()
+        if !enabledApps.isEmpty { startIfNeeded() }
     }
 
     // MARK: - FSEvents
 
     private func startIfNeeded() {
-        let existing = Set(Self.candidateRoots().filter {
+        let existing = Set(Self.candidateRoots(apps: enabledApps).filter {
             FileManager.default.fileExists(atPath: $0)
         })
         guard !existing.isEmpty else {
             // 一个日志根都没有：没什么可监听的，门控保持放行由扫描器自己发现空目录。
-            changeFlag.raise()
+            stopStream()
+            changeFlag.mark()
             return
         }
         // 已在监听且没有新出现的根 → 无需重建。
@@ -225,7 +260,7 @@ final class UsageLogWatcher {
             )
         ) else {
             // 建流失败：保持放行，行为与没有门控时一致。
-            changeFlag.raise()
+            changeFlag.mark()
             AppLog.warn(.usage, "FSEventStreamCreate failed; falling back to full scan each cycle")
             return
         }
@@ -234,14 +269,14 @@ final class UsageLogWatcher {
         guard FSEventStreamStart(created) else {
             FSEventStreamInvalidate(created)
             FSEventStreamRelease(created)
-            changeFlag.raise()
+            changeFlag.mark()
             AppLog.warn(.usage, "FSEventStreamStart failed; falling back to full scan each cycle")
             return
         }
         stream = created
         watchedRoots = existing
         // 建流之前发生的写入不会补发，先放行一轮把差量扫进来。
-        changeFlag.raise()
+        changeFlag.mark()
     }
 
     private func stopStream() {

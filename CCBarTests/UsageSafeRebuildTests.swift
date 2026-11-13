@@ -24,6 +24,84 @@ final class UsageSafeRebuildTests: XCTestCase {
 
     private let model = "ccbar-safe-model"
 
+    func testDisabledSourceKeepsHistoryAndProgressAcrossRebuildAndRestart() async throws {
+        let env = environment!
+        let reference = Date()
+        var enabled: Set<UsageApp> = [.claude, .codex]
+        let service = env.makeService { enabled }
+        env.appState.quotaCycles.records = [
+            makeCycle(id: "switch-claude", app: .claude, accountKey: "claude-test", kind: .fiveHour,
+                      startAt: reference.addingTimeInterval(-7_200), endAt: reference.addingTimeInterval(7_200)),
+        ]
+        env.appState.quotaCycles.accountSegments = [
+            QuotaCycleAccountSegment(id: "switch-account", accountKey: "claude-test", app: .claude,
+                                     startAt: reference.addingTimeInterval(-86_400), endAt: nil),
+        ]
+        let oldLine = env.claudeLine(
+            id: "before-disable", session: "service-toggle", model: model,
+            timestamp: timestamp(-1, from: reference), input: 100, output: 10
+        )
+        let newLine = env.claudeLine(
+            id: "while-disabled", session: "service-toggle", model: model,
+            timestamp: timestamp(-0.5, from: reference), input: 200, output: 20
+        )
+        let claudeLog = try env.writeClaudeLog(session: "service-toggle", lines: [oldLine])
+        await env.bootstrap(service)
+        await service.scanNow()
+        let before = try committed(env)
+        XCTAssertEqual(before.cycleRollup.buckets.map(\.inputTokens), [100])
+
+        enabled.remove(.claude)
+        try env.append(newLine, to: claudeLog)
+        try env.writeCodexLog(
+            id: "enabled-codex",
+            lines: env.codexLines(id: "enabled-codex", model: model, timestampPrefix: timestamp(-1, from: reference),
+                                  input: 500, cachedInput: 0, output: 50)
+        )
+        await service.scanNow()
+        await service.rebuildCycleUsageForRecentChanges(reasons: ["disabled source test"])
+        XCTAssertEqual(env.totals(result(service).day, app: .claude).inputTokens, 100)
+        XCTAssertEqual(env.totals(result(service).day, app: .codex).inputTokens, 500)
+        await service.forceRescan()
+        guard case .replaced = service.lastRebuildOutcome else {
+            return XCTFail("Expected the enabled sources to be recalculated")
+        }
+        let after = try committed(env)
+        XCTAssertEqual(after.scanState.claude, before.scanState.claude)
+        XCTAssertEqual(after.scanState.claudeSeenMessageIds, before.scanState.claudeSeenMessageIds)
+        XCTAssertEqual(after.messageLedger?.conversations["claude"], before.messageLedger?.conversations["claude"])
+        XCTAssertEqual(after.usageRollup.buckets.filter { $0.app == .claude },
+                       before.usageRollup.buckets.filter { $0.app == .claude })
+        XCTAssertEqual(after.conversationRollup.buckets.filter { $0.app == .claude },
+                       before.conversationRollup.buckets.filter { $0.app == .claude })
+        XCTAssertEqual(after.cycleRollup.buckets, before.cycleRollup.buckets)
+
+        let restarted = env.makeService { enabled }
+        await env.bootstrap(restarted)
+        await restarted.scanNow()
+        XCTAssertEqual(env.totals(result(restarted).day, app: .claude).inputTokens, 100)
+        enabled.insert(.claude)
+        await restarted.scanNow()
+        await restarted.scanNow()
+        XCTAssertEqual(env.totals(result(restarted).day, app: .claude).inputTokens, 300)
+        XCTAssertEqual(result(restarted).cycle.reduce(0) { $0 + $1.inputTokens }, 300)
+    }
+
+    func testPartialRebuildKeepsDisabledSourcesPricingBasis() {
+        let now = Date()
+        var previous = UsageRebuildBasis.current(usageKeys: [], at: now.addingTimeInterval(-3600))
+        previous.localPricing = "older"
+        let partial = UsageRebuildBasis.current(usageKeys: [], at: now, apps: [.codex], preserving: previous)
+        XCTAssertNil(UsageRebuildBasis.rebuildReason(
+            basis: partial, usageKeys: [], unpricedKeys: [], userRequestedCatalog: false,
+            now: now, minimumInterval: 24 * 3600, apps: [.codex]
+        ))
+        XCTAssertEqual(UsageRebuildBasis.rebuildReason(
+            basis: partial, usageKeys: [], unpricedKeys: [], userRequestedCatalog: false,
+            now: now, minimumInterval: 24 * 3600, apps: [.claude, .codex]
+        ), .localPricing)
+    }
+
     private struct ScanResult {
         var day: [UsageBucket]
         var conversation: [ConversationUsageBucket]

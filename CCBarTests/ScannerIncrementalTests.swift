@@ -1079,6 +1079,11 @@ final class ScannerIncrementalTests: XCTestCase {
         XCTAssertFalse(matcher.matches("/Users/tester/.claude/projects-old/x.jsonl"), "前缀须按路径段匹配")
         XCTAssertFalse(matcher.matches("/Users/tester/.codex/config.toml"))
 
+        let enabledMatcher = UsageLogPathMatcher.standard(roots: roots, apps: [.codex])
+        XCTAssertTrue(enabledMatcher.matches("/Users/tester/.codex/sessions/r.jsonl"))
+        XCTAssertFalse(enabledMatcher.matches("/Users/tester/.claude/projects/-a/s.jsonl"))
+        XCTAssertFalse(enabledMatcher.matches("/Users/tester/.local/share/opencode/opencode.db-wal"))
+
         let unrelated = "/Users/tester/.codex/config.toml"
         XCTAssertFalse(matcher.shouldMark(paths: [unrelated], flags: [0]))
         XCTAssertTrue(matcher.shouldMark(

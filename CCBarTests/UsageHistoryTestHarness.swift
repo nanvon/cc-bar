@@ -75,13 +75,16 @@ final class UsageTestEnvironment {
         )
     }
 
-    func makeService() -> UsageService {
+    func makeService(
+        localUsageApps: @escaping @MainActor () -> Set<UsageApp> = { Set(UsageApp.localApps) }
+    ) -> UsageService {
         UsageService(
             historyStore: store,
             roots: scanRoots,
             legacyLocations: legacyLocations,
             backfillURL: backfillURL,
-            cursorCacheDirectory: cursorCacheDirectory
+            cursorCacheDirectory: cursorCacheDirectory,
+            localUsageApps: localUsageApps
         )
     }
 

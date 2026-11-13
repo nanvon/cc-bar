@@ -2655,16 +2655,18 @@ final class QuotaParsingTests: XCTestCase {
             accountSegments: segments
         )
 
-        func totalInput(includeOtherAgents: Bool) -> Int? {
+        func totalInput(otherAgentSources: Set<UsageApp>) -> Int? {
             aggregator.summaries(
                 cycles: [cycle],
                 kind: .weekly,
                 app: .codex,
-                includeOtherAgents: includeOtherAgents
+                otherAgentSources: otherAgentSources
             ).first?.totals.inputTokens
         }
-        XCTAssertEqual(totalInput(includeOtherAgents: false), 100)
-        XCTAssertEqual(totalInput(includeOtherAgents: true), 118)
+        let allSources = CycleUsageAggregator.otherAgentSourceApps
+        XCTAssertEqual(totalInput(otherAgentSources: []), 100)
+        XCTAssertEqual(totalInput(otherAgentSources: allSources), 118)
+        XCTAssertEqual(totalInput(otherAgentSources: [.pi, .dsh]), 113)
 
         // OpenCode 刷新会话给出完整用量，按会话替换而不是累加。
         aggregator.replaceConversations(
@@ -2674,7 +2676,7 @@ final class QuotaParsingTests: XCTestCase {
             cycles: [cycle],
             accountSegments: segments
         )
-        XCTAssertEqual(totalInput(includeOtherAgents: true), 120)
+        XCTAssertEqual(totalInput(otherAgentSources: allSources), 120)
 
         // 只重建 Pi 时不动 Codex 与 OpenCode 的桶。
         aggregator.rebuildRange(
@@ -2684,8 +2686,8 @@ final class QuotaParsingTests: XCTestCase {
             affectedCycleIDs: [cycle.id],
             sourceApps: [.pi]
         )
-        XCTAssertEqual(totalInput(includeOtherAgents: false), 100)
-        XCTAssertEqual(totalInput(includeOtherAgents: true), 130)
+        XCTAssertEqual(totalInput(otherAgentSources: []), 100)
+        XCTAssertEqual(totalInput(otherAgentSources: allSources), 130)
 
         // DSH 换 generation / 重扫时按会话替换，其余会话不受影响。
         aggregator.replaceConversations(
@@ -2695,7 +2697,7 @@ final class QuotaParsingTests: XCTestCase {
             cycles: [cycle],
             accountSegments: segments
         )
-        XCTAssertEqual(totalInput(includeOtherAgents: true), 131)
+        XCTAssertEqual(totalInput(otherAgentSources: allSources), 131)
     }
 
     func testSubscriptionUsageMatchesOnlyOfficialModels() {

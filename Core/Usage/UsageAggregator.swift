@@ -158,10 +158,10 @@ final class UsageAggregator {
 
     /// 其他 Agent 里归入该额度服务订阅的本地用量费用（归属规则同 `CycleUsageAggregator.cycleApp`），
     /// 不含该服务自己的日志。
-    func otherAgentSubscriptionCost(for quotaApp: UsageApp, from: Date, to: Date) -> Decimal {
+    func otherAgentSubscriptionCost(for quotaApp: UsageApp, sources: Set<UsageApp>, from: Date, to: Date) -> Decimal {
         var sum: Decimal = 0
         for b in localBuckets.values
-        where b.app != quotaApp && b.day >= from && b.day < to
+        where b.app != quotaApp && sources.contains(b.app) && b.day >= from && b.day < to
             && CycleUsageAggregator.cycleApp(app: b.app, model: b.model) == quotaApp {
             sum += b.costUSD
         }
