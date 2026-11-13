@@ -334,7 +334,7 @@ struct ServiceTile: View {
     let logoName: String
     /// 备用字母(SVG 加载失败时显示)。
     let fallback: String
-    /// 背景填充色(服务识别色)。Codex 走 OpenAI 官方观感(白底黑 logo)、DSH / Cursor 走固定深色底,会忽略此值。
+    /// 背景填充色(服务识别色),与图表 / 色块用同一个值。
     let tint: Color
     /// tile 尺寸,默认 Popover 用 22pt。
     var size: CGFloat = 22
@@ -343,37 +343,19 @@ struct ServiceTile: View {
     /// 圆角半径,默认 6pt。
     var cornerRadius: CGFloat = 6
 
-    /// Codex 的 tile 还原 OpenAI 官方品牌图标:白底黑 logo + 极细边框。
-    /// 其余地方(文字色、环形、图表)的 `Color.codexAccent` 仍是石墨灰,不受影响。
-    private var isOpenAIBrand: Bool { logoName == "codex" }
-
-    /// 固定深色底 + 白色 logo,不随外观切换:
-    /// - DSH:官方品牌主色(dsh-client-ui-theme `brand-primary` 浅色值 #0F1115),图表里的 `Color.dshAccent` 是项目自选深蓝;
-    /// - Cursor:`CursorAccent` 深色值是近白,直接当底色会吞掉白色 logo,所以 tile 固定用它的浅色值 #2C2C2E。
-    private var fixedDarkBackground: Color? {
-        switch logoName {
-        case "dsh": Color(red: 15 / 255, green: 17 / 255, blue: 21 / 255)
-        case "cursor": Color(red: 44 / 255, green: 44 / 255, blue: 46 / 255)
-        default: nil
+    /// 底色统一取服务识别色,logo 默认白色。
+    /// Cursor 例外:`CursorAccent` 深色值是近白,深色外观下 logo 改用近黑,避免白 logo 看不见。
+    private var foreground: Color {
+        if logoName == "cursor" {
+            return adaptiveColor(light: (255, 255, 255), dark: (29, 29, 31)) // 白 / #1D1D1F
         }
+        return .white
     }
-
-    private var background: Color {
-        if isOpenAIBrand { return .white }
-        return fixedDarkBackground ?? tint
-    }
-    private var foreground: Color { isOpenAIBrand ? .black : .white }
 
     var body: some View {
         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-            .fill(background)
+            .fill(tint)
             .frame(width: size, height: size)
-            .overlay {
-                if isOpenAIBrand {
-                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .strokeBorder(Color.black.opacity(0.12), lineWidth: 0.5)
-                }
-            }
             .overlay(logoView)
     }
 
