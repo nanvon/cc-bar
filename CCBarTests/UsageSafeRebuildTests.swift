@@ -311,6 +311,27 @@ final class UsageSafeRebuildTests: XCTestCase {
         try assertSameDayVector(before.day, result(service).day, env: env)
     }
 
+    func testUnreadablePiLogRejectsRebuildAndPreservesHistory() async throws {
+        let env = environment!
+        let log = try env.writePiLog(session: "pi-read-failure", lines: env.piLines(
+            session: "pi-read-failure", entryID: "entry", timestamp: timestamp(-1, from: Date()),
+            model: model, input: 100, output: 10
+        ))
+        let service = env.makeService { [.pi] }
+        await env.bootstrap(service)
+        await service.scanNow()
+        let before = try committed(env)
+        XCTAssertEqual(env.totals(before.usageRollup.buckets, app: .pi).inputTokens, 100)
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: log.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: log.path) }
+        await service.forceRescan()
+
+        XCTAssertEqual(service.lastRebuildOutcome, .rejectedIncompleteSources("Pi"))
+        XCTAssertEqual(try committed(env).snapshotID, before.snapshotID)
+        XCTAssertEqual(env.totals(result(service).day, app: .pi).inputTokens, 100)
+    }
+
     func testMissingDshLogPreservesHistoryInsteadOfClearing() async throws {
         let env = environment!
         let service = try await seed(env)
@@ -872,6 +893,34 @@ final class UsageSafeRebuildTests: XCTestCase {
             UsageHistoryConsistency.cycleVector(after.cycle),
             "窗口滚动重建后周期向量必须一致"
         )
+    }
+
+    func testRecentCycleRebuildKeepsBucketsForDeletedLogs() async throws {
+        let env = environment!
+        let now = Date()
+        env.appState.quotaCycles.records = [
+            makeCycle(id: "claude-cycle", app: .claude, accountKey: "acct-a", kind: .weekly,
+                      startAt: now.addingTimeInterval(-86_400), endAt: now.addingTimeInterval(86_400)),
+        ]
+        env.appState.quotaCycles.accountSegments = [
+            QuotaCycleAccountSegment(id: "seg-a", accountKey: "acct-a", app: .claude,
+                                     startAt: now.addingTimeInterval(-86_400), endAt: nil),
+        ]
+        let log = try env.writeClaudeLog(session: "deleted-cycle", lines: [env.claudeLine(
+            id: "entry", session: "deleted-cycle", model: model,
+            timestamp: timestamp(-1, from: now), input: 100, output: 10
+        )])
+        let service = env.makeService { [.claude] }
+        await env.bootstrap(service)
+        await service.scanNow()
+        let before = try committed(env).cycleRollup.buckets
+        XCTAssertEqual(before.map(\.inputTokens), [100])
+
+        try FileManager.default.removeItem(at: log)
+        await service.rebuildCycleUsageForRecentChanges()
+
+        XCTAssertEqual(result(service).cycle, before)
+        XCTAssertEqual(try committed(env).cycleRollup.buckets, before)
     }
 
     func testRebuildWithoutCycleRecordsKeepsCycleAggregatorEmpty() async throws {

@@ -57,7 +57,8 @@ nonisolated enum ClaudeTokenRefresher {
         if !isExpired(expiresAt: account.expiresAt) {
             return .success(current)
         }
-        if let fresh = await Coordinator.shared.adoptFresh(source: account.source) {
+        if let fresh = await Coordinator.shared.adoptFresh(source: account.source),
+           fresh.accessToken == current || matchesCurrentProfile(account) {
             account.accessToken = fresh.accessToken
             account.refreshToken = fresh.refreshToken ?? account.refreshToken
             account.expiresAt = fresh.expiresAt
@@ -76,6 +77,17 @@ nonisolated enum ClaudeTokenRefresher {
         }
         AppLog.info(.credentials, "stored Claude credentials are expired; waiting for Claude Code to refresh")
         return .failure(.credentialsExpired(desktopAccessDenied: desktopAccessDenied(for: account)))
+    }
+
+    private static func matchesCurrentProfile(_ account: ClaudeAccount) -> Bool {
+        let profile = ClaudeAuth.loadProfileFromConfig()
+        if let expected = account.organizationUuid, let actual = profile.organizationUuid,
+           expected.caseInsensitiveCompare(actual) != .orderedSame { return false }
+        if let expected = account.accountUuid, let actual = profile.accountUuid {
+            return expected.caseInsensitiveCompare(actual) == .orderedSame
+        }
+        guard let expected = account.email, let actual = profile.email else { return false }
+        return expected.caseInsensitiveCompare(actual) == .orderedSame
     }
 
     /// 借用 Desktop token 是否正卡在"用户拒绝过钥匙串授权"上:Desktop 有登录数据、

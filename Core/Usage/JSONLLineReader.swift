@@ -458,7 +458,7 @@ nonisolated struct LogReadFailure: Sendable, Equatable {
         case permissionDenied
         /// `.jsonl.zst` 有读取权限但解压失败：压缩日志损坏或不完整。
         case decompressFailed
-        /// 根目录存在但不是目录，或枚举器无法打开。
+        /// 根目录或其中的路径无法读取。
         case directoryUnavailable
         /// 其他读取错误，例如磁盘 I/O 错误。
         case readFailed
@@ -487,6 +487,7 @@ enum JSONLDirectoryEnumerator {
         var files: [JSONLFileDescriptor]
         /// 根目录存在但不是目录，或枚举器无法打开。
         var accessFailed: Bool
+        var enumerationIncomplete = false
     }
 
     nonisolated static let zstdSuffix = ".jsonl.zst"
@@ -527,6 +528,7 @@ enum JSONLDirectoryEnumerator {
         guard isDir.boolValue else {
             return Result(files: [], accessFailed: true)
         }
+        var enumerationIncomplete = false
         guard let it = fm.enumerator(
             at: root,
             includingPropertiesForKeys: [
@@ -535,7 +537,11 @@ enum JSONLDirectoryEnumerator {
                 .creationDateKey,
                 .fileSizeKey,
             ],
-            options: [.skipsHiddenFiles]
+            options: [.skipsHiddenFiles],
+            errorHandler: { _, _ in
+                enumerationIncomplete = true
+                return true
+            }
         ) else {
             return Result(files: [], accessFailed: true)
         }
@@ -551,6 +557,7 @@ enum JSONLDirectoryEnumerator {
                 .fileSizeKey,
             ])
             let modificationDate = values?.contentModificationDate
+            if values == nil { enumerationIncomplete = true }
             if let minimumMtime {
                 guard let modificationDate, modificationDate >= minimumMtime else { continue }
             }
@@ -566,6 +573,6 @@ enum JSONLDirectoryEnumerator {
             // 明文按 minimumMtime 过滤前就记入 plainPaths：被过滤的明文同样遮住它的压缩副本。
             result.removeAll { $0.isZstd && plainPaths.contains(String($0.path.dropLast(".zst".count))) }
         }
-        return Result(files: result, accessFailed: false)
+        return Result(files: result, accessFailed: false, enumerationIncomplete: enumerationIncomplete)
     }
 }

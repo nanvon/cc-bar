@@ -1,5 +1,6 @@
 import Foundation
 import Security
+import os
 
 // MARK: - ImportedCodexStore
 //
@@ -20,6 +21,7 @@ enum ImportedCodexStore {
     nonisolated static let keychainService = "com.cc-bar.codex.imported"
     nonisolated private static let fileName = "imported_codex_accounts.json"
     nonisolated private static let bundleDirectory = "CCBar"
+    nonisolated private static let tokenWriteLock = OSAllocatedUnfairLock()
 
     // MARK: - 元数据 (JSON)
 
@@ -76,6 +78,24 @@ enum ImportedCodexStore {
     }
 
     nonisolated static func saveTokens(_ tokens: ImportedCodexTokens, accountId: String) throws {
+        try tokenWriteLock.withLock {
+            try writeTokens(tokens, accountId: accountId, allowInsert: true)
+        }
+    }
+
+    nonisolated static func replaceTokens(
+        _ tokens: ImportedCodexTokens, matching expected: ImportedCodexTokens, accountId: String
+    ) throws -> Bool {
+        try tokenWriteLock.withLock {
+            guard loadTokens(accountId: accountId) == expected else { return false }
+            try writeTokens(tokens, accountId: accountId, allowInsert: false)
+            return true
+        }
+    }
+
+    nonisolated private static func writeTokens(
+        _ tokens: ImportedCodexTokens, accountId: String, allowInsert: Bool
+    ) throws {
         let data = try JSONEncoder().encode(tokens)
 
         // 先尝试 update,失败再 add — 经典的 upsert 模式。
@@ -87,7 +107,7 @@ enum ImportedCodexStore {
             attributesToUpdate as CFDictionary
         )
         if updateStatus == errSecSuccess { return }
-        if updateStatus != errSecItemNotFound {
+        if updateStatus != errSecItemNotFound || !allowInsert {
             throw KeychainError.unexpected(updateStatus)
         }
 
@@ -112,7 +132,9 @@ enum ImportedCodexStore {
     }
 
     nonisolated static func deleteTokens(accountId: String) {
-        SecItemDelete(baseQuery(account: accountId) as CFDictionary)
+        tokenWriteLock.withLock {
+            _ = SecItemDelete(baseQuery(account: accountId) as CFDictionary)
+        }
     }
 
     private nonisolated static func baseQuery(account: String) -> [String: Any] {

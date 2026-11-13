@@ -23,7 +23,7 @@ enum ClaudeAuth {
     /// `~/.claude.json` 顶层的 `oauthAccount` 字段。这里读 emailAddress 作为邮箱兜底，
     /// 并取出 accountUuid / organizationUuid——`ClaudeDesktopAuth` 用它们判定
     /// Claude Desktop 缓存里的凭据是否属于同一个账号。
-    nonisolated private static func loadProfileFromConfig() -> ConfigProfile {
+    nonisolated static func loadProfileFromConfig() -> ConfigProfile {
         let url = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".claude.json")
         guard let data = try? Data(contentsOf: url),

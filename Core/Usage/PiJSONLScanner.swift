@@ -25,6 +25,7 @@ enum PiJSONLScanner {
         var newSeenIds: [String]
         var filesScanned: Int
         var linesParsed: Int
+        var failedFileCount = 0
         /// 本轮计入的去重键摘要，按对话 key 分组（见 `UsageMessageLedger`）。
         var ledger: [String: [UInt64]] = [:]
     }
@@ -56,11 +57,14 @@ enum PiJSONLScanner {
         minimumMtime: Date? = nil,
         onProgress: ScanProgressCallback? = nil
     ) -> Result {
-        let files = JSONLDirectoryEnumerator.files(at: root, minimumMtime: minimumMtime)
+        let enumeration = JSONLDirectoryEnumerator.enumerate(at: root, minimumMtime: minimumMtime)
+        let files = enumeration.files
+        let enumerationFailed = enumeration.accessFailed || enumeration.enumerationIncomplete
 
         var newState: [String: ScanFileState] = previous
         var entries: [UsageEntry] = []
         var linesParsed = 0
+        var failedFileCount = enumerationFailed ? 1 : 0
         var seeds: [String: ConversationSeed] = [:]
         var seen = SeenIDSet(seenEntryIds, known: knownIDs)
         var ledger: [String: [UInt64]] = [:]
@@ -83,7 +87,7 @@ enum PiJSONLScanner {
 
             var state = previous[path] ?? ScanFileState(mtime: 0, offset: 0)
             // mtime 没变 & size 没变 → 跳过，用 state 里的会话元数据补种子。
-            if state.mtime == mtime, state.offset == size {
+            if let previousState = previous[path], previousState.mtime == mtime, previousState.offset == size {
                 newState[path] = state
                 if let id = state.conversationID {
                     seeds["pi:\(id)"] = seed(id: id, state: state, path: path, resolver: &projectResolver)
@@ -186,10 +190,11 @@ enum PiJSONLScanner {
                     }
                 }
             }
-            // 打开 / 读取失败时丢弃本文件本轮结果、保留原 watermark，下轮重来（不计失败数）。
+            // 文件在枚举后消失也表示这轮重扫未读完，不能据此覆盖旧历史。
             guard case let .success(newOffset) = outcome else {
                 seen.remove(contentsOf: fileSeenKeys)
-                newState[path] = state
+                newState[path] = previous[path]
+                failedFileCount += 1
                 continue
             }
             entries.append(contentsOf: fileEntries)
@@ -210,9 +215,11 @@ enum PiJSONLScanner {
         }
 
         // 清理已删除文件的残留 watermark。
-        let alive = Set(files.map(\.path))
-        for key in newState.keys where !alive.contains(key) {
-            newState.removeValue(forKey: key)
+        if !enumerationFailed {
+            let alive = Set(files.map(\.path))
+            for key in newState.keys where !alive.contains(key) {
+                newState.removeValue(forKey: key)
+            }
         }
 
         // 控制全局 seen 集合大小：按插入顺序保留最近 N 条（与 Claude scanner 一致）。
@@ -225,6 +232,7 @@ enum PiJSONLScanner {
             newSeenIds: cappedSeen,
             filesScanned: files.count,
             linesParsed: linesParsed,
+            failedFileCount: failedFileCount,
             ledger: ledger
         )
     }

@@ -253,6 +253,7 @@ final class UsageService {
     private var cursorUsageCache = CursorUsageCachePayload()
     private var cursorCacheNeedsPersistence = false
     private var cursorRemoteAccountID: String?
+    private var cursorRemoteAccountVersion: UInt64 = 0
     private var cursorRemoteBackoffUntil: Date?
     private(set) var isRefreshingCursorRemoteUsage = false
     private(set) var cursorRemoteUsageError: String?
@@ -631,6 +632,7 @@ final class UsageService {
         guard cursorRemoteAccountID?.caseInsensitiveCompare(normalizedID) != .orderedSame else { return }
 
         cursorRemoteAccountID = normalizedID
+        cursorRemoteAccountVersion &+= 1
         if cursorUsageCache.accountID?.caseInsensitiveCompare(normalizedID) == .orderedSame {
             aggregator.loadRemote(from: cursorUsageCache.buckets)
         } else {
@@ -638,6 +640,16 @@ final class UsageService {
             cursorUsageCache = CursorUsageCachePayload(accountID: normalizedID)
             cursorCacheNeedsPersistence = false
         }
+        cursorRemoteUsageError = nil
+        cursorRemoteBackoffUntil = nil
+        publishTotals()
+    }
+
+    func deactivateCursorRemoteUsage() {
+        guard cursorRemoteAccountID != nil else { return }
+        cursorRemoteAccountID = nil
+        cursorRemoteAccountVersion &+= 1
+        aggregator.loadRemote(from: [])
         cursorRemoteUsageError = nil
         cursorRemoteBackoffUntil = nil
         publishTotals()
@@ -656,7 +668,8 @@ final class UsageService {
         calendar: Calendar = .current
     ) async -> CursorUsageError? {
         guard !suspendedForTermination, !isPersistingForTermination else { return nil }
-        activateCursorRemoteUsage(accountID: session.userID)
+        guard cursorRemoteAccountID?.caseInsensitiveCompare(session.userID) == .orderedSame else { return nil }
+        let accountVersion = cursorRemoteAccountVersion
         guard !isRefreshingCursorRemoteUsage else { return nil }
         if let backoffUntil = cursorRemoteBackoffUntil, backoffUntil > now {
             cursorRemoteUsageError = "Cursor usage rate limited; retry later"
@@ -674,13 +687,14 @@ final class UsageService {
         isRefreshingCursorRemoteUsage = true
         defer { isRefreshingCursorRemoteUsage = false }
         for range in ranges {
-            guard !suspendedForTermination else { return nil }
+            guard !suspendedForTermination, accountVersion == cursorRemoteAccountVersion else { return nil }
             let result = await CursorUsageFetcher.fetch(
                 cookieHeader: session.cookieHeader,
                 from: range.lowerBound,
                 to: range.upperBound,
                 calendar: calendar
             )
+            guard accountVersion == cursorRemoteAccountVersion else { return nil }
             switch result {
             case .failure(let error):
                 cursorRemoteUsageError = error.description
@@ -756,7 +770,8 @@ final class UsageService {
         calendar: Calendar = .current
     ) async -> CursorUsageError? {
         guard !suspendedForTermination, !isPersistingForTermination else { return nil }
-        activateCursorRemoteUsage(accountID: session.userID)
+        guard cursorRemoteAccountID?.caseInsensitiveCompare(session.userID) == .orderedSame else { return nil }
+        let accountVersion = cursorRemoteAccountVersion
         guard let requestedRange = normalizedCursorHistoryRange(range, now: now, calendar: calendar) else {
             return nil
         }
@@ -768,6 +783,7 @@ final class UsageService {
             try? await Task.sleep(nanoseconds: 200_000_000)
         }
 
+        guard !Task.isCancelled, accountVersion == cursorRemoteAccountVersion else { return nil }
         let missing = cursorUsageCache.coveredDayRanges.missingRanges(in: requestedRange)
         guard !missing.isEmpty else { return nil }
 
@@ -780,7 +796,8 @@ final class UsageService {
         defer { isRefreshingCursorRemoteUsage = false }
 
         for chunk in missing.flatMap({ cursorHistoryMonthChunks(for: $0, calendar: calendar) }) {
-            guard !Task.isCancelled, !suspendedForTermination else { return nil }
+            guard !Task.isCancelled, !suspendedForTermination,
+                  accountVersion == cursorRemoteAccountVersion else { return nil }
             let fetchEnd = min(chunk.upperBound, now)
             guard chunk.lowerBound < fetchEnd else { continue }
 
@@ -790,6 +807,7 @@ final class UsageService {
                 to: fetchEnd,
                 calendar: calendar
             )
+            guard !Task.isCancelled, accountVersion == cursorRemoteAccountVersion else { return nil }
             switch result {
             case .failure(let error):
                 cursorRemoteUsageError = error.description
@@ -823,6 +841,7 @@ final class UsageService {
         accountID: String,
         updatedAt: Date
     ) async {
+        guard cursorRemoteAccountID?.caseInsensitiveCompare(accountID) == .orderedSame else { return }
         aggregator.replaceRemote(app: .cursor, dayRange: fetched.dayRange, buckets: fetched.buckets)
         cursorUsageCache.accountID = accountID
         cursorUsageCache.buckets = aggregator.snapshotRemote(app: .cursor)
@@ -835,16 +854,19 @@ final class UsageService {
         publishTotals()
 
         cursorCacheNeedsPersistence = true
+        let accountVersion = cursorRemoteAccountVersion
         let cacheSnapshot = cursorUsageCache
         let cursorCacheDirectory = self.cursorCacheDirectory
         do {
             try await Task.detached(priority: .utility) {
                 try CursorUsageCache.save(cacheSnapshot, in: cursorCacheDirectory)
             }.value
-            cursorCacheNeedsPersistence = false
+            if cursorRemoteAccountVersion == accountVersion { cursorCacheNeedsPersistence = false }
         } catch {
             // 远端内存快照仍可展示；下一轮成功刷新会再次尝试原子写缓存。
-            cursorRemoteUsageError = "Cursor usage cache save failed: \(error)"
+            if cursorRemoteAccountVersion == accountVersion {
+                cursorRemoteUsageError = "Cursor usage cache save failed: \(error)"
+            }
         }
     }
 
@@ -1091,10 +1113,24 @@ final class UsageService {
         let apps = Self.requiredCycleSourceApps(cycles: affectedCycles).intersection(localUsageApps())
             .subtracting(isDshHistoryFrozen ? [.dsh] : [])
         guard !apps.isEmpty else { return }
+        let previousCycleKeys = Set(cycleAggregator.snapshot().lazy
+            .filter { affectedCycleIDs.contains($0.cycleID) && apps.contains($0.app) }
+            .compactMap(\.conversationKey))
+        let deletedConversations = UsageRebuildMerge.deletedConversations(
+            conversationAggregator.snapshot().infos.filter { previousCycleKeys.contains($0.key) },
+            sourceExists: JSONLDirectoryEnumerator.sourceExists(atPath:)
+        )
+        let ledgerBacked = deletedConversations.filter { messageLedger.contains($0.key, app: $0.app) }
+        let deletedKeysByApp = Dictionary(grouping: ledgerBacked, by: \.app)
+            .mapValues { Set($0.map(\.key)) }
+        let claudeKnown = messageLedger.ids(for: deletedKeysByApp[.claude] ?? [], app: .claude)
+        let codexKnown = messageLedger.ids(for: deletedKeysByApp[.codex] ?? [], app: .codex)
+        let piKnown = messageLedger.ids(for: deletedKeysByApp[.pi] ?? [], app: .pi)
         async let claudeTask: ClaudeJSONLScanner.Result? = Self.scanIfEnabled(.claude, in: apps, skipped: nil) {
             ClaudeJSONLScanner.scan(
                 previous: [:],
                 seenMessageIds: [],
+                knownIDs: claudeKnown,
                 root: claudeRoot,
                 // 重建只需要 entries，跳过标题索引构建（省一次索引文件解析）
                 conversationIndex: ConversationTitleIndex.ClaudeIndex(titles: [:], projects: [:]),
@@ -1108,6 +1144,7 @@ final class UsageService {
             PiJSONLScanner.scan(
                 previous: [:],
                 seenEntryIds: [],
+                knownIDs: piKnown,
                 root: piRoot,
                 minimumMtime: dateFrom,
                 onProgress: progress
@@ -1127,10 +1164,8 @@ final class UsageService {
         async let codexTask: CodexJSONLScanner.Result? = Self.scanIfEnabled(.codex, in: apps, skipped: nil) {
             await CodexJSONLScanner.scan(
                 previous: [:],
-                // 本轮从空 seen 起扫，跨文件去重只在本次扫到的文件之间生效。
-                // 若 fork 会话的父文件 mtime 落在窗口外没被扫到，其重放段会重复计入本周期桶；
-                // 主界面的日用量/费用走全量增量路径，不受影响。
                 seenTokenIds: [],
+                knownIDs: codexKnown,
                 roots: codexRoots,
                 indexedTitles: [:],
                 minimumMtime: dateFrom,
@@ -1154,6 +1189,7 @@ final class UsageService {
                 codex: codex,
                 cycles: affectedCycles
             ),
+            pi: pi,
             opencode: opencode,
             opencodeDatabaseURL: opencodeDatabaseURL,
             dshFailed: dsh.map { !$0.isComplete } ?? false
@@ -1165,13 +1201,21 @@ final class UsageService {
         )
         let entries = [claude?.entries, codex?.entries, pi?.entries, opencode?.entries, dsh?.entries]
             .compactMap { $0 }.flatMap { $0 }
+        let refreshedKeys = Set(entries.map(\.conversationKey))
+            .union((claude?.conversationSeeds ?? []).map(\.key))
+            .union((codex?.conversationSeeds ?? []).map(\.key))
+            .union((pi?.conversationSeeds ?? []).map(\.key))
+            .union((opencode?.refreshedSessionIDs ?? []).map { "opencode:\($0)" })
+            .union((dsh?.newState.values.compactMap(\.conversationID) ?? []).map { "dsh:\($0)" })
+        let preservedKeys = previousCycleKeys.subtracting(refreshedKeys).union(ledgerBacked.map(\.key))
         await commitCycleAggregation(
             exactEntries: entries.filter { !failedApps.contains($0.app) },
             cycles: cycles,
             accountSegments: accountSegments,
             failedApps: failedApps,
             rebuildRange: rebuildableCycleIDs,
-            sourceApps: apps.subtracting(failedApps)
+            sourceApps: apps.subtracting(failedApps),
+            preservingConversationKeys: preservedKeys
         )
         // 全过程计时：commitCycleAggregation 自己的日志只计聚合与落盘，不含前面的日志重扫。
         let finished = Date()
@@ -1234,11 +1278,13 @@ final class UsageService {
     /// 其他 Agent 只归入 Codex 周期，Codex 周期本轮不能重建时它们也不能算完成。
     nonisolated static func cycleSourceFailedApps(
         _ failedApps: Set<UsageApp>,
+        pi: PiJSONLScanner.Result?,
         opencode: OpencodeScanner.Result?,
         opencodeDatabaseURL: URL,
         dshFailed: Bool = false
     ) -> Set<UsageApp> {
         var result = failedApps
+        if let pi, pi.failedFileCount > 0 { result.insert(.pi) }
         if let opencode, opencode.error != nil || !opencode.isComplete,
            FileManager.default.fileExists(atPath: opencodeDatabaseURL.path) {
             result.insert(.opencode)
@@ -1349,7 +1395,8 @@ final class UsageService {
         initialRebuildApps: Set<UsageApp> = [],
         failedApps: Set<UsageApp> = [],
         rebuildRange affectedCycleIDs: Set<String>? = nil,
-        sourceApps: Set<UsageApp>? = nil
+        sourceApps: Set<UsageApp>? = nil,
+        preservingConversationKeys: Set<String> = []
     ) async {
         guard !storeWriteDisabled, historyRecoveryState == .complete,
               let scanState = cachedScanState,
@@ -1361,13 +1408,13 @@ final class UsageService {
         #if DEBUG
         await cycleReadyForTesting?()
         #endif
-        // Pi 自身不会读取失败，只会随 Codex 一起推迟，不单独列名。
-        let failedProviderNames = [UsageApp.codex, .claude, .opencode, .dsh]
+        let failedProviderNames = [UsageApp.codex, .claude, .pi, .opencode, .dsh]
             .filter { failedApps.contains($0) }
             .map { app -> String in
                 switch app {
                 case .codex: return "Codex"
                 case .claude: return "Claude Code"
+                case .pi: return "Pi"
                 case .dsh: return "DSH"
                 default: return "OpenCode"
                 }
@@ -1388,7 +1435,8 @@ final class UsageService {
                 cycles: cycles,
                 accountSegments: accountSegments,
                 affectedCycleIDs: affectedCycleIDs,
-                sourceApps: sourceApps
+                sourceApps: sourceApps,
+                preservingConversationKeys: preservingConversationKeys
             )
         } else {
             cycleAggregator.rebuild(
@@ -1556,6 +1604,7 @@ final class UsageService {
                 codex: codex,
                 cycles: pendingCycles
             ),
+            pi: pi,
             opencode: opencode,
             opencodeDatabaseURL: opencodeDatabaseURL,
             dshFailed: dsh.map { !$0.isComplete } ?? false
@@ -2045,6 +2094,7 @@ final class UsageService {
         var incomplete: [String] = []
         if claude.failedFileCount > 0 { incomplete.append("Claude Code") }
         if codex.failedFileCount > 0 { incomplete.append("Codex") }
+        if pi.failedFileCount > 0 { incomplete.append("Pi") }
         // OpenCode 库从未存在（本机没装）是正常状态；只有库在却读不开才算来源不完整。
         let opencodeProblem = opencode.error != nil || !opencode.isComplete
         if apps.contains(.opencode), opencodeProblem, FileManager.default.fileExists(atPath: opencodeDatabaseURL.path) {
@@ -2385,8 +2435,7 @@ final class UsageService {
             scanQueued = true
             return false
         }
-        // DSH 的坏帧、坏文件也要能浮出来（§6 决策 4）；pi / opencode 的既有行为不动。
-        let failedFileCount = claude.failedFileCount + codex.failedFileCount
+        let failedFileCount = claude.failedFileCount + codex.failedFileCount + pi.failedFileCount
             + dsh.failedFileCount + dsh.failedDirectoryCount + dsh.duplicateSessionCount
             + antigravity.failedDatabaseCount
         recordLogReadFailures(claude: claude.readFailures, codex: codex.readFailures)
@@ -2430,6 +2479,7 @@ final class UsageService {
                     codex: codex,
                     cycles: initialCycles
                 ),
+                pi: pi,
                 opencode: opencode,
                 opencodeDatabaseURL: opencodeDatabaseURL,
                 // DSH 只有从零完整扫描才能直接灌入；冻结或带旧 watermark 时留给补算。

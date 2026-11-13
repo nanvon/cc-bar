@@ -1124,6 +1124,7 @@ final class AppState {
                 refreshToken: tokens.refreshToken,
                 writeBack: .importedAccount(id: account.id)
             )
+            guard importedAlertEntryVersions[account.id, default: 0] == alertEntryVersion else { return }
             switch refreshed {
             case .success(let t):
                 activeToken = t
@@ -1136,20 +1137,19 @@ final class AppState {
             accessToken: activeToken,
             accountId: isPAT ? nil : account.chatgptAccountId
         )
+        guard importedAlertEntryVersions[account.id, default: 0] == alertEntryVersion,
+              importedCodexAccounts.contains(where: { $0.id == account.id && $0.visibleInPopover }) else { return }
         switch result {
         case .success(let fetched):
-            guard importedAlertEntryVersions[account.id, default: 0] == alertEntryVersion,
-                  importedCodexAccounts.contains(where: { $0.id == account.id && $0.visibleInPopover }) else { return }
-            storeImportedCodex(id: account.id, snapshot: fetched.snapshot, source: .api)
             let knownUser = importedCodexUserId(from: account)
+            if let actual = fetched.accountId, actual != account.chatgptAccountId { return }
+            if let knownUser, let actual = fetched.userId, knownUser != actual { return }
+            storeImportedCodex(id: account.id, snapshot: fetched.snapshot, source: .api)
             let identity = QuotaAlertIdentity(accountID: fetched.accountId ?? account.chatgptAccountId,
                                               userID: fetched.userId ?? knownUser)
-            if nonEmpty(fetched.accountId).map({ $0 == account.chatgptAccountId }) ?? true,
-               knownUser == nil || fetched.userId == nil || knownUser == nonEmpty(fetched.userId) {
-                importedAlertIdentities[account.id] = identity
-                observeQuota(raw: fetched.snapshot, entry: account.id, identity: identity,
-                                  entryVersion: alertEntryVersion, settingsVersion: alertSettingsVersion)
-            }
+            importedAlertIdentities[account.id] = identity
+            observeQuota(raw: fetched.snapshot, entry: account.id, identity: identity,
+                         entryVersion: alertEntryVersion, settingsVersion: alertSettingsVersion)
         case .failure(let err):
             markImportedCodexFailure(id: account.id, message: err.userMessage, error: err)
         }
@@ -1569,7 +1569,10 @@ final class AppState {
             var next = try await Task.detached(priority: .utility) {
                 try CodexAuth.load()
             }.value
-            if codexIdentityChanged(previous: codexAccount, next: next) {
+            if codexIdentityChanged(previous: codexAccount, next: next)
+                || (next.accountId != nil && cachedQuotaBelongsToAnotherAccount(
+                    .codex, accountKey: QuotaHistoryAccountKey.codexPrimary(accountId: next.accountId)
+                )) {
                 resetCodexQuotaState()
             } else if next.isPersonalAccessToken, let prev = codexAccount {
                 // PAT 身份靠首次取数回填，重读 auth.json 时这些字段为空。
@@ -1596,6 +1599,10 @@ final class AppState {
         if previous.isPersonalAccessToken || next.isPersonalAccessToken {
             return previous.accessToken != next.accessToken
         }
+        if let previousUser = nonEmpty(previous.chatgptUserId), let nextUser = nonEmpty(next.chatgptUserId),
+           previousUser != nextUser {
+            return true
+        }
         if let a = previous.accountId, let b = next.accountId, !a.isEmpty, !b.isEmpty {
             return a != b
         }
@@ -1606,7 +1613,7 @@ final class AppState {
         codexQuota = nil
         codexQuotaSource = nil
         codexQuotaError = nil
-        codexRefreshState = QuotaRefreshState()
+        resetPrimaryQuotaRefreshState(.codex)
         quotaCache.codex = nil
         saveQuotaCache()
     }
@@ -1704,13 +1711,14 @@ final class AppState {
     }
 
     private func adoptClaudeAccount(_ next: ClaudeAccount) {
-        if claudeIdentityChanged(previous: claudeAccount, next: next) {
+        let accountKey = QuotaHistoryAccountKey.claudePrimary(email: next.email, accountUuid: next.accountUuid)
+        if claudeIdentityChanged(previous: claudeAccount, next: next)
+            || (claudeAccount == nil && (next.email != nil || next.accountUuid != nil)
+                && cachedQuotaBelongsToAnotherAccount(.claude, accountKey: accountKey)) {
             resetClaudeQuotaState()
         }
         self.claudeAccount = next
-        migrateLegacyClaudeAccountData(
-            to: QuotaHistoryAccountKey.claudePrimary(email: next.email, accountUuid: next.accountUuid)
-        )
+        migrateLegacyClaudeAccountData(to: accountKey)
         self.claudeError = nil
     }
 
@@ -1720,6 +1728,10 @@ final class AppState {
     /// "没变"只是多留一份旧快照，错判成"变了"会抹掉用户的数据。
     private func claudeIdentityChanged(previous: ClaudeAccount?, next: ClaudeAccount) -> Bool {
         guard let previous else { return false }
+        if let previousOrg = nonEmpty(previous.organizationUuid)?.lowercased(),
+           let nextOrg = nonEmpty(next.organizationUuid)?.lowercased(), previousOrg != nextOrg {
+            return true
+        }
         if let previousUuid = previous.accountUuid?.lowercased(),
            let nextUuid = next.accountUuid?.lowercased()
         {
@@ -1755,7 +1767,7 @@ final class AppState {
         claudeQuota = nil
         claudeQuotaSource = nil
         claudeQuotaError = nil
-        claudeRefreshState = QuotaRefreshState()
+        resetPrimaryQuotaRefreshState(.claude)
         quotaCache.claude = nil
         saveQuotaCache()
     }
@@ -1802,7 +1814,7 @@ final class AppState {
         antigravityQuota = nil
         antigravityQuotaSource = nil
         antigravityQuotaError = nil
-        antigravityRefreshState = QuotaRefreshState()
+        resetPrimaryQuotaRefreshState(.antigravity)
         antigravityPlanAttempt = nil
         quotaCache.antigravity = nil
         saveQuotaCache()
@@ -1824,6 +1836,7 @@ final class AppState {
             cursorKeychainAccessRequired = false
             guard let next else {
                 cursorAccount = nil
+                usageService.deactivateCursorRemoteUsage()
                 cursorError = "Cursor is not installed or is not signed in"
                 return
             }
@@ -1854,6 +1867,7 @@ final class AppState {
                 cursorKeychainAccessRequired = false
             }
             cursorAccount = nil
+            usageService.deactivateCursorRemoteUsage()
             cursorError = String(describing: error)
         }
     }
@@ -1907,7 +1921,7 @@ final class AppState {
         cursorQuota = nil
         cursorQuotaSource = nil
         cursorQuotaError = nil
-        cursorRefreshState = QuotaRefreshState()
+        resetPrimaryQuotaRefreshState(.cursor)
         quotaCache.cursor = nil
         saveQuotaCache()
     }
@@ -1958,7 +1972,7 @@ final class AppState {
         commandCodeQuota = nil
         commandCodeQuotaSource = nil
         commandCodeQuotaError = nil
-        commandCodeRefreshState = QuotaRefreshState()
+        resetPrimaryQuotaRefreshState(.commandCode)
         quotaCache.commandCode = nil
         saveQuotaCache()
     }
@@ -1999,7 +2013,7 @@ final class AppState {
         opencodeGoQuota = nil
         opencodeGoQuotaSource = nil
         opencodeGoQuotaError = nil
-        opencodeGoRefreshState = QuotaRefreshState()
+        resetPrimaryQuotaRefreshState(.opencodeGo)
         quotaCache.opencodeGo = nil
         saveQuotaCache()
     }
@@ -2029,9 +2043,9 @@ final class AppState {
                 refreshToken: account.refreshToken,
                 idToken: account.idToken
             )
+            guard codexAlertEntryVersion == alertEntryVersion else { return }
             switch refreshed {
             case .success(let t):
-                guard codexAlertEntryVersion == alertEntryVersion else { return }
                 activeToken = t.accessToken
                 account.accessToken = t.accessToken
                 account.refreshToken = nonEmpty(t.refreshToken)
@@ -2048,15 +2062,28 @@ final class AppState {
             accessToken: activeToken,
             accountId: account.isPersonalAccessToken ? nil : account.accountId
         )
+        guard codexAlertEntryVersion == alertEntryVersion else { return }
         switch result {
         case .success(let fetched):
-            guard codexAlertEntryVersion == alertEntryVersion else { return }
+            if let expected = account.accountId, let actual = fetched.accountId, expected != actual {
+                markQuotaFailure(.codex, QuotaError.decode("quota account mismatch").userMessage)
+                return
+            }
+            if let expected = account.chatgptUserId, let actual = fetched.userId, expected != actual {
+                markQuotaFailure(.codex, QuotaError.decode("quota user mismatch").userMessage)
+                return
+            }
             if account.isPersonalAccessToken {
                 // 用 wham/usage 响应回填身份，供 UI 展示与额度历史 key 使用。
                 account.email = account.email ?? fetched.email
                 account.planType = account.planType ?? fetched.snapshot.planType
                 account.accountId = account.accountId ?? fetched.accountId
                 account.chatgptUserId = account.chatgptUserId ?? fetched.userId
+                if account.accountId != nil, cachedQuotaBelongsToAnotherAccount(
+                    .codex, accountKey: QuotaHistoryAccountKey.codexPrimary(accountId: account.accountId)
+                ) {
+                    resetCodexQuotaState()
+                }
                 codexAccount = account
             }
             storeQuota(.codex, snapshot: fetched.snapshot, source: .api)
@@ -2076,6 +2103,7 @@ final class AppState {
 
     private func loadClaudeQuota(reason: QuotaRefreshReason) async {
         guard beginQuotaRefresh(.claude, reason: reason) else { return }
+        let initialVersion = primaryQuotaAlertVersion(for: .claude)
         let alertSettingsVersion = SettingsStore.shared.quotaAlertRuntimeVersion
         defer { claudeRefreshState.inFlight = false }
 
@@ -2088,6 +2116,7 @@ final class AppState {
             return
         }
         let refreshed = await ClaudeTokenRefresher.ensureFreshAccessToken(account: &account)
+        guard primaryQuotaAlertVersion(for: .claude) == initialVersion else { return }
         let activeToken: String
         switch refreshed {
         case .success(let t):
@@ -2105,19 +2134,17 @@ final class AppState {
             }
             return
         }
-        // 版本只决定是否提醒；token 轮换或切号期间取到的额度照常展示，与原有行为一致。
         let alertEntryVersion = primaryQuotaAlertVersion(for: .claude)
         let result = await ClaudeQuotaClient.fetch(accessToken: activeToken)
+        guard primaryQuotaAlertVersion(for: .claude) == alertEntryVersion else { return }
         switch result {
         case .success(let snapshot):
             storeQuota(.claude, snapshot: snapshot, source: .api)
-            if primaryQuotaAlertVersion(for: .claude) == alertEntryVersion {
-                observePrimaryQuota(snapshot, settingsVersion: alertSettingsVersion)
-            }
+            observePrimaryQuota(snapshot, settingsVersion: alertSettingsVersion)
             await refreshClaudeProfileIfNeeded(account: account, accessToken: activeToken)
         case .failure(let err):
             markQuotaFailure(.claude, err.userMessage, error: err)
-            if reason == .userInitiated, claudeQuota == nil {
+            if reason == .userInitiated, claudeQuota == nil, !err.isRateLimited {
                 await loadClaudeCLIFallback(apiError: err)
             }
         }
@@ -2173,6 +2200,7 @@ final class AppState {
         // agy 的完整额度（含 Pro 的 Argon 独立周额度）不要求先成功续期旧云端凭据。
         let sessionKey = account.refreshToken ?? account.accessToken ?? account.source.rawValue
         let cliResult = await AntigravityQuotaClient.fetchCLIQuota(sessionKey: sessionKey)
+        guard antigravityAccount?.refreshKey == initialLoginKey, antigravityError == nil else { return }
         if case .success(var snapshot)? = cliResult {
             guard let current = antigravityAccount,
                   !antigravityIdentityChanged(previous: current, next: account) else { return }
@@ -2315,17 +2343,16 @@ final class AppState {
             return
         }
 
-        func apply(_ snapshot: QuotaSnapshot, entryVersion: UInt64) {
+        func apply(_ snapshot: QuotaSnapshot) {
             storeQuota(.cursor, snapshot: snapshot, source: .api)
-            // 版本只决定是否提醒；token 轮换或切号期间取到的额度照常展示，与原有行为一致。
-            if primaryQuotaAlertVersion(for: .cursor) == entryVersion {
-                observePrimaryQuota(snapshot, settingsVersion: alertSettingsVersion)
-            }
+            observePrimaryQuota(snapshot, settingsVersion: alertSettingsVersion)
         }
 
-        switch await CursorQuotaClient.fetch(cookieHeader: session.cookieHeader) {
+        let result = await CursorQuotaClient.fetch(cookieHeader: session.cookieHeader)
+        guard primaryQuotaAlertVersion(for: .cursor) == alertEntryVersion else { return }
+        switch result {
         case .success(let snapshot):
-            apply(snapshot, entryVersion: alertEntryVersion)
+            apply(snapshot)
         case .failure(let error):
             // Cursor token 由 Cursor.app 持有。只认 401，只重读一次本地登录态，绝不调用 OAuth refresh。
             let reload = await reloadCredentialAfterRejection(
@@ -2336,13 +2363,16 @@ final class AppState {
                 reload: { await self.loadCursor(); return self.cursorAccount }
             )
             guard case .changed(let reloaded) = reload else {
+                guard primaryQuotaAlertVersion(for: .cursor) == alertEntryVersion else { return }
                 markQuotaFailure(.cursor, error.userMessage, error: error)
                 return
             }
             let retryEntryVersion = primaryQuotaAlertVersion(for: .cursor)
-            switch await CursorQuotaClient.fetch(cookieHeader: reloaded.cookieHeader) {
+            let retry = await CursorQuotaClient.fetch(cookieHeader: reloaded.cookieHeader)
+            guard primaryQuotaAlertVersion(for: .cursor) == retryEntryVersion else { return }
+            switch retry {
             case .success(let snapshot):
-                apply(snapshot, entryVersion: retryEntryVersion)
+                apply(snapshot)
             case .failure(let retryError):
                 markQuotaFailure(.cursor, retryError.userMessage, error: retryError)
             }
@@ -2360,10 +2390,7 @@ final class AppState {
             return
         }
 
-        func apply(_ response: CommandCodeQuotaClient.FetchResult, entryVersion: UInt64) {
-            // 版本只决定是否提醒；token 轮换或切号期间取到的额度照常展示，与原有行为一致。
-            // 回填 userID 会递增版本，须在写回账号前判断。
-            let alertCurrent = primaryQuotaAlertVersion(for: .commandCode) == entryVersion
+        func apply(_ response: CommandCodeQuotaClient.FetchResult) {
             if var current = commandCodeAccount {
                 current.login = response.accountDetails.login
                 current.name = response.accountDetails.name
@@ -2374,12 +2401,14 @@ final class AppState {
                 commandCodeAccount = current
             }
             storeQuota(.commandCode, snapshot: response.snapshot, source: .api)
-            if alertCurrent { observePrimaryQuota(response.snapshot, settingsVersion: alertSettingsVersion) }
+            observePrimaryQuota(response.snapshot, settingsVersion: alertSettingsVersion)
         }
 
-        switch await CommandCodeQuotaClient.fetch(accessToken: session.accessToken) {
+        let result = await CommandCodeQuotaClient.fetch(accessToken: session.accessToken)
+        guard primaryQuotaAlertVersion(for: .commandCode) == alertEntryVersion else { return }
+        switch result {
         case .success(let response):
-            apply(response, entryVersion: alertEntryVersion)
+            apply(response)
         case .failure(let error):
             let reload = await reloadCredentialAfterRejection(
                 error,
@@ -2392,6 +2421,7 @@ final class AppState {
             case .notRejected:
                 markQuotaFailure(.commandCode, error.userMessage, error: error)
             case .unchanged:
+                guard primaryQuotaAlertVersion(for: .commandCode) == alertEntryVersion else { return }
                 markQuotaFailure(
                     .commandCode,
                     tr("Sign-in is no longer valid — sign in again", "登录已失效,请重新登录"),
@@ -2399,9 +2429,11 @@ final class AppState {
                 )
             case .changed(let reloaded):
                 let retryEntryVersion = primaryQuotaAlertVersion(for: .commandCode)
-                switch await CommandCodeQuotaClient.fetch(accessToken: reloaded.accessToken) {
+                let retry = await CommandCodeQuotaClient.fetch(accessToken: reloaded.accessToken)
+                guard primaryQuotaAlertVersion(for: .commandCode) == retryEntryVersion else { return }
+                switch retry {
                 case .success(let response):
-                    apply(response, entryVersion: retryEntryVersion)
+                    apply(response)
                 case .failure(let retryError):
                     markQuotaFailure(.commandCode, retryError.userMessage, error: retryError)
                 }
@@ -2420,15 +2452,16 @@ final class AppState {
             return
         }
 
-        func apply(_ snapshot: QuotaSnapshot, entryVersion: UInt64) {
-            let alertCurrent = primaryQuotaAlertVersion(for: .opencodeGo) == entryVersion
+        func apply(_ snapshot: QuotaSnapshot) {
             storeQuota(.opencodeGo, snapshot: snapshot, source: .api)
-            if alertCurrent { observePrimaryQuota(snapshot, settingsVersion: alertSettingsVersion) }
+            observePrimaryQuota(snapshot, settingsVersion: alertSettingsVersion)
         }
 
-        switch await OpenCodeGoQuotaClient.fetch(apiKey: session.apiKey) {
+        let result = await OpenCodeGoQuotaClient.fetch(apiKey: session.apiKey)
+        guard primaryQuotaAlertVersion(for: .opencodeGo) == alertEntryVersion else { return }
+        switch result {
         case .success(let snapshot):
-            apply(snapshot, entryVersion: alertEntryVersion)
+            apply(snapshot)
         case .failure(let error):
             // key 可能已在 OpenCode / Pi 里更换，重读一次，变了才用新 key 重试。
             let reload = await reloadCredentialAfterRejection(
@@ -2442,12 +2475,15 @@ final class AppState {
             case .notRejected:
                 markQuotaFailure(.opencodeGo, error.userMessage, error: error)
             case .unchanged:
+                guard primaryQuotaAlertVersion(for: .opencodeGo) == alertEntryVersion else { return }
                 markQuotaFailure(.opencodeGo, openCodeGoAuthFailureMessage(error), error: error)
             case .changed(let reloaded):
                 let retryEntryVersion = primaryQuotaAlertVersion(for: .opencodeGo)
-                switch await OpenCodeGoQuotaClient.fetch(apiKey: reloaded.apiKey) {
+                let retry = await OpenCodeGoQuotaClient.fetch(apiKey: reloaded.apiKey)
+                guard primaryQuotaAlertVersion(for: .opencodeGo) == retryEntryVersion else { return }
+                switch retry {
                 case .success(let snapshot):
-                    apply(snapshot, entryVersion: retryEntryVersion)
+                    apply(snapshot)
                 case .failure(let retryError):
                     markQuotaFailure(.opencodeGo, openCodeGoAuthFailureMessage(retryError), error: retryError)
                 }
@@ -2514,7 +2550,7 @@ final class AppState {
               let reloaded = cursorAccount, reloaded.accessToken != previousToken else { return }
         _ = await usageService.refreshCursorRemoteUsage(
             session: reloaded,
-            billingWindow: billingWindow
+            billingWindow: session.belongsToSameAccount(as: reloaded) ? billingWindow : nil
         )
     }
 
@@ -2536,6 +2572,7 @@ final class AppState {
     }
 
     private func loadClaudeCLIFallback(apiError: QuotaError) async {
+        let entryVersion = primaryQuotaAlertVersion(for: .claude)
         let now = Date()
         if let claudeFallbackBackoffUntil, claudeFallbackBackoffUntil > now {
             // CLI 兜底在冷却中是内部实现细节;用户要看的是最初那次取数为什么失败。
@@ -2545,6 +2582,7 @@ final class AppState {
 
         claudeFallbackBackoffUntil = now.addingTimeInterval(rateLimitBackoff)
         let result = await ClaudeCLIFallbackQuotaClient.fetch()
+        guard primaryQuotaAlertVersion(for: .claude) == entryVersion else { return }
         switch result {
         case .success(let snapshot):
             storeQuota(.claude, snapshot: snapshot, source: .cliFallback)
@@ -2583,6 +2621,22 @@ final class AppState {
             }
             return true
         }
+    }
+
+    private func resetPrimaryQuotaRefreshState(_ app: QuotaApp) {
+        updatePrimaryState(app) { state in
+            // 在途请求仍持有刷新槽，直到它结束并释放；切号后结果由各调用方校验。
+            let inFlight = state.refresh.inFlight
+            state.refresh = QuotaRefreshState()
+            state.refresh.inFlight = inFlight
+        }
+    }
+
+    private func cachedQuotaBelongsToAnotherAccount(_ app: QuotaApp, accountKey: String) -> Bool {
+        guard let cached = nonEmpty(quotaCache.providers[app]?.accountID) else { return false }
+        if cached == QuotaHistoryAccountKey.codexPrimary(accountId: nil)
+            || cached == QuotaHistoryAccountKey.claudePrimary(email: nil) { return false }
+        return cached != accountKey
     }
 
     private func storeQuota(_ app: QuotaApp, snapshot: QuotaSnapshot, source: QuotaSnapshotSource) {

@@ -389,17 +389,20 @@ final class CycleUsageAggregator {
     /// 只需把受影响周期内已聚合的数据清掉，用最近窗口扫描出的 entries 重新灌入。
     /// 注意：`exactEntries` 只应包含能归属到受影响周期的条目（调用方按时间范围过滤扫描）。
     /// - Parameter sourceApps: 非 nil 时只清除并重灌这些来源 Agent 的桶；本轮没有重扫的来源原样保留。
+    /// - Parameter preservingConversationKeys: 日志未被读到的对话沿用已保存的周期用量。
     func rebuildRange(
         exactEntries: [UsageEntry],
         cycles: [QuotaCycleRecord],
         accountSegments: [QuotaCycleAccountSegment],
         affectedCycleIDs: Set<String>,
-        sourceApps: Set<UsageApp>? = nil
+        sourceApps: Set<UsageApp>? = nil,
+        preservingConversationKeys: Set<String> = []
     ) {
         guard !affectedCycleIDs.isEmpty else { return }
         buckets = buckets.filter {
             !affectedCycleIDs.contains($0.value.cycleID)
                 || !(sourceApps?.contains($0.value.app) ?? true)
+                || $0.value.conversationKey.map(preservingConversationKeys.contains) == true
         }
         let affectedCycles = cycles.filter { affectedCycleIDs.contains($0.id) }
         _ = ingest(
