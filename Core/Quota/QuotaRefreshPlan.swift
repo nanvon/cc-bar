@@ -85,8 +85,7 @@ nonisolated enum QuotaRefreshPolicy {
         }
     }
 
-    /// 取数成功后是否清除 429 退避。Claude 的 CLI 兜底成功不代表 API 已解除限流，
-    /// 退避要保留到期，避免下一轮又去打正在限流的 API。
+    /// Claude 只有本轮官方 API 取数成功时清除 429 退避。
     static func clearsBackoffOnSuccess(_ app: QuotaApp, source: QuotaSnapshotSource) -> Bool {
         switch app {
         case .claude: return source == .api

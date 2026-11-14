@@ -53,9 +53,6 @@ struct SettingsRootView: View {
     @State private var isRecalculatingUsage = false
     @State private var pricingCatalogMessage: String?
     @State private var pricingCatalogMessageIsError = false
-    @State private var isTestingProxy = false
-    @State private var proxyTestMessage: String?
-    @State private var proxyTestMessageIsError = false
     @State private var showCodexResetCreditsSheet = false
     @State private var showCommandCodeSheet = false
     @State private var showOpenCodeGoSheet = false
@@ -667,24 +664,18 @@ struct SettingsRootView: View {
 
     // MARK: - Network proxy
 
-    /// 跟随系统时只有一行；手动时展开类型、地址和连接测试。改动写入 UserDefaults，下一次请求即生效。
     private func proxyGroup(settings: SettingsStore) -> some View {
-        PrefsGroup(title: "Network Proxy", chinese: "网络代理") {
+        @Bindable var settings = settings
+        return PrefsGroup(title: "Network Proxy", chinese: "网络代理") {
             PrefsRow(
                 label: "Proxy",
                 chinese: "代理",
-                desc: settings.proxyMode == .system
-                    ? nil : "If the proxy is unavailable, requests stop instead of connecting directly.",
-                chineseDesc: settings.proxyMode == .system
-                    ? nil : "代理不可用时停止取数，不改为直连"
+                desc: settings.proxyMode == .manual
+                    ? "If the proxy is unavailable, requests stop instead of connecting directly." : nil,
+                chineseDesc: settings.proxyMode == .manual
+                    ? "代理不可用时停止取数，不改为直连" : nil
             ) {
-                Picker("", selection: Binding(
-                    get: { settings.proxyMode },
-                    set: { newValue in
-                        settings.proxyMode = newValue
-                        proxyTestMessage = nil
-                    }
-                )) {
+                Picker(tr("Proxy", "代理"), selection: $settings.proxyMode) {
                     ForEach(ProxyMode.allCases) { mode in
                         Text(mode.bilingualDisplayName).tag(mode)
                     }
@@ -694,129 +685,93 @@ struct SettingsRootView: View {
                 .fixedSize()
             }
 
-            switch settings.proxyMode {
-            case .system:
-                EmptyView()
-            case .manual:
+            if settings.proxyMode == .manual {
+                proxyFields(type: $settings.proxyType, host: $settings.proxyHost, port: $settings.proxyPort)
+                let resolution = settings.proxyResolution
                 InsetDivider()
-                PrefsRow(
-                    label: "Type",
-                    chinese: "类型",
-                    desc: settings.proxyType == .socks5
-                        ? "The claude and agy command-line quota queries are skipped." : nil,
-                    chineseDesc: settings.proxyType == .socks5
-                        ? "SOCKS5 下不调用 claude、agy 命令行查询额度" : nil
-                ) {
-                    Picker("", selection: Binding(
-                        get: { settings.proxyType },
-                        set: { newValue in
-                            settings.proxyType = newValue
-                            proxyTestMessage = nil
-                        }
-                    )) {
-                        Text("HTTP").tag(ProxyType.http)
-                        Text("SOCKS5").tag(ProxyType.socks5)
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
-                    .fixedSize()
-                }
-                InsetDivider()
-                PrefsRow(label: "Address", chinese: "地址") {
-                    HStack(spacing: 6) {
-                        // 占位不写具体地址：看起来像已填好，用户会以为不用填。
-                        TextField(tr("Host", "主机"), text: Binding(
-                            get: { settings.proxyHost },
-                            set: { newValue in
-                                settings.proxyHost = newValue.trimmingCharacters(in: .whitespaces)
-                                proxyTestMessage = nil
-                            }
-                        ))
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 140)
-                        Text(":")
-                            .foregroundStyle(.secondary)
-                        // 用文本绑定逐字写入：数值格式的输入框要回车或失焦才提交，填完直接点「测试」会读到空端口。
-                        TextField(tr("Port", "端口"), text: Binding(
-                            get: { settings.proxyPort == 0 ? "" : String(settings.proxyPort) },
-                            set: { newValue in
-                                settings.proxyPort = Int(String(newValue.filter(\.isASCII).filter(\.isNumber).prefix(5))) ?? 0
-                                proxyTestMessage = nil
-                            }
-                        ))
-                        .textFieldStyle(.roundedBorder)
-                        .monospacedDigit()
-                        .frame(width: 64)
-                    }
-                }
+                ProxyConnectionTestRow(resolution: resolution, forClaude: false)
+                    .id(resolution)
             }
 
-            if settings.proxyMode != .system {
-                InsetDivider()
-                PrefsRow(label: "Connection test", chinese: "连接测试") {
-                    HStack(spacing: 8) {
-                        if let proxyTestMessage {
-                            Text(proxyTestMessage)
-                                .font(.system(size: 11))
-                                .foregroundStyle(proxyTestMessageIsError ? Color.red : Color.secondary)
-                                .lineLimit(2)
-                                .multilineTextAlignment(.trailing)
-                        }
-                        Button {
-                            proxyTestMessage = nil
-                            isTestingProxy = true
-                            Task {
-                                let result = await NetworkProxy.testConnection()
-                                isTestingProxy = false
-                                switch result {
-                                case .success:
-                                    proxyTestMessageIsError = false
-                                    proxyTestMessage = tr("Connected", "可连接")
-                                case .failure(let error):
-                                    proxyTestMessageIsError = true
-                                    proxyTestMessage = proxyTestFailureMessage(error)
-                                }
-                            }
-                        } label: {
-                            if isTestingProxy {
-                                ProgressView()
-                                    .controlSize(.small)
-                            } else {
-                                Text(tr("Test", "测试"))
-                            }
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .disabled(isTestingProxy)
-                    }
+            InsetDivider()
+            PrefsRow(
+                label: "Claude proxy",
+                chinese: "Claude 代理",
+                desc: "Prevent direct connections to Claude",
+                chineseDesc: "避免直连连接 Claude 服务",
+                detail: settings.proxyMode == .system && !settings.useDedicatedClaudeProxy
+                    ? AnyView(Text(tr(
+                        "Claude refresh is paused until a manual proxy is configured.",
+                        "Claude 已暂停刷新，请单独配置代理或将全局代理设为手动"
+                    ))
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)) : nil
+            ) {
+                Picker(tr("Claude proxy", "Claude 代理"), selection: $settings.useDedicatedClaudeProxy) {
+                    Text(tr("Use global manual proxy", "沿用全局手动代理")).tag(false)
+                    Text(tr("Configure separately", "单独配置")).tag(true)
                 }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .fixedSize()
+                .focusEffectDisabled()
+            }
+
+            if settings.useDedicatedClaudeProxy {
+                proxyFields(type: $settings.claudeProxyType, host: $settings.claudeProxyHost,
+                            port: $settings.claudeProxyPort, forClaude: true)
+            }
+
+            if settings.useDedicatedClaudeProxy || settings.proxyMode == .manual {
+                let resolution = settings.claudeProxyResolution
+                InsetDivider()
+                ProxyConnectionTestRow(resolution: resolution, forClaude: true)
+                    .id(resolution)
             }
         }
     }
 
-    /// `userMessage` 是给 Popover 的，地址或端口未填、填错会带「请到「设置 → 数据与刷新」…」，
-    /// TLS 失败会说「请检查代理设置」，用户此时就在这一页，所以这里只说原因。
-    /// 连不上、超时的文案不带跳转，照常使用。
-    private func proxyTestFailureMessage(_ error: QuotaError) -> String {
-        if case .network(.tls) = error {
-            return tr(
-                "Secure connection failed — the proxy's certificate may not be trusted by the system",
-                "安全连接失败,代理的证书可能未被系统信任"
-            )
+    @ViewBuilder
+    private func proxyFields(
+        type: Binding<ProxyType>, host: Binding<String>, port: Binding<Int>, forClaude: Bool = false
+    ) -> some View {
+        let skipsAgy = !forClaude && type.wrappedValue == .socks5
+        InsetDivider()
+        PrefsRow(
+            label: "Type",
+            chinese: "类型",
+            desc: skipsAgy ? "The agy command-line quota query is skipped." : nil,
+            chineseDesc: skipsAgy ? "SOCKS5 下不调用 agy 命令行查询额度" : nil
+        ) {
+            Picker(forClaude ? tr("Claude proxy type", "Claude 代理类型") : tr("Proxy type", "代理类型"),
+                   selection: type) {
+                Text("HTTP").tag(ProxyType.http)
+                Text("SOCKS5").tag(ProxyType.socks5)
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .fixedSize()
+            .focusEffectDisabled()
         }
-        guard case .network(.proxyUnavailable) = error else { return error.userMessage }
-        switch NetworkProxy.resolve() {
-        case .unavailable(.manualIncomplete):
-            return tr("Enter the address and port", "请填写地址和端口")
-        case .unavailable(.invalidPort):
-            return tr("Port must be between 1 and 65535", "端口需在 1–65535 之间")
-        case .unavailable(.invalidHost):
-            return tr(
-                "Enter only a hostname or IP, without http:// or a port",
-                "地址只填主机名或 IP,不带 http:// 和端口"
-            )
-        case .system, .proxy:
-            return tr("Proxy unavailable", "代理不可用")
+        InsetDivider()
+        PrefsRow(label: "Address", chinese: "地址") {
+            HStack(spacing: 6) {
+                TextField(tr("Host", "主机"), text: Binding(
+                    get: { host.wrappedValue },
+                    set: { host.wrappedValue = $0.trimmingCharacters(in: .whitespaces) }
+                ))
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 140)
+                Text(":")
+                    .foregroundStyle(.secondary)
+                TextField(tr("Port", "端口"), text: Binding(
+                    get: { port.wrappedValue == 0 ? "" : String(port.wrappedValue) },
+                    set: { port.wrappedValue = Int(String($0.filter(\.isASCII).filter(\.isNumber).prefix(5))) ?? 0 }
+                ))
+                .textFieldStyle(.roundedBorder)
+                .monospacedDigit()
+                .frame(width: 64)
+            }
         }
     }
 
@@ -1704,6 +1659,91 @@ private struct PrefsGroup<Content: View>: View {
             .ccPanel(cornerRadius: 10)
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
+    }
+}
+
+private struct ProxyConnectionTestRow: View {
+    let resolution: ProxyResolution
+    let forClaude: Bool
+
+    @State private var isTesting = false
+    @State private var result: Result<Void, QuotaError>?
+
+    var body: some View {
+        PrefsRow(
+            label: forClaude ? "Claude connection test" : "Connection test",
+            chinese: forClaude ? "Claude 连接测试" : "连接测试"
+        ) {
+            HStack(spacing: 8) {
+                switch result {
+                case .success:
+                    resultText(
+                        forClaude ? tr("Claude API reachable", "Claude API 可达") : tr("Connected", "可连接"),
+                        color: .secondary
+                    )
+                case .failure(let error):
+                    resultText(failureMessage(error), color: .red)
+                case nil:
+                    EmptyView()
+                }
+                Button {
+                    result = nil
+                    isTesting = true
+                    Task {
+                        result = await NetworkProxy.testConnection(using: resolution, forClaude: forClaude)
+                        isTesting = false
+                    }
+                } label: {
+                    if isTesting {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Text(tr("Test", "测试"))
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .focusable(false)
+                .disabled(isTesting)
+            }
+        }
+    }
+
+    private func resultText(_ message: String, color: Color) -> some View {
+        Text(message)
+            .font(.system(size: 11))
+            .foregroundStyle(color)
+            .lineLimit(2)
+            .multilineTextAlignment(.trailing)
+    }
+
+    private func failureMessage(_ error: QuotaError) -> String {
+        if forClaude, case .http(let code, _) = error {
+            if error.looksLikeInterceptedResponse { return error.userMessage(using: resolution) }
+            return tr("Unexpected Claude API response (HTTP \(code))", "Claude API 返回异常响应（HTTP \(code)）")
+        }
+        if case .network(.tls) = error {
+            return tr(
+                "Secure connection failed — the proxy's certificate may not be trusted by the system",
+                "安全连接失败,代理的证书可能未被系统信任"
+            )
+        }
+        if case .network(.proxyUnavailable) = error {
+            switch resolution {
+            case .unavailable(.manualIncomplete):
+                return tr("Enter the address and port", "请填写地址和端口")
+            case .unavailable(.invalidPort):
+                return tr("Port must be between 1 and 65535", "端口需在 1–65535 之间")
+            case .unavailable(.invalidHost):
+                return tr(
+                    "Enter only a hostname or IP, without http:// or a port",
+                    "地址只填主机名或 IP,不带 http:// 和端口"
+                )
+            case .unavailable(.claudeManualRequired), .system, .proxy:
+                return tr("Proxy unavailable", "代理不可用")
+            }
+        }
+        return error.userMessage(using: resolution)
     }
 }
 

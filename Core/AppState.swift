@@ -291,14 +291,9 @@ final class AppState {
     var codexTodayCost: Decimal?
     var claudeTodayCost: Decimal?
 
-    /// OpenAI / Anthropic / Cursor statuspage.io 最新快照,失败时保留上一份。
-    var codexServiceStatus: ServiceStatus?
-    var claudeServiceStatus: ServiceStatus?
-    var cursorServiceStatus: ServiceStatus?
-    /// 三家 statuspage 同时抓不到 = 本机出不去网(断网 / 代理挡着),不是三家同时挂了。
-    /// 失败时旧快照会被保留,UI 必须据此把状态点降级成"未知",
-    /// 否则断网期间 Popover 会一直用一个陈旧的绿点声称"服务正常"。
-    var serviceStatusUnreachable = false
+    /// 每家独立记录官方状态。失败时降级为未知，保留上次成功时间。
+    private(set) var serviceStatuses: [QuotaApp: ServiceStatus] = [:]
+    private var serviceStatusRefreshGeneration = 0
 
     let usageService = UsageService(localUsageApps: { SettingsStore.shared.enabledLocalUsageApps })
     private let scheduler = Scheduler()
@@ -405,7 +400,6 @@ final class AppState {
 
     private var didBootstrap = false
     private var quotaCache = QuotaCachePayload()
-    private var claudeFallbackBackoffUntil: Date?
     /// 批次 C：本轮标脏的额度持久化文件，刷新 / bootstrap / 设置操作末尾统一落盘。
     private var dirtyQuotaFiles: Set<QuotaFile> = []
     /// 已提交过的文件在正常退出时再确认一次，覆盖后台写入失败和晚到的旧提交。
@@ -647,23 +641,26 @@ final class AppState {
         scheduleQuotaPersistenceFlush()
     }
 
-    /// 拉取 OpenAI / Anthropic / Cursor statuspage 状态。失败保留旧快照,不清空。
-    /// 三个请求并发,任意一个失败不影响其他;三个全失败则置 `serviceStatusUnreachable`,
-    /// 让 UI 把保留下来的旧状态点降级成"未知"而不是继续显示"服务正常"。
+    /// 并发拉取 OpenAI / Anthropic / Cursor 官方状态。
     func refreshServiceStatus() async {
         guard beginStateOperation() else { return }
         defer { activeStateOperations -= 1 }
+        serviceStatusRefreshGeneration += 1
+        let generation = serviceStatusRefreshGeneration
         async let codex = Self.fetchServiceStatus(url: ServiceStatusClient.openAIStatusURL, tag: "openai")
         async let claude = Self.fetchServiceStatus(url: ServiceStatusClient.anthropicStatusURL, tag: "anthropic")
         async let cursor = Self.fetchServiceStatus(url: ServiceStatusClient.cursorStatusURL, tag: "cursor")
-        let codexResult = await codex
-        let claudeResult = await claude
-        let cursorResult = await cursor
-        if let codexResult { codexServiceStatus = codexResult }
-        if let claudeResult { claudeServiceStatus = claudeResult }
-        if let cursorResult { cursorServiceStatus = cursorResult }
-        serviceStatusUnreachable =
-            codexResult == nil && claudeResult == nil && cursorResult == nil
+        let results: [(QuotaApp, ServiceStatus?)] = await [(.codex, codex), (.claude, claude), (.cursor, cursor)]
+        guard generation == serviceStatusRefreshGeneration else { return }
+        for (app, result) in results {
+            if let result {
+                serviceStatuses[app] = result
+            } else if var previous = serviceStatuses[app] {
+                previous.indicator = .unknown
+                previous.description = nil
+                serviceStatuses[app] = previous
+            }
+        }
     }
 
     private static func fetchServiceStatus(url: URL, tag: String) async -> ServiceStatus? {
@@ -2107,6 +2104,12 @@ final class AppState {
         let alertSettingsVersion = SettingsStore.shared.quotaAlertRuntimeVersion
         defer { claudeRefreshState.inFlight = false }
 
+        let proxy = NetworkProxy.resolveClaude()
+        if case .unavailable = proxy {
+            let error = QuotaError.network(.proxyUnavailable)
+            markQuotaFailure(.claude, error.userMessage(using: proxy))
+            return
+        }
         guard var account = claudeAccount else {
             markQuotaFailure(.claude, noAccountMessage)
             return
@@ -2126,16 +2129,11 @@ final class AppState {
             }
         case .failure(let err):
             markQuotaFailure(.claude, err.userMessage, error: err)
-            // 凭据过期时 cc-bar 不再自己刷新(会作废 Claude Code 的 refresh_token),
-            // 用户手动刷新时改走 claude CLI 兜底取数——CLI 用自己的会话身份,
-            // 刷新对它是安全的。已有快照会被 markQuotaFailure 保留,不会被清空。
-            if err.isCredentialsExpired, reason == .userInitiated {
-                await loadClaudeCLIFallback(apiError: err)
-            }
             return
         }
         let alertEntryVersion = primaryQuotaAlertVersion(for: .claude)
-        let result = await ClaudeQuotaClient.fetch(accessToken: activeToken)
+        let requestProxy = NetworkProxy.resolveClaude()
+        let result = await ClaudeQuotaClient.fetch(accessToken: activeToken, using: requestProxy)
         guard primaryQuotaAlertVersion(for: .claude) == alertEntryVersion else { return }
         switch result {
         case .success(let snapshot):
@@ -2143,10 +2141,7 @@ final class AppState {
             observePrimaryQuota(snapshot, settingsVersion: alertSettingsVersion)
             await refreshClaudeProfileIfNeeded(account: account, accessToken: activeToken)
         case .failure(let err):
-            markQuotaFailure(.claude, err.userMessage, error: err)
-            if reason == .userInitiated, claudeQuota == nil, !err.isRateLimited {
-                await loadClaudeCLIFallback(apiError: err)
-            }
+            markQuotaFailure(.claude, err.userMessage(using: requestProxy), error: err)
         }
     }
 
@@ -2569,29 +2564,6 @@ final class AppState {
         guard SettingsStore.shared.isUsageServiceVisible(.cursor),
               let reloaded = cursorAccount, reloaded.accessToken != previousToken else { return }
         _ = await usageService.loadCursorRemoteUsageHistory(session: reloaded, range: range)
-    }
-
-    private func loadClaudeCLIFallback(apiError: QuotaError) async {
-        let entryVersion = primaryQuotaAlertVersion(for: .claude)
-        let now = Date()
-        if let claudeFallbackBackoffUntil, claudeFallbackBackoffUntil > now {
-            // CLI 兜底在冷却中是内部实现细节;用户要看的是最初那次取数为什么失败。
-            markQuotaFailure(.claude, apiError.userMessage, error: apiError)
-            return
-        }
-
-        claudeFallbackBackoffUntil = now.addingTimeInterval(rateLimitBackoff)
-        let result = await ClaudeCLIFallbackQuotaClient.fetch()
-        guard primaryQuotaAlertVersion(for: .claude) == entryVersion else { return }
-        switch result {
-        case .success(let snapshot):
-            storeQuota(.claude, snapshot: snapshot, source: .cliFallback)
-            // CLI 输出未携带可核实的账号身份，不能归给当前 API 账号产生提醒。
-        case .failure(let err):
-            // 同上:兜底自己为什么失败留在日志里,UI 只说最初的失败原因。
-            AppLog.warn(.quota, "claude CLI fallback failed: \(Redact.message(err.description))")
-            markQuotaFailure(.claude, apiError.userMessage, error: apiError)
-        }
     }
 
     // MARK: - 主服务额度刷新状态机

@@ -349,8 +349,8 @@ private struct CredentialInfoCard: View {
                 Text(tr("Your credentials", "关于凭据"))
                     .font(.system(size: 11.5, weight: .medium))
                 Text(tr(
-                    "CCBar connects directly to each service's official API to check quota, with no third-party servers in between. For some services, expired logins are renewed automatically and the local credential file is updated.",
-                    "CCBar 直接连接各服务的官方接口查询额度，不经过任何第三方服务器。部分服务登录过期时会自动续期，并更新本机的凭据文件。"
+                    "CCBar checks quota through official APIs. Claude requires a proxy configured in Settings → Data & Refresh. For some services, expired logins are renewed automatically and the local credential file is updated.",
+                    "CCBar 通过官方接口查询额度。Claude 需要在「设置 → 数据与刷新」配置代理。部分服务登录过期时会自动续期，并更新本机的凭据文件。"
                 ))
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)

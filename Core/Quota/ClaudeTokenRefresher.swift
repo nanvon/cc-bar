@@ -14,8 +14,7 @@ import Foundation
 /// 用户主力工具的登录态,不划算。
 ///
 /// 因此过期时的策略是"等 Claude Code 自己刷":重读一次凭据存储,如果它刚刷新过
-/// 就直接采用;否则向上报 `credentialsExpired`,由 AppState 保留上一次快照并在
-/// 用户手动刷新时走 `claude` CLI 兜底取数(CLI 用自己的会话身份,刷新是安全的)。
+/// 就直接采用;否则向上报 `credentialsExpired`,由 AppState 保留上一次快照并提示登录过期。
 ///
 /// 重读落空后还有一层:借 Claude Desktop 缓存里同一账号的 access_token
 /// (`ClaudeDesktopAuth`)。CLI 的 token 只有 8 小时有效期,用户改用 Claude Desktop

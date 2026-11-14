@@ -54,8 +54,8 @@ struct ServiceStatus: Sendable, Equatable {
 }
 
 enum ServiceStatusClient {
-    static let openAIStatusURL = URL(string: "https://status.openai.com/api/v2/status.json")!
-    static let anthropicStatusURL = URL(string: "https://status.claude.com/api/v2/status.json")!
+    nonisolated static let openAIStatusURL = URL(string: "https://status.openai.com/api/v2/status.json")!
+    nonisolated static let anthropicStatusURL = URL(string: "https://status.claude.com/api/v2/status.json")!
     static let cursorStatusURL = URL(string: "https://status.cursor.com/api/v2/status.json")!
 
     /// 拉取 Statuspage.io status.json 并解析为 ServiceStatus;
@@ -64,7 +64,11 @@ enum ServiceStatusClient {
         var request = URLRequest(url: url)
         request.timeoutInterval = 10
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        let (data, response) = try await NetworkProxy.data(for: request)
+        let (data, response) = if url == anthropicStatusURL {
+            try await NetworkProxy.claudeData(for: request)
+        } else {
+            try await NetworkProxy.data(for: request)
+        }
 
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             throw URLError(.badServerResponse)

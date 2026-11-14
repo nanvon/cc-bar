@@ -1,14 +1,16 @@
 import Foundation
+import Network
 import os
 
 // MARK: - 网络代理
 //
-// cc-bar 的出网请求一律走 `NetworkProxy.data(for:)`，不要直接用 `URLSession.shared`
-// （见 docs/技术实现.md「网络代理」）。两种模式，对 cc-bar 的全部请求生效：
+// cc-bar 的常规出网请求走 `NetworkProxy.data(for:)`（见 docs/技术实现.md「网络代理」）。
+// 全局代理有两种模式：
 // - 跟随系统：直接用 `URLSession.shared`，读 macOS 系统代理，与加入代理设置前完全一致。
 // - 手动：用户填写的 HTTP / SOCKS5 代理。
 // 手动模式下代理不可用时直接报错，不回退直连或系统代理：带着账号凭据的请求
 // 换一个出口发出，服务端看到的就是同一账号在两个 IP 上同时使用。
+// Claude 请求用 `claudeData(for:)`，始终要求显式配置代理。
 
 nonisolated enum ProxyMode: String, CaseIterable, Identifiable, Sendable {
     case system
@@ -24,7 +26,7 @@ nonisolated enum ProxyType: String, CaseIterable, Identifiable, Sendable {
     var id: String { rawValue }
 }
 
-nonisolated struct ProxyEndpoint: Sendable, Equatable {
+nonisolated struct ProxyEndpoint: Sendable, Hashable {
     var type: ProxyType
     var host: String
     var port: Int
@@ -35,7 +37,9 @@ nonisolated struct ProxyEndpoint: Sendable, Equatable {
     }
 }
 
-nonisolated enum ProxyUnavailableReason: Sendable, Equatable {
+nonisolated enum ProxyUnavailableReason: Sendable, Hashable {
+    /// Claude 沿用全局代理时，全局必须设为手动。
+    case claudeManualRequired
     /// 手动模式下地址或端口没填。
     case manualIncomplete
     /// 端口不在 1～65535。
@@ -44,7 +48,7 @@ nonisolated enum ProxyUnavailableReason: Sendable, Equatable {
     case invalidHost
 }
 
-nonisolated enum ProxyResolution: Sendable, Equatable {
+nonisolated enum ProxyResolution: Sendable, Hashable {
     case system
     case proxy(ProxyEndpoint)
     case unavailable(ProxyUnavailableReason)
@@ -62,6 +66,10 @@ nonisolated enum NetworkProxy {
         static let type = "ccbar.settings.proxyType"
         static let host = "ccbar.settings.proxyHost"
         static let port = "ccbar.settings.proxyPort"
+        static let useDedicatedClaudeProxy = "ccbar.settings.useDedicatedClaudeProxy"
+        static let claudeType = "ccbar.settings.claudeProxyType"
+        static let claudeHost = "ccbar.settings.claudeProxyHost"
+        static let claudePort = "ccbar.settings.claudeProxyPort"
     }
 
     private struct State: Sendable {
@@ -70,6 +78,7 @@ nonisolated enum NetworkProxy {
     }
 
     private static let state = OSAllocatedUnfairLock(initialState: State())
+    private static let claudeState = OSAllocatedUnfairLock(initialState: State())
 
     // MARK: 请求
 
@@ -80,22 +89,56 @@ nonisolated enum NetworkProxy {
     }
 
     static func currentSession() throws -> URLSession {
-        switch resolve() {
+        try session(for: resolve())
+    }
+
+    private static func session(for resolution: ProxyResolution) throws -> URLSession {
+        switch resolution {
         case .system:
             return .shared
         case .proxy(let endpoint):
-            return session(for: endpoint)
+            return session(for: endpoint, state: state, makeSession: makeSession)
         case .unavailable(let reason):
             throw ProxyUnavailableError(reason: reason)
         }
     }
 
-    /// 设置页「测试」按钮：用当前配置请求 Claude 状态页，收到任何 HTTP 响应就算连通。
-    static func testConnection() async -> Result<Void, QuotaError> {
-        var request = URLRequest(url: URL(string: "https://status.claude.com/api/v2/status.json")!)
-        request.timeoutInterval = 10
+    static func claudeData(
+        for request: URLRequest, using proxy: ProxyResolution = resolveClaude()
+    ) async throws -> (Data, URLResponse) {
+        let session = try claudeSession(for: proxy)
+        return try await session.data(for: request)
+    }
+
+    private static func claudeSession(for resolution: ProxyResolution) throws -> URLSession {
+        switch resolution {
+        case .system:
+            throw ProxyUnavailableError(reason: .claudeManualRequired)
+        case .unavailable(let reason):
+            throw ProxyUnavailableError(reason: reason)
+        case .proxy(let endpoint):
+            return session(for: endpoint, state: claudeState, makeSession: makeClaudeSession)
+        }
+    }
+
+    /// 用设置点击时的配置测试，不发送账号凭据。
+    static func testConnection(using resolution: ProxyResolution, forClaude: Bool) async -> Result<Void, QuotaError> {
+        var request = forClaude ? ClaudeQuotaClient.usageRequest(timeout: 10)
+            : URLRequest(url: ServiceStatusClient.openAIStatusURL, timeoutInterval: 10)
+        if forClaude {
+            request.cachePolicy = .reloadIgnoringLocalCacheData
+            request.httpShouldHandleCookies = false
+        }
         do {
-            _ = try await data(for: request)
+            let (data, response) = if forClaude {
+                try await claudeData(for: request, using: resolution)
+            } else {
+                try await session(for: resolution).data(for: request)
+            }
+            guard let http = response as? HTTPURLResponse else { return .failure(.decode("non-http")) }
+            if forClaude, !ClaudeQuotaClient.isUnauthenticatedUsageResponse(http, data: data) {
+                return .failure(.http(http.statusCode, String(data: data, encoding: .utf8) ?? ""))
+            }
             return .success(())
         } catch {
             return .failure(.from(transport: error))
@@ -105,26 +148,44 @@ nonisolated enum NetworkProxy {
     // MARK: 解析配置
 
     static func resolve() -> ProxyResolution {
-        let defaults = UserDefaults.standard
+        resolve(defaults: .standard)
+    }
+
+    private static func resolve(defaults: UserDefaults) -> ProxyResolution {
         let mode = defaults.string(forKey: Keys.mode).flatMap(ProxyMode.init(rawValue:)) ?? .system
         switch mode {
         case .system:
             return .system
         case .manual:
-            return manualResolution(defaults: defaults)
+            return manualResolution(defaults: defaults, typeKey: Keys.type, hostKey: Keys.host, portKey: Keys.port)
         }
     }
 
-    /// 当前生效的代理地址；跟随系统或代理不可用时为 nil。
-    static var activeEndpoint: ProxyEndpoint? {
-        if case .proxy(let endpoint) = resolve() { return endpoint }
-        return nil
+    static func resolveClaude() -> ProxyResolution {
+        let defaults = UserDefaults.standard
+        if defaults.bool(forKey: Keys.useDedicatedClaudeProxy) {
+            return manualResolution(defaults: defaults, typeKey: Keys.claudeType,
+                                    hostKey: Keys.claudeHost, portKey: Keys.claudePort)
+        }
+        return claudeUsingGlobal(resolve(defaults: defaults))
     }
 
-    private static func manualResolution(defaults: UserDefaults) -> ProxyResolution {
-        let type = defaults.string(forKey: Keys.type).flatMap(ProxyType.init(rawValue:)) ?? .http
-        let host = (defaults.string(forKey: Keys.host) ?? "").trimmingCharacters(in: .whitespaces)
-        let port = defaults.integer(forKey: Keys.port)
+    static func claudeUsingGlobal(_ global: ProxyResolution) -> ProxyResolution {
+        if case .system = global { return .unavailable(.claudeManualRequired) }
+        return global
+    }
+
+    private static func manualResolution(
+        defaults: UserDefaults, typeKey: String, hostKey: String, portKey: String
+    ) -> ProxyResolution {
+        let type = defaults.string(forKey: typeKey).flatMap(ProxyType.init(rawValue:)) ?? .http
+        let host = defaults.string(forKey: hostKey) ?? ""
+        let port = defaults.integer(forKey: portKey)
+        return manualResolution(type: type, host: host, port: port)
+    }
+
+    static func manualResolution(type: ProxyType, host: String, port: Int) -> ProxyResolution {
+        let host = host.trimmingCharacters(in: .whitespaces)
         guard !host.isEmpty, port != 0 else { return .unavailable(.manualIncomplete) }
         guard !host.contains("/"),
               !host.contains(where: \.isWhitespace),
@@ -142,7 +203,11 @@ nonisolated enum NetworkProxy {
     // MARK: 会话
 
     /// 同一地址复用一个会话；地址变了就换新会话，旧会话等进行中的请求跑完再释放。
-    private static func session(for endpoint: ProxyEndpoint) -> URLSession {
+    private static func session(
+        for endpoint: ProxyEndpoint,
+        state: OSAllocatedUnfairLock<State>,
+        makeSession: (ProxyEndpoint) -> URLSession
+    ) -> URLSession {
         state.withLock { current in
             if let session = current.session, current.endpoint == endpoint { return session }
             current.session?.finishTasksAndInvalidate()
@@ -173,11 +238,26 @@ nonisolated enum NetworkProxy {
         return URLSession(configuration: configuration)
     }
 
+    private static func makeClaudeSession(_ endpoint: ProxyEndpoint) -> URLSession {
+        let proxyEndpoint = NWEndpoint.hostPort(
+            host: NWEndpoint.Host(endpoint.host), port: NWEndpoint.Port(rawValue: UInt16(endpoint.port))!
+        )
+        var proxy: ProxyConfiguration
+        switch endpoint.type {
+        case .http:
+            proxy = ProxyConfiguration(httpCONNECTProxy: proxyEndpoint)
+        case .socks5:
+            proxy = ProxyConfiguration(socksv5Proxy: proxyEndpoint)
+        }
+        proxy.allowFailover = false
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.proxyConfigurations = [proxy]
+        return URLSession(configuration: configuration)
+    }
+
     // MARK: 子进程
 
-    /// `claude`、`agy` 子进程的环境变量。它们是独立程序，只认代理环境变量，不读 cc-bar 的会话配置。
-    /// 返回 nil 表示当前代理没法交给子进程，调用方应放弃启动，不要让它直连：
-    /// 代理不可用，或代理是 SOCKS5（Claude Code 官方文档写明不支持 SOCKS 代理，agy 未确认支持）。
+    /// `agy` 子进程的环境变量。代理不可用或为 SOCKS5 时返回 nil，调用方跳过 CLI。
     static func subprocessEnvironment(base: [String: String]) -> [String: String]? {
         switch resolve() {
         case .system:

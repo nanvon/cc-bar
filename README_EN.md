@@ -57,7 +57,7 @@
 
 ## ⚡ Service Support Matrix
 
-cc-bar presents two types of data: **Subscription Quotas** queried directly from official APIs for remaining percentages and reset times; **Local Usage** parsed from local session logs or remote telemetry, never uploading code, project data, or conversation content.
+cc-bar presents two types of data: **Subscription Quotas** queried from official APIs for remaining percentages and reset times; **Local Usage** parsed from local session logs or remote telemetry, never uploading code, project data, or conversation content.
 
 | Service / Tool | Quota Monitoring | Alert Notifications | Local Usage / Cost Analytics | Multi-Account | Credential Source |
 | :--- | :--- | :---: | :--- | :---: | :--- |
@@ -128,7 +128,7 @@ Usage logs are parsed and stored locally. Quotas, Cursor remote metering, servic
 | Service / Tool | Credential Path | Access Mode | Behavior & Security Guarantees |
 | :--- | :--- | :---: | :--- |
 | **Codex** | `~/.codex/auth.json`<br>Imported accounts: CCBar's own Keychain items | Read / Write | Automatically renews tokens via `refresh_token` near expiry and writes new tokens back to where they came from. Re-reads the file before renewing to prevent race conditions with the `codex` CLI. |
-| **Claude Code** | `~/.claude/.credentials.json`<br>or macOS Keychain | **Strictly Read-Only** | **Never refreshes or writes credentials**. Anthropic refresh tokens are single-use; third-party rotation invalidates CLI sessions. Preserves the last snapshot and prompts for CLI re-login when expired; provides safe CLI fallback when needed. |
+| **Claude Code** | `~/.claude/.credentials.json`<br>or macOS Keychain | **Strictly Read-Only** | **Never refreshes or writes credentials**. Anthropic refresh tokens are single-use; third-party rotation invalidates CLI sessions. Preserves the last snapshot and prompts you to renew your sign-in when it expires. Claude requests require a proxy configured in Settings → Data & Refresh. |
 | **Antigravity** | System Keychain `gemini / antigravity` (preferred)<br>Legacy jetski / CLI token / oauth_creds files | GUI credentials: read-only; CCBar refresh cache: read/write; legacy jetski / oauth_creds: read/write | Desktop-app sign-in supports account detection, cloud quotas, and automatic renewal without agy. Refreshed credentials are bound to the original login and stored in CCBar’s own Keychain. |
 | **Cursor** | `~/Library/Application Support/Cursor`<br>`/User/globalStorage/state.vscdb` | **Strictly Read-Only** | Reads only `cursorAuth/accessToken` to construct session cookies for usage queries. Never touches refresh tokens/OAuth and never writes back to SQLite or Keychain. |
 | **Command Code** | 5-level local sources or macOS Keychain | Read / Keychain | Read-only auto-detection in order: `~/.commandcode/auth.json` → `~/.pi/agent/auth.json` → `~/.local/share/opencode/auth.json` → environment variables → Keychain. Settings can also switch to a manual API key stored in the macOS Keychain. |

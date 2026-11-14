@@ -124,6 +124,7 @@ nonisolated enum QuotaSnapshotSource: String, Sendable, Codable {
     case api
     case local
     case cache
+    /// 兼容旧版额度缓存和周期记录。
     case cliFallback
     case antigravityCLI
 
@@ -563,13 +564,6 @@ nonisolated enum QuotaError: Error, CustomStringConvertible {
         httpStatusCode == 401 || httpStatusCode == 403
     }
 
-    /// 是否为"需要用户去 Claude Code 刷新登录态"级别的失败。
-    /// UI 可据此降级提示文案;取数侧可据此走 CLI 兜底。
-    var isCredentialsExpired: Bool {
-        if case .credentialsExpired = self { return true }
-        return false
-    }
-
     /// 是否为网络不可达一类的失败(断网、代理断线、超时、TLS)。
     var isNetworkFailure: Bool {
         if case .network = self { return true }
@@ -602,16 +596,16 @@ nonisolated enum QuotaError: Error, CustomStringConvertible {
 
 @MainActor
 extension NetworkFailureKind {
-    var userMessage: String {
+    func userMessage(using proxy: ProxyResolution) -> String {
         switch self {
         case .offline:
             return tr("No network connection", "网络未连接")
         case .cannotConnect:
             // 设置里指定了代理时直接点名那个地址,用户不用再猜走的是哪个代理。
-            if let proxy = NetworkProxy.activeEndpoint?.address {
+            if case .proxy(let endpoint) = proxy {
                 return tr(
-                    "Can't reach the service — check that proxy \(proxy) is running",
-                    "连不上服务,请检查代理 \(proxy) 是否在运行"
+                    "Can't reach the service — check that proxy \(endpoint.address) is running",
+                    "连不上服务,请检查代理 \(endpoint.address) 是否在运行"
                 )
             }
             return tr(
@@ -619,10 +613,10 @@ extension NetworkFailureKind {
                 "连不上服务,请检查网络或代理"
             )
         case .timedOut:
-            if let proxy = NetworkProxy.activeEndpoint?.address {
+            if case .proxy(let endpoint) = proxy {
                 return tr(
-                    "Connection timed out — check proxy \(proxy)",
-                    "连接超时,请检查代理 \(proxy)"
+                    "Connection timed out — check proxy \(endpoint.address)",
+                    "连接超时,请检查代理 \(endpoint.address)"
                 )
             }
             return tr(
@@ -630,7 +624,12 @@ extension NetworkFailureKind {
                 "连接超时,请检查网络或代理"
             )
         case .proxyUnavailable:
-            switch NetworkProxy.resolve() {
+            switch proxy {
+            case .unavailable(.claudeManualRequired):
+                return tr(
+                    "Claude refresh paused — configure a proxy in Settings → Data & Refresh",
+                    "Claude 已暂停刷新，请到「设置 → 数据与刷新」配置代理"
+                )
             case .unavailable(.manualIncomplete):
                 return tr(
                     "Proxy address or port is missing — fill it in Settings → Data & Refresh",
@@ -670,6 +669,10 @@ extension NetworkFailureKind {
 extension QuotaError {
     /// Popover / 其他账号行展示用的一句话。短、可读、双语,不含技术细节。
     var userMessage: String {
+        userMessage(using: NetworkProxy.resolve())
+    }
+
+    func userMessage(using proxy: ProxyResolution) -> String {
         switch self {
         case .missingToken:
             return tr("Not signed in", "未登录")
@@ -687,7 +690,7 @@ extension QuotaError {
                 "登录已过期,请在终端运行一次 claude"
             )
         case .network(let kind):
-            return kind.userMessage
+            return kind.userMessage(using: proxy)
         case .http(let code, _):
             return Self.httpMessage(code: code, intercepted: looksLikeInterceptedResponse)
         case .decode:

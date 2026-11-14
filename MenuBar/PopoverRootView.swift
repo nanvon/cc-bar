@@ -339,24 +339,7 @@ struct PopoverRootView: View {
 
     private func serviceStatus(for app: QuotaApp) -> ServiceStatus? {
         guard SettingsStore.shared.showServiceStatus else { return nil }
-        let status: ServiceStatus? = switch app {
-        case .codex: appState.codexServiceStatus
-        case .claude: appState.claudeServiceStatus
-        case .cursor: appState.cursorServiceStatus
-        case .antigravity, .commandCode, .opencodeGo: nil
-        }
-        guard let status else { return nil }
-        // 本机连不上 statuspage 时旧快照仍被保留(刻意的,别的信息还能用),
-        // 但它已经不代表"现在"的服务状态了,不能继续拿一个陈旧的绿点说"服务正常"。
-        guard !appState.serviceStatusUnreachable else {
-            return ServiceStatus(
-                indicator: .unknown,
-                description: nil,
-                updatedAt: status.updatedAt,
-                fetchedAt: status.fetchedAt
-            )
-        }
-        return status
+        return appState.serviceStatuses[app]
     }
 
     // MARK: Header state (live / stale / offline)
@@ -508,6 +491,14 @@ private struct ServiceBlockView: View {
                         .lineLimit(2)
                 }
                 .foregroundStyle(.orange)
+                if app == .claude, let snapshot {
+                    TimelineView(.periodic(from: .now, by: 60)) { context in
+                        let age = PopoverRootView.relativeAge(from: snapshot.fetchedAt, now: context.date)
+                        Text(tr("Quota last updated \(age) ago", "额度更新于 \(age) 前"))
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
         }
         .padding(.horizontal, 16)

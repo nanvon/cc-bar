@@ -325,6 +325,28 @@ final class SettingsStore {
     var proxyHost: String { didSet { defaults.set(proxyHost, forKey: NetworkProxy.Keys.host) } }
     /// 0 表示未填写。
     var proxyPort: Int { didSet { defaults.set(proxyPort, forKey: NetworkProxy.Keys.port) } }
+    var useDedicatedClaudeProxy: Bool {
+        didSet { defaults.set(useDedicatedClaudeProxy, forKey: NetworkProxy.Keys.useDedicatedClaudeProxy) }
+    }
+    var claudeProxyType: ProxyType {
+        didSet { defaults.set(claudeProxyType.rawValue, forKey: NetworkProxy.Keys.claudeType) }
+    }
+    var claudeProxyHost: String {
+        didSet { defaults.set(claudeProxyHost, forKey: NetworkProxy.Keys.claudeHost) }
+    }
+    var claudeProxyPort: Int {
+        didSet { defaults.set(claudeProxyPort, forKey: NetworkProxy.Keys.claudePort) }
+    }
+
+    var proxyResolution: ProxyResolution {
+        guard proxyMode == .manual else { return .system }
+        return NetworkProxy.manualResolution(type: proxyType, host: proxyHost, port: proxyPort)
+    }
+
+    var claudeProxyResolution: ProxyResolution {
+        guard useDedicatedClaudeProxy else { return NetworkProxy.claudeUsingGlobal(proxyResolution) }
+        return NetworkProxy.manualResolution(type: claudeProxyType, host: claudeProxyHost, port: claudeProxyPort)
+    }
 
     // 通用
     var appLanguage: AppLanguage { didSet { defaults.set(appLanguage.rawValue, forKey: Keys.appLanguage) } }
@@ -446,6 +468,10 @@ final class SettingsStore {
         proxyType = defaults.string(forKey: NetworkProxy.Keys.type).flatMap(ProxyType.init(rawValue:)) ?? .http
         proxyHost = defaults.string(forKey: NetworkProxy.Keys.host) ?? ""
         proxyPort = defaults.integer(forKey: NetworkProxy.Keys.port)
+        useDedicatedClaudeProxy = defaults.bool(forKey: NetworkProxy.Keys.useDedicatedClaudeProxy)
+        claudeProxyType = defaults.string(forKey: NetworkProxy.Keys.claudeType).flatMap(ProxyType.init(rawValue:)) ?? .http
+        claudeProxyHost = defaults.string(forKey: NetworkProxy.Keys.claudeHost) ?? ""
+        claudeProxyPort = defaults.integer(forKey: NetworkProxy.Keys.claudePort)
         // 通用：launchAtLogin 以系统当前注册状态为准
         let langRaw = defaults.string(forKey: Keys.appLanguage) ?? AppLanguage.system.rawValue
         appLanguage = AppLanguage(rawValue: langRaw) ?? .system

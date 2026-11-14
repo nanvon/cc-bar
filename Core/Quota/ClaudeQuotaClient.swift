@@ -4,19 +4,32 @@ nonisolated enum ClaudeQuotaClient {
     static let endpoint = URL(string: "https://api.anthropic.com/api/oauth/usage")!
     private static let userAgent = "claude-code/2.1.0"
 
-    nonisolated static func fetch(
-        accessToken: String
-    ) async -> Result<QuotaSnapshot, QuotaError> {
+    static func usageRequest(timeout: TimeInterval) -> URLRequest {
         var req = URLRequest(url: endpoint)
         req.httpMethod = "GET"
-        req.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         req.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         req.setValue(userAgent, forHTTPHeaderField: "User-Agent")
-        req.timeoutInterval = 30
+        req.timeoutInterval = timeout
+        return req
+    }
+
+    static func isUnauthenticatedUsageResponse(_ response: HTTPURLResponse, data: Data) -> Bool {
+        guard response.url == endpoint, response.statusCode == 401,
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+        // 兼容顶层错误字段和嵌套 error 对象。
+        let error = (root["error"] as? [String: Any]) ?? root
+        return error["type"] as? String == "authentication_error" && error["message"] is String
+    }
+
+    nonisolated static func fetch(
+        accessToken: String, using proxy: ProxyResolution
+    ) async -> Result<QuotaSnapshot, QuotaError> {
+        var req = usageRequest(timeout: 30)
+        req.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
 
         let data: Data, resp: URLResponse
-        do { (data, resp) = try await NetworkProxy.data(for: req) }
+        do { (data, resp) = try await NetworkProxy.claudeData(for: req, using: proxy) }
         catch { return .failure(.from(transport: error)) }
         guard let http = resp as? HTTPURLResponse else {
             return .failure(.transport("non-http"))
@@ -56,7 +69,7 @@ nonisolated enum ClaudeQuotaClient {
         req.timeoutInterval = 30
 
         let data: Data, resp: URLResponse
-        do { (data, resp) = try await NetworkProxy.data(for: req) }
+        do { (data, resp) = try await NetworkProxy.claudeData(for: req) }
         catch { return .failure(.from(transport: error)) }
         guard let http = resp as? HTTPURLResponse else {
             return .failure(.transport("non-http"))
