@@ -46,6 +46,9 @@ nonisolated struct ScanFileState: Sendable, Equatable, Codable {
     var dshLastSlotOpen: Bool?
     /// DSH 用：最近一次 `step/start` 或 `llm/retry-started` 的时间（Unix 毫秒），作为下一次请求的发出时间。
     var dshRequestStartMs: Double?
+    /// DS Bot 用：该会话是 Claude Code Bot（provider == `local-claude-code`），用量已由 Claude 扫描器统计，
+    /// 本扫描器跳过其条目与对话种子。nil 表示旧缓存，未判定。
+    var dshIsClaudeCode: Bool?
     /// Claude 用：最近一条 user 行（提示词或工具结果）的时间（Unix 毫秒），作为下一次请求的发出时间。
     var claudeLastInputMs: Double?
     /// Claude 用：本文件续接的上一段对话 key。桌面端续接会换新 sessionId，把原对话的消息以新 sessionId

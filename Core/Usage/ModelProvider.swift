@@ -144,6 +144,10 @@ nonisolated enum ModelProvider: String, Sendable, CaseIterable {
     case deepseek
     case opencodeGo
     case commandCode
+    /// DS Bot 的模型渠道（`trae-cn/*`）。渠道自有模型仍按官方型号查价，这里只作分组展示。
+    case traeCN
+    /// DS Bot 的模型渠道（`workbuddy/*`）。
+    case workBuddy
     case other
 
     /// 推导提供商。
@@ -162,7 +166,10 @@ nonisolated enum ModelProvider: String, Sendable, CaseIterable {
             ("deepseek/", .deepseek),
             ("opencode-go/", .opencodeGo),
             ("commandcode/", .commandCode),
-            ("command-code/", .commandCode)
+            ("command-code/", .commandCode),
+            // DS Bot 模型类 Bot 的渠道前缀（模型标识已去掉统一网关 `magpie-dsbot/`）。
+            ("trae-cn/", .traeCN),
+            ("workbuddy/", .workBuddy)
         ]
         for (prefix, provider) in prefixes where m.hasPrefix(prefix) {
             return provider
@@ -193,6 +200,8 @@ nonisolated enum ModelProvider: String, Sendable, CaseIterable {
         case .deepseek: return tr("DeepSeek", "DeepSeek")
         case .opencodeGo: return tr("OpenCode-Go", "OpenCode-Go")
         case .commandCode: return tr("Command Code", "Command Code")
+        case .traeCN: return tr("Trae CN", "Trae CN")
+        case .workBuddy: return tr("WorkBuddy", "WorkBuddy")
         case .other: return tr("Other", "其他")
         }
     }

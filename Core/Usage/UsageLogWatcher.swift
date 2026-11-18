@@ -63,7 +63,7 @@ nonisolated struct UsageLogPathMatcher: Sendable {
         if apps.contains(.claude) { directories.append(roots.claudeRoot) }
         if apps.contains(.codex) { directories.append(contentsOf: roots.codexRoots) }
         if apps.contains(.pi) { directories.append(roots.piRoot) }
-        if apps.contains(.dsh) { directories.append(roots.dshRoot) }
+        if apps.contains(.dsh) { directories.append(contentsOf: roots.dshRoots) }
         let antigravityRoots = apps.contains(.antigravity) ? roots.antigravityRoots : []
         directories.append(contentsOf: antigravityRoots.map { $0.appendingPathComponent("annotations") })
         // 只认数据库本体和 WAL；`-shm` 读者也会写，不代表有新数据。
@@ -156,6 +156,8 @@ final class UsageLogWatcher {
             (.opencode, ".local/share/opencode"),
             // DSH：默认根 `~/.dsh/sessions`，这里监听顶层目录（sessions 可能尚未创建）。
             (.dsh, ".dsh"),
+            // DS Bot：模型类 Bot 的会话写在 `~/.ds-bot/sessions`，与 DSH 共用格式，监听顶层目录。
+            (.dsh, ".ds-bot"),
             // Antigravity：`~/.gemini/antigravity*/conversations` 与 `~/.config/antigravity`。
             (.antigravity, ".gemini"),
             (.antigravity, ".config/antigravity"),

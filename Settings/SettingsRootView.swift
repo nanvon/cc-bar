@@ -1164,9 +1164,9 @@ struct SettingsRootView: View {
             installed = exists(".config/opencode") || exists(".local/share/opencode")
         case .dsh:
             // 只探测默认根：不做 Desktop 自定义数据目录、显式 DSH_HOME、Beta home 的自动发现。
-            // 没有默认日志不能据此断定用户未安装 DSH。
-            hasRecords = directoryExists(".dsh/sessions")
-            installed = exists(".dsh")
+            // DSH 与 DS Bot 共用同一套会话格式，模型类 Bot 的会话在 ~/.ds-bot/sessions。
+            hasRecords = directoryExists(".dsh/sessions") || directoryExists(".ds-bot/sessions")
+            installed = exists(".dsh") || exists(".ds-bot")
         case .antigravity:
             // App / IDE / CLI 各有一个数据目录，任一目录下有对话库目录即算有记录。
             let roots = [".gemini/antigravity", ".gemini/antigravity-cli", ".gemini/antigravity-ide"]
@@ -1342,9 +1342,9 @@ struct SettingsRootView: View {
         default:
             (
                 "dsh", "D", "DSH",
-                tr("Usage: reads conversation records in ~/.dsh/sessions and calculates tokens and cost on this Mac. Only the default location is checked. DSH has no subscription quota.",
-                   "用量：读取 ~/.dsh/sessions 中的对话记录，在本机计算 Token 和费用。只查找这个默认位置。DSH 没有订阅额度。"),
-                tr("Start a conversation in DSH to detect it (only ~/.dsh is checked)", "用 DSH 产生对话后自动识别，只查找 ~/.dsh")
+                tr("Usage: reads conversation records in ~/.dsh/sessions and ~/.ds-bot/sessions (DS Bot model Bots) and calculates tokens and cost on this Mac. Only the default locations are checked. DSH has no subscription quota.",
+                   "用量：读取 ~/.dsh/sessions 与 ~/.ds-bot/sessions（DS Bot 模型类 Bot）中的对话记录，在本机计算 Token 和费用。只查找这两个默认位置。DSH 没有订阅额度。"),
+                tr("Start a conversation in DSH or DS Bot to detect it (only default locations are checked)", "用 DSH 或 DS Bot 产生对话后自动识别，只查找默认位置")
             )
         }
 

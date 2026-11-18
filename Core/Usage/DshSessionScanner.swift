@@ -57,6 +57,21 @@ enum DshSessionScanner {
             .appendingPathComponent(".dsh/sessions", isDirectory: true)
     }
 
+    /// DS Bot 的会话根：`~/.ds-bot/sessions`。与 DSH 共用同一套 `session.vN.jsonl[.zstd]` 格式，
+    /// 目录形态同样是 `<项目段>/<会话段>/<日志文件>`；模型类 Bot（`workbuddy/*`、`trae-cn/*` 等）
+    /// 的用量写在这里。Claude Code Bot（provider == `local-claude-code`）的用量已由
+    /// `~/.claude/projects` 统计，扫描时会跳过，避免重复计数。
+    nonisolated static var dsBotRoot: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".ds-bot/sessions", isDirectory: true)
+    }
+
+    /// 生产环境同时扫描 DSH 与 DS Bot 两个默认根。
+    nonisolated static var defaultRoots: [URL] { [defaultRoot, dsBotRoot] }
+
+    /// Claude Code Bot 的路由 provider，其用量由 Claude 扫描器负责，本扫描器不重复入账。
+    private nonisolated static let claudeCodeProvider = "local-claude-code"
+
     /// 冻结该分区时使用的空结果：不产生条目、不改变任何 watermark。
     /// 主历史含 DSH 分区但逐会话贡献不可用时走这里：既不增量也不能重建。
     nonisolated static func frozenResult(preserving state: [String: ScanFileState]) -> Result {
@@ -81,7 +96,7 @@ enum DshSessionScanner {
         previous: [String: ScanFileState],
         onProgress: ScanProgressCallback? = nil
     ) -> Result {
-        scan(previous: previous, root: defaultRoot, onProgress: onProgress)
+        scan(previous: previous, roots: defaultRoots, onProgress: onProgress)
     }
 
     /// 可注入日志根目录，供脱敏 fixture 测试真实字节偏移扫描链路。
@@ -89,6 +104,17 @@ enum DshSessionScanner {
     nonisolated static func scan(
         previous: [String: ScanFileState],
         root: URL,
+        minimumMtime: Date? = nil,
+        onProgress: ScanProgressCallback? = nil
+    ) -> Result {
+        scan(previous: previous, roots: [root], minimumMtime: minimumMtime, onProgress: onProgress)
+    }
+
+    /// 扫描多个日志根（`~/.dsh/sessions` + `~/.ds-bot/sessions`）。各根的条目合并后统一去重：
+    /// `ScanFileState` 以绝对路径为键，同 ID 会话出现在不同目录时按既有异常规则两份都不提交。
+    nonisolated static func scan(
+        previous: [String: ScanFileState],
+        roots: [URL],
         minimumMtime: Date? = nil,
         onProgress: ScanProgressCallback? = nil
     ) -> Result {
@@ -108,11 +134,13 @@ enum DshSessionScanner {
             totalTokensMismatchCount: 0
         )
 
-        let selection = selectedLogs(under: root, hadPreviousLogs: !previous.isEmpty)
+        let selections = roots.map { selectedLogs(under: $0, hadPreviousLogs: !previous.isEmpty) }
+        let allLogs = selections.flatMap(\.logs).sorted { $0.fileURL.path < $1.fileURL.path }
+        let failedPrefixes = selections.flatMap(\.failedPrefixes)
         let logs = minimumMtime.map { minimum in
-            selection.logs.filter { $0.modificationTime >= minimum.timeIntervalSince1970 }
-        } ?? selection.logs
-        result.failedDirectoryCount = selection.failedPrefixes.count
+            allLogs.filter { $0.modificationTime >= minimum.timeIntervalSince1970 }
+        } ?? allLogs
+        result.failedDirectoryCount = failedPrefixes.count
         var linesParsed = 0
         let total = logs.count
 
@@ -209,16 +237,20 @@ enum DshSessionScanner {
                 state.dshLastStep = scan.lastStep
                 state.dshLastSlotOpen = scan.lastSlotOpen
                 state.dshRequestStartMs = scan.requestStartMs
+                state.dshIsClaudeCode = scan.isClaudeCodeSession
                 result.newState[log.fileURL.path] = state
-                result.entriesByPath[log.fileURL.path] = scan.entries
-                if restarted, let id = scan.sessionID {
-                    result.restartedSessionIDs.insert(id)
+                // Claude Code Bot 的用量已由 `~/.claude/projects` 统计，这里不再产出条目和对话种子。
+                if !scan.isClaudeCodeSession {
+                    result.entriesByPath[log.fileURL.path] = scan.entries
+                    if restarted, let id = scan.sessionID {
+                        result.restartedSessionIDs.insert(id)
+                    }
                 }
             }
         }
 
         // 枚举失败的子树不是删除：保留其中全部旧 watermark，等待访问恢复。
-        for (path, state) in previous where selection.failedPrefixes.contains(where: { path.hasPrefix($0) }) {
+        for (path, state) in previous where failedPrefixes.contains(where: { path.hasPrefix($0) }) {
             result.newState[path] = state
         }
 
@@ -245,7 +277,11 @@ enum DshSessionScanner {
         var seeds: [String: ConversationSeed] = [:]
         var projectResolver = ConversationProjectResolver()
         for (path, state) in result.newState {
-            guard let id = state.conversationID, !result.duplicateSessionIDs.contains(id) else { continue }
+            guard let id = state.conversationID,
+                  !result.duplicateSessionIDs.contains(id),
+                  state.dshIsClaudeCode != true,
+                  // 新建的 Claude Code Bot 在第一次回复前还没有 dshIsClaudeCode，用路由 provider 兜底。
+                  state.dshRouteProvider != claudeCodeProvider else { continue }
             seeds["dsh:\(id)"] = seed(id: id, state: state, path: path, resolver: &projectResolver)
         }
         result.conversationSeeds = Array(seeds.values)
@@ -535,6 +571,8 @@ enum DshSessionScanner {
         /// 最近一次请求发出的时间（`step/start` / `llm/retry-started`），用于首字延迟。
         var requestStartMs: Double?
         var restartNeeded = false
+        /// 本会话属于 DS Bot 的 Claude Code Bot（provider == `local-claude-code`），其用量不在此入账。
+        var isClaudeCodeSession = false
         var entries: [UsageEntry] = []
 
         init(state: ScanFileState) {
@@ -552,6 +590,7 @@ enum DshSessionScanner {
             lastStep = state.dshLastStep
             lastSlotOpen = state.dshLastSlotOpen ?? false
             requestStartMs = state.dshRequestStartMs
+            isClaudeCodeSession = state.dshIsClaudeCode ?? false
         }
     }
 
@@ -654,6 +693,16 @@ enum DshSessionScanner {
                   let time = (root["time"] as? NSNumber)?.doubleValue, time > 0
             else { return true }
 
+            let source = (body["message"] as? [String: Any])?["source"] as? [String: Any]
+            let provider = (source?["provider"] as? String) ?? scan.routeProvider
+            // DS Bot 的 Claude Code Bot 用量由 `~/.claude/projects` 统计，跳过以免重复计入。
+            // 已知限制：按会话整体判定，同一会话中途在 Claude Code 与模型类之间切换时，
+            // 标志一旦置位后续用量都会被跳过。
+            if provider == claudeCodeProvider {
+                scan.isClaudeCodeSession = true
+                return true
+            }
+
             let turn = (body["turn"] as? NSNumber)?.intValue
             let step = (body["step"] as? NSNumber)?.intValue
             if let turn, let step, scan.lastSlotOpen,
@@ -671,16 +720,10 @@ enum DshSessionScanner {
                     + intValue(usage["cacheWriteTokens"])
                 if reported != sum { mismatch += 1 }
             }
-            let model: String
-            if type == "assistant/message" {
-                let source = (body["message"] as? [String: Any])?["source"] as? [String: Any]
-                model = modelLabel(
-                    provider: (source?["provider"] as? String) ?? scan.routeProvider,
-                    model: (source?["model"] as? String) ?? scan.routeModel
-                )
-            } else {
-                model = modelLabel(provider: scan.routeProvider, model: scan.routeModel)
-            }
+            let model = modelLabel(
+                provider: provider,
+                model: (source?["model"] as? String) ?? scan.routeModel
+            )
             var entry = makeEntry(
                 conversationID: sessionID,
                 model: model,
@@ -756,9 +799,11 @@ enum DshSessionScanner {
     }
 
     /// 模型标签 `provider/model`；provider 自身可能已含 `/`（转发商），只加一次。
+    /// DS Bot 的 `magpie-dsbot` 只是统一网关，真实渠道已写在 model 里（`trae-cn/...`、
+    /// `workbuddy/...`），不再重复叠加这一层。
     private nonisolated static func modelLabel(provider: String?, model: String?) -> String {
         let model = model.flatMap { $0.isEmpty ? nil : $0 } ?? "unknown"
-        guard let provider, !provider.isEmpty else {
+        guard let provider, !provider.isEmpty, provider != "magpie-dsbot" else {
             return model
         }
         return "\(provider)/\(model)"

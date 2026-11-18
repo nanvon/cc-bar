@@ -340,6 +340,10 @@ enum DiagnosticsBundle {
             "~/.dsh/sessions",
             describeDshSource(home.appendingPathComponent(".dsh/sessions", isDirectory: true))
         )
+        out.row(
+            "~/.ds-bot/sessions",
+            describeDshSource(home.appendingPathComponent(".ds-bot/sessions", isDirectory: true))
+        )
     }
 
     /// DSH 候选日志：按扫描器认可的规范名计数（v0/vN × zstd/明文），与真实扫描口径一致。

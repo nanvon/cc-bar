@@ -12,8 +12,14 @@ nonisolated struct UsageScanRoots: Sendable {
     var piRoot: URL
     var opencodeDatabaseURL: URL
     var dshRoot: URL
+    /// DSH 扫描器额外监听/扫描的根。生产环境放 `~/.ds-bot/sessions`（DS Bot 模型类 Bot 会话）；
+    /// 测试保持默认空，避免读到用户真实日志。
+    var dshAdditionalRoots: [URL] = []
     /// Antigravity 数据根（含 `conversations/`）。默认空：测试不注入就不会读到真实对话库。
     var antigravityRoots: [URL] = []
+
+    /// DSH / DS Bot 的全部扫描根。
+    var dshRoots: [URL] { [dshRoot] + dshAdditionalRoots }
 
     static var production: UsageScanRoots {
         let home = FileManager.default.homeDirectoryForCurrentUser
@@ -28,6 +34,7 @@ nonisolated struct UsageScanRoots: Sendable {
             piRoot: home.appendingPathComponent(".pi/agent/sessions", isDirectory: true),
             opencodeDatabaseURL: OpencodeScanner.defaultDatabaseURL(),
             dshRoot: DshSessionScanner.defaultRoot,
+            dshAdditionalRoots: [DshSessionScanner.dsBotRoot],
             antigravityRoots: AntigravityScanner.defaultRoots()
         )
     }
@@ -1108,7 +1115,7 @@ final class UsageService {
         let codexRoots = roots.codexRoots
         let piRoot = roots.piRoot
         let opencodeDatabaseURL = roots.opencodeDatabaseURL
-        let dshRoot = roots.dshRoot
+        let dshRoots = roots.dshRoots
         let affectedCycles = cycles.filter { affectedCycleIDs.contains($0.id) }
         let apps = Self.requiredCycleSourceApps(cycles: affectedCycles).intersection(localUsageApps())
             .subtracting(isDshHistoryFrozen ? [.dsh] : [])
@@ -1159,7 +1166,7 @@ final class UsageService {
         }
         // DSH 冻结时常规扫描不采集新用量，这里也不重灌，保留其旧桶。
         async let dshTask: DshSessionScanner.Result? = Self.scanIfEnabled(.dsh, in: apps, skipped: nil) {
-            DshSessionScanner.scan(previous: [:], root: dshRoot, minimumMtime: dateFrom, onProgress: progress)
+            DshSessionScanner.scan(previous: [:], roots: dshRoots, minimumMtime: dateFrom, onProgress: progress)
         }
         async let codexTask: CodexJSONLScanner.Result? = Self.scanIfEnabled(.codex, in: apps, skipped: nil) {
             await CodexJSONLScanner.scan(
@@ -1584,10 +1591,10 @@ final class UsageService {
             }
             : nil
         // 从零扫描与逐会话贡献无关，DSH 冻结时也能补算一次现存日志。
-        let dshRoot = roots.dshRoot
+        let dshRoots = roots.dshRoots
         let dshTask: Task<DshSessionScanner.Result, Never>? = pendingApps.contains(.dsh)
             ? Task.detached(priority: .utility) {
-                DshSessionScanner.scan(previous: [:], root: dshRoot, onProgress: progress)
+                DshSessionScanner.scan(previous: [:], roots: dshRoots, onProgress: progress)
             }
             : nil
         let claude = await claudeTask?.value
@@ -1993,7 +2000,7 @@ final class UsageService {
         let codexTitles = roots.codexTitles
         let piRoot = roots.piRoot
         let opencodeDatabaseURL = roots.opencodeDatabaseURL
-        let dshRoot = roots.dshRoot
+        let dshRoots = roots.dshRoots
         let antigravityRoots = roots.antigravityRoots
         let dshFrozen = isDshHistoryFrozen
         let previous = cachedScanState ?? ScanState()
@@ -2067,7 +2074,7 @@ final class UsageService {
         async let dshTask = Self.scanIfEnabled(
             .dsh, in: rebuildDsh ? apps : [], skipped: DshSessionScanner.frozenResult(preserving: preservedDshState)
         ) {
-            DshSessionScanner.scan(previous: [:], root: dshRoot, onProgress: progress)
+            DshSessionScanner.scan(previous: [:], roots: dshRoots, onProgress: progress)
         }
         async let antigravityTask = Self.scanIfEnabled(.antigravity, in: apps, skipped: AntigravityScanner.Result(newState: previous.antigravity)) {
             AntigravityScanner.scan(previous: nil, roots: antigravityRoots, onProgress: progress)
@@ -2353,7 +2360,7 @@ final class UsageService {
         let codexTitles = roots.codexTitles
         let piRoot = roots.piRoot
         let opencodeDatabaseURL = roots.opencodeDatabaseURL
-        let dshRoot = roots.dshRoot
+        let dshRoots = roots.dshRoots
         let antigravityRoots = roots.antigravityRoots
         let dshFrozen = isDshHistoryFrozen
         // 账本里的 ID 没有条数上限；基准建立之前账本不完整，旧 seen 列表照常参与去重。
@@ -2413,7 +2420,7 @@ final class UsageService {
         async let dshTask = Self.scanIfEnabled(.dsh, in: apps, skipped: DshSessionScanner.frozenResult(preserving: prev.dsh)) {
             dshFrozen
                 ? DshSessionScanner.frozenResult(preserving: prev.dsh)
-                : DshSessionScanner.scan(previous: dshPrevious, root: dshRoot, onProgress: progress)
+                : DshSessionScanner.scan(previous: dshPrevious, roots: dshRoots, onProgress: progress)
         }
         async let antigravityTask = Self.scanIfEnabled(.antigravity, in: apps, skipped: AntigravityScanner.Result(newState: prev.antigravity)) {
             AntigravityScanner.scan(
