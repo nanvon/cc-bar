@@ -180,6 +180,31 @@ final class StatsOverviewModelTests: XCTestCase {
         XCTAssertEqual(byTokens[0].models.map(\.model), ["gpt-5-mini", "gpt-5"])
     }
 
+    func testMagpieGatewayResolvesToUnderlyingChannel() {
+        XCTAssertEqual(ModelProvider.resolve(app: .dsh, model: "magpie/trae-cn/kimi-k3.1-pro-max"), .trae)
+        XCTAssertEqual(ModelProvider.resolve(app: .dsh, model: "magpie/trae-cn/DeepSeek-V4.1-Flash-1017-max"), .trae)
+        XCTAssertEqual(ModelProvider.resolve(app: .pi, model: "magpie/workbuddy/deepseek-v4.1-flash"), .workBuddy)
+        XCTAssertEqual(ModelProvider.resolve(app: .pi, model: "magpie/codex/gpt-6.1-terra"), .openAI)
+        XCTAssertEqual(ModelProvider.resolve(app: .dsh, model: "magpie-responses/codex/gpt-6.1-sol"), .openAI)
+        XCTAssertEqual(ModelProvider.resolve(app: .dsh, model: "magpie-dsbot/trae-cn/glm-5.3-max"), .trae)
+        XCTAssertEqual(ModelProvider.resolve(app: .dsh, model: "magpie/group/dsh"), .other)
+        XCTAssertEqual(ModelProvider.resolve(app: .dsh, model: "trae-cn/glm-5.3-flashx-max"), .trae)
+    }
+
+    func testProviderGroupsByChannel() {
+        XCTAssertEqual(ModelProvider.resolve(app: .dsh, model: "trae/glm-5.3-max"), .trae)
+        XCTAssertEqual(ModelProvider.resolve(app: .opencode, model: "opencode-go/deepseek-v4-flash"), .opencode)
+        XCTAssertEqual(ModelProvider.resolve(app: .opencode, model: "opencode/mimo-v2.5-free"), .opencode)
+        XCTAssertEqual(ModelProvider.resolve(app: .pi, model: "magpie/opencode-zen-free/deepseek-v4.1-flash-free"), .opencode)
+        XCTAssertEqual(ModelProvider.resolve(app: .dsh, model: "opencode2dsh/deepseek-v4.1-flash-free"), .opencode)
+        XCTAssertEqual(ModelProvider.resolve(app: .pi, model: "cursor/grok-4.7@256k:fast"), .cursor)
+        XCTAssertEqual(ModelProvider.resolve(app: .codex, model: "magpie/cursor/composer-2.5:fast"), .cursor)
+        XCTAssertEqual(ModelProvider.resolve(app: .cursor, model: "claude-sonnet-5-5"), .cursor)
+        XCTAssertEqual(ModelProvider.resolve(app: .antigravity, model: "gemini-3.8-flash"), .antigravity)
+        XCTAssertEqual(ModelProvider.resolve(app: .antigravity, model: "claude-opus-4-6"), .antigravity)
+        XCTAssertEqual(ModelProvider.resolve(app: .pi, model: "commandcode/minimax/minimax-m3-free"), .commandCode)
+    }
+
     // MARK: - 缓存与 revision
 
     func testCacheReusesModelUntilInputChanges() {
