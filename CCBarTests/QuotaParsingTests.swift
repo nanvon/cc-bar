@@ -4284,6 +4284,8 @@ final class QuotaParsingTests: XCTestCase {
             at: Date(timeIntervalSince1970: 0)
         ))
         XCTAssertEqual(standard5m.cacheCreation, 0.25)
+        XCTAssertEqual(Pricing.billingEquivalentMultiplier(app: .codex, model: "gpt-6.2-sol", speed: .fast), 2)
+        XCTAssertEqual(Pricing.billingEquivalentMultiplier(app: .codex, model: "gpt-6.2-astra", speed: .fast), 2)
 
         let standard1h = try XCTUnwrap(Pricing.costBreakdown(
             app: .claude,

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "revision": 3,
+  "revision": 4,
   "notes": [
     "价格单位为 USD / 百万 token，一律写成字符串，避免浮点误差。时间为 UTC 的 ISO 8601 时刻。",
     "每次修改都要把 revision 加 1；App 只采纳 revision 更大的远端文件。note 字段只作说明，不参与计价和指纹。",
@@ -467,7 +467,9 @@
       "gpt-6-luna": "2.5",
       "gpt-6-sol": "2.5",
       "gpt-6.1-sol": "2.5",
-      "gpt-6.1-terra": "2.5"
+      "gpt-6.1-terra": "2.5",
+      "gpt-6.2-astra": "2",
+      "gpt-6.2-sol": "2"
     },
     "claudeMultipliers": {
       "claude-fable-5-2": "2",
