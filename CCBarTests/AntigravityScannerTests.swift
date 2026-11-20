@@ -311,6 +311,71 @@ final class AntigravityScannerTests: XCTestCase {
         ))
     }
 
+    func testModelResolutionMapsGemini4Placeholders() {
+        // 编号 → 基础模型，只断言多源确认的编号。来源见 AntigravityScanner.placeholderModels 的行尾注释。
+        let expected: [UInt64: String] = [
+            1427: "gemini-4-carbon", 1437: "gemini-4-carbon", 1438: "gemini-4-carbon",
+            1461: "gemini-4-hydrogen", 1462: "gemini-4-hydrogen", 1463: "gemini-4-hydrogen",
+            1525: "gemini-4-hydrogen", 1526: "gemini-4-hydrogen",
+            1527: "gemini-4-hydrogen", 1528: "gemini-4-hydrogen",
+            1465: "gemini-4-neon", 1466: "gemini-4-neon", 1467: "gemini-4-neon", 1468: "gemini-4-neon",
+            1532: "gemini-4-neon", 1533: "gemini-4-neon", 1534: "gemini-4-neon", 1535: "gemini-4-neon",
+        ]
+        for (modelID, model) in expected {
+            XCTAssertEqual(AntigravityScanner.resolveModel(
+                name: nil, modelID: modelID, placeholder: nil, displayName: nil
+            ), model, "MODEL_PLACEHOLDER_M\(modelID - 1000)")
+        }
+        for (placeholder, model) in [
+            "MODEL_PLACEHOLDER_M427": "gemini-4-carbon",
+            "MODEL_PLACEHOLDER_M525": "gemini-4-hydrogen",
+            "MODEL_PLACEHOLDER_M532": "gemini-4-neon",
+        ] {
+            XCTAssertEqual(AntigravityScanner.resolveModel(
+                name: nil, modelID: nil, placeholder: placeholder, displayName: nil
+            ), model, placeholder)
+        }
+        // 单源或身份不符的编号不映射：resolveModel 返回 nil（unknown、不查价）。
+        let unresolvedIDs: [UInt64] = [
+            1420, 1421, 1422, 1464, 1537, 1667, 1668, 1669, 1681,
+        ]
+        for modelID in unresolvedIDs {
+            XCTAssertNil(AntigravityScanner.resolveModel(
+                name: nil, modelID: modelID, placeholder: nil, displayName: nil
+            ), "MODEL_PLACEHOLDER_M\(modelID - 1000) 应为 nil")
+        }
+        XCTAssertNil(AntigravityScanner.resolveModel(
+            name: nil, modelID: nil, placeholder: "MODEL_PLACEHOLDER_M537", displayName: nil
+        ))
+    }
+
+    func testUnresolvedModelDoesNotInheritPreviousModel() throws {
+        let app = root("antigravity")
+        let db = try createDatabase(root: app, id: "conv-unknown")
+        insertGeneration(db, idx: 0, model: "gemini-3.8-flash",
+                         usage: PB.usage(input: 1, output: 1, responseID: "r1"), time: baseTime)
+        insertGeneration(db, idx: 1, usage: PB.usage(input: 2, output: 2, responseID: "r2"),
+                         time: baseTime + 1, attributes: ["model_enum": "MODEL_PLACEHOLDER_M999"])
+        insertGeneration(db, idx: 2, usage: PB.usage(input: 3, output: 3, responseID: "r3"), time: baseTime + 2)
+        sqlite3_close(db)
+
+        let result = AntigravityScanner.scan(previous: nil, roots: [app])
+        XCTAssertEqual(result.entries.map(\.model), ["gemini-3.8-flash", "unknown", "unknown"])
+        XCTAssertNil(result.entries[1].costUSD, "未识别的新模型不能沿用上一条模型的费用")
+    }
+
+    func testNeonPlaceholderIsResolvedAndPriced() throws {
+        let app = root("antigravity")
+        let db = try createDatabase(root: app, id: "conv-neon")
+        insertGeneration(db, idx: 0, usage: PB.usage(input: 1000, output: 100, responseID: "r1"),
+                         time: baseTime, attributes: ["model_enum": "MODEL_PLACEHOLDER_M532"])
+        sqlite3_close(db)
+
+        let result = AntigravityScanner.scan(previous: nil, roots: [app])
+        XCTAssertEqual(result.entries.first?.model, "gemini-4-neon")
+        XCTAssertNotNil(result.entries.first?.costUSD)
+    }
+
     func testLaterRowsInheritModelWhenNameIsMissing() throws {
         let app = root("antigravity")
         let db = try createDatabase(root: app, id: "conv-1")

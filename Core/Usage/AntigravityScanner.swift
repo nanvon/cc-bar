@@ -352,13 +352,23 @@ nonisolated enum AntigravityScanner {
                     guard let chat = root.message(1) else { return }
                     let attributes = attributes(chat)
                     let usageFields = chat.message(4)
+                    let name = chat.text(19)
+                    let modelID = chat.varint(3) ?? usageFields?.varint(1)
+                    let placeholder = attributes["model_enum"]
+                    let displayName = chat.text(21)
                     if let resolved = resolveModel(
-                        name: chat.text(19),
-                        modelID: chat.varint(3) ?? usageFields?.varint(1),
-                        placeholder: attributes["model_enum"],
-                        displayName: chat.text(21)
+                        name: name,
+                        modelID: modelID,
+                        placeholder: placeholder,
+                        displayName: displayName
                     ) {
                         currentModel = resolved
+                    } else if hasModelHint(
+                        name: name, modelID: modelID, placeholder: placeholder, displayName: displayName
+                    ) {
+                        // 明确写了模型但认不出来：不能沿用上一条模型，否则会把新模型记到旧模型头上。
+                        // 如实退化为 unknown（`makeEntry` 会按缺价处理），等待补映射后重扫。
+                        currentModel = nil
                     }
                     var time = chat.message(9)?.message(4).flatMap(timestamp)
                     if time == nil, let step = attributes["last_step_index"].flatMap({ Int64($0) }) {
@@ -385,7 +395,15 @@ nonisolated enum AntigravityScanner {
                 guard let step = steps[idx] else { continue }
                 for item in step.usages {
                     guard let id = item.identity else { continue }
-                    let stepModel = step.model ?? item.modelID.flatMap { model(forID: $0) } ?? currentModel
+                    // step 明确带了模型编号但映射不到时不要回落到上一条模型；只有完全没有模型信息时才继承。
+                    let stepModel: String?
+                    if let model = step.model {
+                        stepModel = model
+                    } else if let modelID = item.modelID, modelID != 0 {
+                        stepModel = model(forID: modelID)
+                    } else {
+                        stepModel = currentModel
+                    }
                     read.records.append(record(identity: id, model: stepModel, timestamp: step.timestamp, usage: item.usage))
                 }
             }
@@ -531,6 +549,26 @@ nonisolated enum AntigravityScanner {
         return nil
     }
 
+    /// 该行是否明确带了模型信息（哪怕认不出来）。用来区分“模型缺失的续行可继承上一条模型”
+    /// 和“明确写了新模型但映射不到，不能沿用旧模型”。
+    private static func hasModelHint(
+        name: String?,
+        modelID: UInt64?,
+        placeholder: String?,
+        displayName: String?
+    ) -> Bool {
+        func nonEmpty(_ value: String?) -> Bool {
+            guard let value else { return false }
+            return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        // `gemini-internal-model` 是“没有具体模型”的通用占位；这种行视为无提示，继续继承上一条。
+        let nameHint = name.map {
+            !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && !genericNames.contains($0.lowercased())
+        } ?? false
+        return nameHint || (modelID ?? 0) != 0 || nonEmpty(placeholder) || nonEmpty(displayName)
+    }
+
     /// 去掉 Antigravity 的档位、试用、实验等后缀，得到可查价的模型名。通用名返回 nil。
     static func concreteModel(_ raw: String) -> String? {
         var model = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -580,8 +618,12 @@ nonisolated enum AntigravityScanner {
     ]
 
     /// `MODEL_PLACEHOLDER_M<n>`，生成元数据里的模型编号为 1000 + n。
-    /// 依据本机数据与 ccusage / codeburn 的映射（codeburn 取自 App 2.19 的模型目录）；
-    /// M84 两家结论不同，不收录。
+    /// 基础映射依据本机数据与 ccusage / codeburn 的映射（codeburn 取自 App 2.19 的模型目录）；
+    /// M84 两家结论不同，不收录。Gemini 4 只收录多源确认的编号，来源写在每条行尾：
+    /// - ccusage `rust/adapters/antigravity/src/parser.rs`
+    /// - cockpit-tools `src-tauri/src/modules/antigravity_token_usage/models.rs`
+    /// - LeenHawk/gproxy `crates/gproxy-channel/src/channels/antigravity/mod.rs`
+    /// - Antigravity Context Window Monitor `docs/releases/1.16.20.md`、`1.17.0.md`、`1.17.2.md`
     private static let placeholderModels: [Int: String] = [
         16: "gemini-3.1-pro", 36: "gemini-3.1-pro", 37: "gemini-3.1-pro",
         18: "gemini-3-flash-preview", 47: "gemini-3-flash-preview",
@@ -593,6 +635,38 @@ nonisolated enum AntigravityScanner {
         298: "gemini-3.7-flash", 299: "gemini-3.7-flash", 300: "gemini-3.7-flash",
         318: "gemini-3.8-flash", 319: "gemini-3.8-flash", 320: "gemini-3.8-flash",
         417: "gemini-4-argon", 418: "gemini-4-argon", 419: "gemini-4-argon",
+
+        // Gemini 4 Carbon（多源确认）
+        427: "gemini-4-carbon", // cockpit-tools antigravity_token_usage/models.rs + Antigravity Context Window Monitor 1.16.20：Carbon High
+        437: "gemini-4-carbon", // Antigravity Context Window Monitor 1.16.20：Carbon Medium
+        438: "gemini-4-carbon", // Antigravity Context Window Monitor 1.16.20：Carbon Low
+
+        // Gemini 4 Hydrogen（多源确认）
+        461: "gemini-4-hydrogen", // gproxy antigravity/mod.rs 旧编号：Hydrogen High
+        462: "gemini-4-hydrogen", // gproxy antigravity/mod.rs 旧编号：Hydrogen Medium
+        463: "gemini-4-hydrogen", // gproxy antigravity/mod.rs 旧编号：Hydrogen Low
+        525: "gemini-4-hydrogen", // Antigravity Context Window Monitor 1.17.0：Hydrogen High
+        526: "gemini-4-hydrogen", // Antigravity Context Window Monitor 1.17.0：Hydrogen Medium
+        527: "gemini-4-hydrogen", // Antigravity Context Window Monitor 1.17.0：Hydrogen Low
+        528: "gemini-4-hydrogen", // Antigravity Context Window Monitor 1.17.0：Hydrogen XHigh
+
+        // Gemini 4 Neon（多源确认）
+        465: "gemini-4-neon", // gproxy antigravity/mod.rs 旧编号：Neon Low
+        466: "gemini-4-neon", // gproxy antigravity/mod.rs 旧编号：Neon Medium
+        467: "gemini-4-neon", // gproxy antigravity/mod.rs 旧编号：Neon High
+        468: "gemini-4-neon", // gproxy antigravity/mod.rs 旧编号：Neon XHigh
+        532: "gemini-4-neon", // Antigravity Context Window Monitor 1.17.2：Neon High
+        533: "gemini-4-neon", // Antigravity Context Window Monitor 1.17.2：Neon Medium
+        534: "gemini-4-neon", // Antigravity Context Window Monitor 1.17.2：Neon Low
+        535: "gemini-4-neon", // Antigravity Context Window Monitor 1.17.2：Neon XHigh
+
+        // 以下编号不再映射，resolveModel 返回 nil（记 unknown、不查价）：
+        // - 420/421/422：仅 antigravity-mobile projects.go / agy-hq kernel.go 旧编号，单源
+        // - 464：gproxy 只列 461/462/463，464 未确认
+        // - 537：Monitor 1.17.2 中为 Orchestrator (Neon)，独立身份，非基础 Neon
+        // - 667：cockpit-tools / Monitor 1.17.0 中为 gemini-pro-orchestrator 协调器，非 Carbon
+        // - 668、681：仅 antigravity-context-viewer 一处，单源
+        // - 669：cockpit-tools/Monitor 视为 gemini-flash-worker-agy 隐藏执行模型，不单独计价
     ]
 
     /// 早期版本直接写的模型编号。
