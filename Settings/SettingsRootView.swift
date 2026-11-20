@@ -735,13 +735,10 @@ struct SettingsRootView: View {
     private func proxyFields(
         type: Binding<ProxyType>, host: Binding<String>, port: Binding<Int>, forClaude: Bool = false
     ) -> some View {
-        let skipsAgy = !forClaude && type.wrappedValue == .socks5
         InsetDivider()
         PrefsRow(
             label: "Type",
-            chinese: "类型",
-            desc: skipsAgy ? "The agy command-line quota query is skipped." : nil,
-            chineseDesc: skipsAgy ? "SOCKS5 下不调用 agy 命令行查询额度" : nil
+            chinese: "类型"
         ) {
             Picker(forClaude ? tr("Claude proxy type", "Claude 代理类型") : tr("Proxy type", "代理类型"),
                    selection: type) {
