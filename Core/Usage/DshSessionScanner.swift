@@ -111,7 +111,8 @@ enum DshSessionScanner {
     }
 
     /// 扫描多个日志根（`~/.dsh/sessions` + `~/.ds-bot/sessions`）。各根的条目合并后统一去重：
-    /// `ScanFileState` 以绝对路径为键，同 ID 会话出现在不同目录时按既有异常规则两份都不提交。
+    /// `ScanFileState` 以绝对路径为键。同 ID 会话跨根出现、且在 `roots[0]` 里恰好一份时以那份为准；
+    /// 其余同 ID 情形（同根内多处、优先根里多份或没有）按既有异常规则全部不提交。
     nonisolated static func scan(
         previous: [String: ScanFileState],
         roots: [URL],
@@ -143,6 +144,8 @@ enum DshSessionScanner {
         result.failedDirectoryCount = failedPrefixes.count
         var linesParsed = 0
         let total = logs.count
+        // 跨根同 ID 时只认优先根的那份，restart 标记必须跟着胜出路径走，不能被落选副本带进来。
+        var restartedPaths: Set<String> = []
 
         for (index, log) in logs.enumerated() {
             if index % 50 == 0 || index == total - 1 {
@@ -244,6 +247,7 @@ enum DshSessionScanner {
                     result.entriesByPath[log.fileURL.path] = scan.entries
                     if restarted, let id = scan.sessionID {
                         result.restartedSessionIDs.insert(id)
+                        restartedPaths.insert(log.fileURL.path)
                     }
                 }
             }
@@ -260,7 +264,30 @@ enum DshSessionScanner {
             if let id = state.conversationID { pathsByID[id, default: []].append(path) }
         }
         let selectedPaths = Set(logs.map { $0.fileURL.path })
+        // 跨根重复：DS Bot 迁入 DSH 后会把 `~/.ds-bot/sessions` 的会话原样复制进
+        // `~/.dsh/sessions`，此后只写后者。若该 ID 在排第一的根里恰好只有一份，
+        // 就以它为准；其余根里的副本本轮不入账，并清掉状态里的会话 ID，
+        // 使其不再参与贡献、种子与后续轮次的冲突判定（watermark 保留，未变化时直接跳过）。
+        var rootIndexByPath: [String: Int] = [:]
+        for (index, selection) in selections.enumerated() {
+            for log in selection.logs { rootIndexByPath[log.fileURL.path] = index }
+        }
+        func rootIndex(of path: String) -> Int? {
+            rootIndexByPath[path] ?? roots.firstIndex { path.hasPrefix($0.path + "/") }
+        }
         for (id, paths) in pathsByID where paths.count > 1 && paths.contains(where: { selectedPaths.contains($0) }) {
+            let preferred = paths.filter { rootIndex(of: $0) == 0 }
+            if roots.count > 1, preferred.count == 1, paths.allSatisfy({ rootIndex(of: $0) != nil }) {
+                let winner = preferred[0]
+                for path in paths where path != winner {
+                    result.entriesByPath.removeValue(forKey: path)
+                    result.newState[path]?.conversationID = nil
+                }
+                if !restartedPaths.contains(winner) {
+                    result.restartedSessionIDs.remove(id)
+                }
+                continue
+            }
             result.duplicateSessionCount += 1
             result.duplicateSessionIDs.insert(id)
             result.restartedSessionIDs.remove(id)

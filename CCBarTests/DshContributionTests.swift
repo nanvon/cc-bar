@@ -200,6 +200,47 @@ final class DshContributionTests: XCTestCase {
         XCTAssertEqual(DshContributionStore.apply(scan: conflict, to: original).contributions, original)
     }
 
+    /// DS Bot 迁入 DSH 后两个根里同时有同一会话：以第一个根（`~/.dsh`）为准，不算失败。
+    func testDuplicateSessionIDAcrossRootsPrefersFirstRoot() throws {
+        let botLogs = try DshTempLogRoot(name: "dsh-contribution-bot")
+        let roots = [logs.root, botLogs.root]
+        func scanBoth(_ previous: [String: ScanFileState] = [:]) -> DshSessionScanner.Result {
+            DshSessionScanner.scan(previous: previous, roots: roots)
+        }
+
+        // 迁移前：只有 DS Bot 根里有这份会话
+        try botLogs.write(project: "p", session: "s", file: "session.v1.jsonl.zstd", bytes: try log(session: "s", inputs: [10]))
+        let before = scanBoth()
+        var contributions = DshContributionStore.apply(scan: before, to: [:]).contributions
+        XCTAssertEqual(totalTokens(DshContributionRollup.reduce(contributions)), 10)
+
+        // 迁移后：DSH 根里出现同 ID 且已继续写入的副本
+        let dshURL = try logs.write(project: "p", session: "s", file: "session.v1.jsonl.zstd", bytes: try log(session: "s", inputs: [10, 5]))
+        let migrated = scanBoth(before.newState)
+        XCTAssertEqual(migrated.duplicateSessionCount, 0)
+        XCTAssertTrue(migrated.isComplete)
+        XCTAssertEqual(migrated.conversationSeeds.map(\.key), ["dsh:s"])
+        contributions = DshContributionStore.apply(scan: migrated, to: contributions).contributions
+        XCTAssertEqual(contributions["s"]?.sourcePath, dshURL.path)
+        XCTAssertEqual(totalTokens(DshContributionRollup.reduce(contributions)), 15, "整体替换为 DSH 副本，不能与旧副本相加")
+
+        // 下一轮两份都未变化：保持完整，贡献不变
+        let steady = scanBoth(migrated.newState)
+        XCTAssertTrue(steady.isComplete)
+        XCTAssertEqual(DshContributionStore.apply(scan: steady, to: contributions).contributions, contributions)
+    }
+
+    func testDuplicateSessionIDWithinFirstRootStillConflictsWithMultipleRoots() throws {
+        let botLogs = try DshTempLogRoot(name: "dsh-contribution-bot")
+        try logs.write(project: "p", session: "s", file: "session.v1.jsonl.zstd", bytes: try log(session: "s", inputs: [10]))
+        try logs.write(project: "q", session: "s", file: "session.v1.jsonl.zstd", bytes: try log(session: "s", inputs: [20]))
+        try botLogs.write(project: "p", session: "s", file: "session.v1.jsonl.zstd", bytes: try log(session: "s", inputs: [30]))
+
+        let result = DshSessionScanner.scan(previous: [:], roots: [logs.root, botLogs.root])
+        XCTAssertEqual(result.duplicateSessionCount, 1)
+        XCTAssertTrue(result.entries.isEmpty)
+    }
+
     func testUnreadableRootPreservesPreviousWatermarks() throws {
         let fileRoot = logs.root.appendingPathComponent("not-a-directory")
         let path = fileRoot.appendingPathComponent("session.v1.jsonl.zstd").path

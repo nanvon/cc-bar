@@ -15,7 +15,7 @@
 
 > **2026-09-24 修正**：§2.3 和 §7 S2 所述“只消费三类记录”是首版实现，现已不适用。用量结算同时读取 `assistant/message` 与 `assistant/attempt`，按 `(turn, step)` 和 `llm/retry-started` 处理替换与重试；fork 继承段通过 v0/v1 `seedLength` 或 v2/v3 `session/end-seed` 排除重复用量。目录枚举失败保留旧 watermark，跨目录重复会话 ID 按异常隔离。贡献缓存升级 v2，旧版中已删除日志的贡献保留但标记未校正；详见 [技术实现 §7.4a](技术实现.md)。
 >
-> **2026-11-18 扩展**：DS Bot 的模型类 Bot 用量也写在同一格式的 `~/.ds-bot/sessions` 里，扫描器改为同时扫描 `~/.dsh/sessions` 与 `~/.ds-bot/sessions`（`DshSessionScanner.defaultRoots`），条目统一记为 `UsageApp.dsh`。DS Bot 的 Claude Code Bot（`provider == local-claude-code`）用量已由 `~/.claude/projects` 统计，扫描时按会话跳过，避免重复计数。模型标签去掉统一网关前缀 `magpie-dsbot/`，保留 `trae-cn/...`、`workbuddy/...` 渠道名；查价仍按渠道后的官方型号剥标记匹配。两个根 session id 实测无重叠，跨根重复由既有按 ID 异常规则兜底。详见 [技术实现 §7.4a](技术实现.md)。
+> **2026-11-18 扩展**：DS Bot 的模型类 Bot 用量也写在同一格式的 `~/.ds-bot/sessions` 里，扫描器改为同时扫描 `~/.dsh/sessions` 与 `~/.ds-bot/sessions`（`DshSessionScanner.defaultRoots`），条目统一记为 `UsageApp.dsh`。DS Bot 的 Claude Code Bot（`provider == local-claude-code`）用量已由 `~/.claude/projects` 统计，扫描时按会话跳过，避免重复计数。模型标签去掉统一网关前缀 `magpie-dsbot/`，保留 `trae-cn/...`、`workbuddy/...` 渠道名；查价仍按渠道后的官方型号剥标记匹配。跨根同 ID 时以 `~/.dsh/sessions` 那份为准（2026-11-20 补充：DS Bot 迁入 DSH 后两边会同时存在同一批会话）。详见 [技术实现 §7.4a](技术实现.md)。
 
 ## 1. 结论与第一版范围
 
