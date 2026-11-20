@@ -172,6 +172,34 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertTrue(snapshot.modelLimits.isEmpty, "主条中的 Argon 不应再重复显示")
     }
 
+    func testAntigravityCarbonWeeklyStaysSeparateFromSharedGeminiWeekly() {
+        let groups = antigravityGroupsWithArgon() + [[
+            "displayName": "Gemini 4 Carbon",
+            "buckets": [[
+                "bucketId": "gemini-carbon-wtu-weekly",
+                "displayName": "Gemini 4 Carbon Weekly Limit",
+                "window": "weekly",
+                "remainingFraction": 0.1,
+                "resetTime": "2026-11-26T03:40:17Z",
+            ]],
+        ]]
+        let snapshot = AntigravityQuotaClient.parse(root: ["groups": groups]).snapshot
+        XCTAssertEqual(snapshot.allLimits.map(\.id), [
+            "gemini-argon-wtu-weekly", "gemini-5h", "gemini-weekly", "gemini-carbon-wtu-weekly", "claude-5h", "claude-weekly",
+        ])
+        XCTAssertEqual(snapshot.primaryLimit?.id, "gemini-argon-wtu-weekly")
+        let shared = snapshot.allLimits.first { $0.id == "gemini-weekly" }
+        XCTAssertEqual(shared?.window.remainingPercent ?? 0, 84.39504, accuracy: 0.001, "Carbon 不应并入普通 Gemini 周额度")
+        let carbon = snapshot.allLimits.first { $0.id == "gemini-carbon-wtu-weekly" }
+        XCTAssertEqual(carbon?.kind, .modelWeekly)
+        XCTAssertEqual(carbon?.displayName, "Gemini 4 Carbon")
+        XCTAssertEqual(carbon?.window.remainingPercent ?? 0, 10, accuracy: 0.001)
+
+        let withoutArgon = AntigravityQuotaClient.parse(root: ["groups": antigravitySummaryGroups() + [groups.last!]]).snapshot
+        XCTAssertEqual(withoutArgon.primaryLimit?.id, "gemini-5h", "没有 Argon 时 Carbon 不抢主条")
+        XCTAssertEqual(withoutArgon.auxiliaryLimits.first?.id, "gemini-carbon-wtu-weekly")
+    }
+
     func testAntigravityCLIParsesSnakeCaseGroupsAndServerResetTime() throws {
         let now = Date(timeIntervalSince1970: 1_792_389_600)
         let snapshot = try XCTUnwrap(AntigravityQuotaClient.parseCLI(
@@ -4256,6 +4284,8 @@ final class QuotaParsingTests: XCTestCase {
         ))
         XCTAssertEqual(fast, CostBreakdown(input: 4, output: 20, cacheRead: 0.2, cacheCreation: 5))
         XCTAssertEqual(Pricing.billingEquivalentMultiplier(app: .codex, model: "gpt-6.1-sol", speed: .fast), 2.5)
+        XCTAssertEqual(Pricing.billingEquivalentMultiplier(app: .codex, model: "gpt-6.2-sol", speed: .fast), 2)
+        XCTAssertEqual(Pricing.billingEquivalentMultiplier(app: .codex, model: "gpt-6.2-astra", speed: .fast), 2)
 
         let fastLong = try XCTUnwrap(Pricing.costBreakdown(
             app: .codex, model: "gpt-6.1-sol", speed: .fast,
@@ -4284,8 +4314,6 @@ final class QuotaParsingTests: XCTestCase {
             at: Date(timeIntervalSince1970: 0)
         ))
         XCTAssertEqual(standard5m.cacheCreation, 0.25)
-        XCTAssertEqual(Pricing.billingEquivalentMultiplier(app: .codex, model: "gpt-6.2-sol", speed: .fast), 2)
-        XCTAssertEqual(Pricing.billingEquivalentMultiplier(app: .codex, model: "gpt-6.2-astra", speed: .fast), 2)
 
         let standard1h = try XCTUnwrap(Pricing.costBreakdown(
             app: .claude,

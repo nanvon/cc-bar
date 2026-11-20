@@ -314,12 +314,15 @@ final class AntigravityScannerTests: XCTestCase {
     func testModelResolutionMapsGemini4Placeholders() {
         // 编号 → 基础模型，只断言多源确认的编号。来源见 AntigravityScanner.placeholderModels 的行尾注释。
         let expected: [UInt64: String] = [
+            1420: "gemini-4-carbon", 1421: "gemini-4-carbon", 1422: "gemini-4-carbon",
             1427: "gemini-4-carbon", 1437: "gemini-4-carbon", 1438: "gemini-4-carbon",
             1461: "gemini-4-hydrogen", 1462: "gemini-4-hydrogen", 1463: "gemini-4-hydrogen",
             1525: "gemini-4-hydrogen", 1526: "gemini-4-hydrogen",
             1527: "gemini-4-hydrogen", 1528: "gemini-4-hydrogen",
             1465: "gemini-4-neon", 1466: "gemini-4-neon", 1467: "gemini-4-neon", 1468: "gemini-4-neon",
             1532: "gemini-4-neon", 1533: "gemini-4-neon", 1534: "gemini-4-neon", 1535: "gemini-4-neon",
+            // 编排器按底层模型计价。
+            1667: "gemini-4-carbon", 1681: "gemini-4-argon", 1537: "gemini-4-neon",
         ]
         for (modelID, model) in expected {
             XCTAssertEqual(AntigravityScanner.resolveModel(
@@ -330,22 +333,21 @@ final class AntigravityScannerTests: XCTestCase {
             "MODEL_PLACEHOLDER_M427": "gemini-4-carbon",
             "MODEL_PLACEHOLDER_M525": "gemini-4-hydrogen",
             "MODEL_PLACEHOLDER_M532": "gemini-4-neon",
+            "MODEL_PLACEHOLDER_M537": "gemini-4-neon",
         ] {
             XCTAssertEqual(AntigravityScanner.resolveModel(
                 name: nil, modelID: nil, placeholder: placeholder, displayName: nil
             ), model, placeholder)
         }
         // 单源或身份不符的编号不映射：resolveModel 返回 nil（unknown、不查价）。
-        let unresolvedIDs: [UInt64] = [
-            1420, 1421, 1422, 1464, 1537, 1667, 1668, 1669, 1681,
-        ]
+        let unresolvedIDs: [UInt64] = [1464, 1668, 1669]
         for modelID in unresolvedIDs {
             XCTAssertNil(AntigravityScanner.resolveModel(
                 name: nil, modelID: modelID, placeholder: nil, displayName: nil
             ), "MODEL_PLACEHOLDER_M\(modelID - 1000) 应为 nil")
         }
         XCTAssertNil(AntigravityScanner.resolveModel(
-            name: nil, modelID: nil, placeholder: "MODEL_PLACEHOLDER_M537", displayName: nil
+            name: nil, modelID: nil, placeholder: "MODEL_PLACEHOLDER_M669", displayName: nil
         ))
     }
 

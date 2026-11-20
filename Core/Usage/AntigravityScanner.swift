@@ -623,7 +623,9 @@ nonisolated enum AntigravityScanner {
     /// - ccusage `rust/adapters/antigravity/src/parser.rs`
     /// - cockpit-tools `src-tauri/src/modules/antigravity_token_usage/models.rs`
     /// - LeenHawk/gproxy `crates/gproxy-channel/src/channels/antigravity/mod.rs`
-    /// - Antigravity Context Window Monitor `docs/releases/1.16.20.md`、`1.17.0.md`、`1.17.2.md`
+    /// - Antigravity Context Window Monitor `docs/releases/1.16.20.md`、`1.17.0.md`、`1.17.2.md`、`src/models.ts`
+    /// - antigravity-mobile `ios/Multigravity/Models/ModelCatalog.swift`、agy-hq `internal/kernel/kernel.go`
+    /// - cc-switch `src-tauri/src/services/session_usage_agy/native_models.rs`（编排器按底层模型计）
     private static let placeholderModels: [Int: String] = [
         16: "gemini-3.1-pro", 36: "gemini-3.1-pro", 37: "gemini-3.1-pro",
         18: "gemini-3-flash-preview", 47: "gemini-3-flash-preview",
@@ -637,6 +639,9 @@ nonisolated enum AntigravityScanner {
         417: "gemini-4-argon", 418: "gemini-4-argon", 419: "gemini-4-argon",
 
         // Gemini 4 Carbon（多源确认）
+        420: "gemini-4-carbon", // antigravity-mobile（注明旧编号）+ agy-hq kernel.go：Carbon High
+        421: "gemini-4-carbon", // antigravity-mobile + agy-hq：Carbon Medium
+        422: "gemini-4-carbon", // antigravity-mobile + agy-hq：Carbon Low
         427: "gemini-4-carbon", // cockpit-tools antigravity_token_usage/models.rs + Antigravity Context Window Monitor 1.16.20：Carbon High
         437: "gemini-4-carbon", // Antigravity Context Window Monitor 1.16.20：Carbon Medium
         438: "gemini-4-carbon", // Antigravity Context Window Monitor 1.16.20：Carbon Low
@@ -660,13 +665,15 @@ nonisolated enum AntigravityScanner {
         534: "gemini-4-neon", // Antigravity Context Window Monitor 1.17.2：Neon Low
         535: "gemini-4-neon", // Antigravity Context Window Monitor 1.17.2：Neon XHigh
 
-        // 以下编号不再映射，resolveModel 返回 nil（记 unknown、不查价）：
-        // - 420/421/422：仅 antigravity-mobile projects.go / agy-hq kernel.go 旧编号，单源
-        // - 464：gproxy 只列 461/462/463，464 未确认
-        // - 537：Monitor 1.17.2 中为 Orchestrator (Neon)，独立身份，非基础 Neon
-        // - 667：cockpit-tools / Monitor 1.17.0 中为 gemini-pro-orchestrator 协调器，非 Carbon
-        // - 668、681：仅 antigravity-context-viewer 一处，单源
-        // - 669：cockpit-tools/Monitor 视为 gemini-flash-worker-agy 隐藏执行模型，不单独计价
+        // 编排器（Orchestrator）没有单独价格，按其底层模型计价，与 cc-switch 一致。
+        667: "gemini-4-carbon", // Monitor models.ts / antigravity-mobile / antigravity-pulse：Orchestrator (Carbon)
+        681: "gemini-4-argon", // Monitor models.ts / antigravity-mobile / antigravity-pulse：Orchestrator (Argon)
+        537: "gemini-4-neon", // Monitor 1.17.2 / ceshine parser.py：Orchestrator (Neon)
+
+        // 以下编号不映射，resolveModel 返回 nil（记 unknown、不查价）：
+        // - 464：仅 ceshine 记为 Hydrogen XHigh，gproxy 未列，单源
+        // - 668：仅 ceshine 记为 gemini-pro-orchestrator-g1-pro，单源
+        // - 669：Monitor / cockpit-tools 记为 gemini-flash-worker-agy，归到哪个底层模型只有 cc-switch 一家
     ]
 
     /// 早期版本直接写的模型编号。

@@ -479,7 +479,7 @@ nonisolated enum UsageStatsRules {
         .pi: 3,
         .opencode: 2,
         .dsh: 2,
-        .antigravity: 2,
+        .antigravity: 3,
     ]
 }
 

@@ -178,7 +178,9 @@ nonisolated enum AntigravityQuotaClient {
         var limits = base.snapshot.allLimits
         let existing = Set(limits.map(\.id))
         limits.append(contentsOf: enrichment.snapshot.allLimits.filter { !existing.contains($0.id) })
-        let order = ["gemini-argon-wtu-weekly", "gemini-5h", "gemini-weekly", "claude-5h", "claude-weekly"]
+        let order = [
+            "gemini-argon-wtu-weekly", "gemini-5h", "gemini-weekly", "gemini-carbon-wtu-weekly", "claude-5h", "claude-weekly",
+        ]
         limits.sort { (order.firstIndex(of: $0.id) ?? 99) < (order.firstIndex(of: $1.id) ?? 99) }
         var result = base
         result.snapshot.primaryLimit = limits.first
@@ -273,6 +275,7 @@ nonisolated enum AntigravityQuotaClient {
         var geminiWindow: QuotaWindow?
         var geminiWeekly: QuotaWindow?
         var argonWeekly: QuotaWindow?
+        var carbonWeekly: QuotaWindow?
         var claude5h: QuotaWindow?   // 仅 retrieveUserQuotaSummary 分组源（3p-5h）
         var claudeWeekly: QuotaWindow? // 仅 retrieveUserQuotaSummary 分组源（3p-weekly）
         var planType: String?
@@ -305,8 +308,10 @@ nonisolated enum AntigravityQuotaClient {
             geminiWindow = parsed.geminiWindow ?? geminiWindow
             geminiWeekly = parsed.geminiWeekly ?? geminiWeekly
             argonWeekly = parsed.argonWeekly
+            carbonWeekly = parsed.carbonWeekly
             hasGroupedData = parsed.fiveHour != nil || parsed.weekly != nil
                 || parsed.geminiWindow != nil || parsed.geminiWeekly != nil || argonWeekly != nil
+                || carbonWeekly != nil
             if planType == nil { planType = parsed.planType }
         }
 
@@ -365,8 +370,9 @@ nonisolated enum AntigravityQuotaClient {
         }
 
         // 组装 QuotaSnapshot：
-        // 分组源固定顺序：Argon 周（存在时）→ Gemini 5h / weekly → Claude 5h / weekly。
-        // 前两条分别落 primary / secondary，其余进入 auxiliary；不把 Argon 合入普通 Gemini 周额度。
+        // 分组源固定顺序：Argon 周（存在时）→ Gemini 5h / weekly → Carbon 周（存在时）→ Claude 5h / weekly。
+        // 前两条分别落 primary / secondary，其余进入 auxiliary；不把 Argon / Carbon 合入普通 Gemini 周额度。
+        // Carbon 排在共享 Gemini 窗口之后，不抢主条，主条语义仍只由 Argon 决定。
         // - 无分组源时退化为旧行为：优先 5h 主条，weekly 作副条。
         // 分组源数据优先：即便兜底（buckets/models）也填了 5h，也不覆盖分组语义。
         let primaryLimit: QuotaLimit?
@@ -382,6 +388,9 @@ nonisolated enum AntigravityQuotaClient {
             }
             if let geminiWeekly {
                 limits.append(QuotaLimit(id: "gemini-weekly", kind: .weekly, displayName: "Gemini WK", window: geminiWeekly, isActive: nil))
+            }
+            if let carbonWeekly {
+                limits.append(QuotaLimit(id: "gemini-carbon-wtu-weekly", kind: .modelWeekly, displayName: "Gemini 4 Carbon", window: carbonWeekly, isActive: nil))
             }
             if let claude5h { limits.append(QuotaLimit(id: "claude-5h", kind: .fiveHour, displayName: "Claude 5H", window: claude5h, isActive: nil)) }
             if let claudeWeekly { limits.append(QuotaLimit(id: "claude-weekly", kind: .weekly, displayName: "Claude WK", window: claudeWeekly, isActive: nil)) }
@@ -444,6 +453,7 @@ nonisolated enum AntigravityQuotaClient {
         var geminiWindow: QuotaWindow?
         var geminiWeekly: QuotaWindow?
         var argonWeekly: QuotaWindow?
+        var carbonWeekly: QuotaWindow?
         var planType: String?
     }
 
@@ -469,6 +479,11 @@ nonisolated enum AntigravityQuotaClient {
 
                 if id == "gemini-argon-wtu-weekly" {
                     adoptMin(&result.argonWeekly, remaining: remaining, reset: reset, windowSeconds: 7 * 24 * 3600)
+                    continue
+                }
+                // Carbon 的独立周额度（cockpit-tools 已识别该桶 ID），同样不能按前缀并入普通 Gemini 周池。
+                if id == "gemini-carbon-wtu-weekly" {
+                    adoptMin(&result.carbonWeekly, remaining: remaining, reset: reset, windowSeconds: 7 * 24 * 3600)
                     continue
                 }
 
