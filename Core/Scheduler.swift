@@ -19,6 +19,7 @@ import Foundation
 final class Scheduler {
     private weak var appState: AppState?
     private var loopTask: Task<Void, Never>?
+    private var wakeTask: Task<Void, Never>?
     private var observers: [(center: NotificationCenter, token: NSObjectProtocol)] = []
     private(set) var quotaInterval: TimeInterval?
     private(set) var usageInterval: TimeInterval?
@@ -30,8 +31,21 @@ final class Scheduler {
     /// 不因各自起算时刻的毫秒级偏差反复错开。
     private static let coalescingWindow: TimeInterval = 5
 
+    /// 系统休眠唤醒后等网络与本机代理重建完成再发请求，避免开盖瞬间集中 TLS 断连。
+    private static let wakeSettleDelay: TimeInterval = 5
+
+    /// 屏幕恢复可见 / 解锁后的短防抖延迟，合并连续通知并避免抢跑在 `didWakeNotification` 之前。
+    private static let displayWakeSettleDelay: TimeInterval = 1
+
     /// 屏幕休眠 / 锁屏期间的间隔放大倍数。
     private static let powerSavingFactor: Double = 4
+
+    private var isScreenSleeping = false
+    private var isScreenLocked = false
+    private var isSystemAsleep = false
+    private var lastSystemWakeAt: Date?
+    private var fireTask: Task<Void, Never>?
+    private var fireTaskID: UUID?
 
     /// 屏幕关闭或已锁屏——界面不可见，按 `powerSavingFactor` 降频。
     private var isDisplayIdle = false {
@@ -39,15 +53,24 @@ final class Scheduler {
             guard isDisplayIdle != oldValue else { return }
             AppLog.debug(.app, isDisplayIdle
                 ? "display idle; polling slowed by \(Int(Self.powerSavingFactor))x"
-                : "display active; polling restored and refreshing now")
+                : "display active; polling restored and scheduling refresh")
             if isDisplayIdle {
+                cancelWakeSettle()
+                guard !isSystemAsleep else { return }
                 // 降频立刻生效：把已排期但还很远的任务重排到新间隔上，
                 // 避免刚进入锁屏还按原频率再跑几轮。
                 rescheduleAll(from: Date())
                 restartLoop()
             } else {
-                // 恢复可见：立即补一次全量刷新，并以此刻为新起点重排。
-                fireAllNow()
+                // 若刚经历系统唤醒，补齐剩余 `wakeSettleDelay`；否则等短防抖，合并连续亮屏/解锁通知。
+                let delay: TimeInterval
+                if let lastSystemWakeAt {
+                    let remaining = Self.wakeSettleDelay - Date().timeIntervalSince(lastSystemWakeAt)
+                    delay = max(Self.displayWakeSettleDelay, remaining)
+                } else {
+                    delay = Self.displayWakeSettleDelay
+                }
+                scheduleSettleRefresh(delay: delay)
             }
         }
     }
@@ -71,7 +94,10 @@ final class Scheduler {
         registerSystemObservers()
         // 开机自启常发生在锁屏状态下，此时收不到 screenIsLocked 通知，必须主动探一次，
         // 否则会一路全速跑到用户解锁。
-        isDisplayIdle = Self.isScreenLocked()
+        isScreenSleeping = false
+        isScreenLocked = Self.isScreenLocked()
+        isSystemAsleep = false
+        updateDisplayIdle()
         rescheduleAll(from: Date())
         restartLoop()
     }
@@ -79,6 +105,9 @@ final class Scheduler {
     func stop() {
         loopTask?.cancel()
         loopTask = nil
+        fireTask?.cancel()
+        fireTask = nil
+        cancelWakeSettle()
     }
 
     func suspendForTermination() {
@@ -121,16 +150,16 @@ final class Scheduler {
         let workspace = NSWorkspace.shared.notificationCenter
         let distributed = DistributedNotificationCenter.default()
 
-        // 系统睡眠：停表。唤醒后重排时基并立即补一次刷新，
+        // 系统睡眠：停表。唤醒后重排时基并等网络与代理就绪后再补刷，
         // 不让整段睡眠期积压的周期在唤醒瞬间一次性打出去。
         observe(workspace, NSWorkspace.willSleepNotification, .stopClock)
         observe(workspace, NSWorkspace.didWakeNotification, .wake)
         // 屏幕休眠 / 唤醒。
-        observe(workspace, NSWorkspace.screensDidSleepNotification, .displayIdle(true))
-        observe(workspace, NSWorkspace.screensDidWakeNotification, .displayIdle(false))
+        observe(workspace, NSWorkspace.screensDidSleepNotification, .screenSleep(true))
+        observe(workspace, NSWorkspace.screensDidWakeNotification, .screenSleep(false))
         // 锁屏 / 解锁（分布式通知，无公开常量）。
-        observe(distributed, Notification.Name("com.apple.screenIsLocked"), .displayIdle(true))
-        observe(distributed, Notification.Name("com.apple.screenIsUnlocked"), .displayIdle(false))
+        observe(distributed, Notification.Name("com.apple.screenIsLocked"), .screenLock(true))
+        observe(distributed, Notification.Name("com.apple.screenIsUnlocked"), .screenLock(false))
     }
 
     /// 通知要触发的动作。用值而不是闭包传递，避免把非 Sendable 的闭包
@@ -138,7 +167,8 @@ final class Scheduler {
     private enum SystemEvent: Sendable {
         case stopClock
         case wake
-        case displayIdle(Bool)
+        case screenSleep(Bool)
+        case screenLock(Bool)
     }
 
     private func observe(_ center: NotificationCenter, _ name: Notification.Name, _ event: SystemEvent) {
@@ -147,15 +177,33 @@ final class Scheduler {
                 guard let self else { return }
                 switch event {
                 case .stopClock:
+                    self.isSystemAsleep = true
                     self.stop()
                 case .wake:
-                    self.fireAllNow()
-                case .displayIdle(let idle):
-                    self.isDisplayIdle = idle
+                    self.handleSystemWake()
+                case .screenSleep(let sleeping):
+                    self.isScreenSleeping = sleeping
+                    if !sleeping {
+                        self.isSystemAsleep = false
+                        // 屏幕刚亮起时同步核对一次锁屏态，区分仅亮起锁屏与真正可用桌面。
+                        self.isScreenLocked = Self.isScreenLocked()
+                    }
+                    self.updateDisplayIdle()
+                case .screenLock(let locked):
+                    self.isScreenLocked = locked
+                    if !locked {
+                        self.isSystemAsleep = false
+                        self.isScreenSleeping = false
+                    }
+                    self.updateDisplayIdle()
                 }
             }
         }
         observers.append((center, token))
+    }
+
+    private func updateDisplayIdle() {
+        isDisplayIdle = isScreenSleeping || isScreenLocked
     }
 
     /// 当前会话是否处于锁屏 / 未占用控制台状态。仅用于启动时取初始值，
@@ -194,15 +242,66 @@ final class Scheduler {
         for job in Job.allCases { reschedule(job, from: now) }
     }
 
+    private func cancelWakeSettle() {
+        wakeTask?.cancel()
+        wakeTask = nil
+    }
+
+    private func handleSystemWake() {
+        guard !suspendedForTermination else { return }
+        isSystemAsleep = false
+        lastSystemWakeAt = Date()
+        rescheduleAll(from: Date())
+        restartLoop()
+        // Dark Wake / 仍处于息屏或锁屏态时不立即发起网络刷新，等屏幕恢复可见后再补刷。
+        guard !isDisplayIdle else {
+            cancelWakeSettle()
+            return
+        }
+        scheduleSettleRefresh(delay: Self.wakeSettleDelay)
+    }
+
+    private func scheduleSettleRefresh(delay: TimeInterval) {
+        guard !suspendedForTermination, !isSystemAsleep else { return }
+        cancelWakeSettle()
+        // 先重排周期基线，防止稳定期期间 loopTask 紧跟着又触发一轮。
+        rescheduleAll(from: Date())
+        restartLoop()
+        wakeTask = Task { [weak self] in
+            if delay > 0 {
+                do {
+                    try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                } catch {
+                    return
+                }
+            }
+            guard let self, !Task.isCancelled else { return }
+            self.wakeTask = nil
+            guard !self.isDisplayIdle, !self.isSystemAsleep else { return }
+            self.fireAllNow()
+        }
+    }
+
     /// 立即跑一遍全部任务并以此刻为新起点重排。用于系统唤醒 / 恢复可见。
     private func fireAllNow() {
-        guard !suspendedForTermination else { return }
+        guard !suspendedForTermination, !isSystemAsleep else { return }
+        cancelWakeSettle()
         let now = Date()
         rescheduleAll(from: now)
         restartLoop()
         let jobs = Job.allCases.filter { effectiveInterval(for: $0) != nil }
-        guard !jobs.isEmpty else { return }
-        Task { [weak self] in await self?.run(jobs) }
+        guard !jobs.isEmpty, fireTask == nil else { return }
+        let runID = UUID()
+        fireTaskID = runID
+        fireTask = Task { [weak self] in
+            defer {
+                if self?.fireTaskID == runID {
+                    self?.fireTask = nil
+                    self?.fireTaskID = nil
+                }
+            }
+            await self?.run(jobs)
+        }
     }
 
     private func restartLoop() {
