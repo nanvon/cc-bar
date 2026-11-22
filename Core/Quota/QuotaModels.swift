@@ -547,8 +547,14 @@ nonisolated enum QuotaError: Error, CustomStringConvertible {
            cfNetworkProxyFailureCodes.contains(nsError.code) {
             return .network(.cannotConnect)
         }
-        guard let urlError = error as? URLError else { return .network(.other) }
-        return .network(NetworkFailureKind(urlError.code))
+        if let urlError = error as? URLError {
+            return .network(NetworkFailureKind(urlError.code))
+        }
+        // async URLSession 在代理配置失败等路径下可能抛出未桥接成 URLError 的 NSURLErrorDomain 实例。
+        if nsError.domain == NSURLErrorDomain {
+            return .network(NetworkFailureKind(URLError.Code(rawValue: nsError.code)))
+        }
+        return .network(.other)
     }
 
     var httpStatusCode: Int? {
@@ -602,6 +608,12 @@ extension NetworkFailureKind {
             return tr("No network connection", "网络未连接")
         case .cannotConnect:
             // 设置里指定了代理时直接点名那个地址,用户不用再猜走的是哪个代理。
+            if case .direct = proxy {
+                return tr(
+                    "Can't reach the service over a direct connection — check your network",
+                    "直连连不上服务,请检查网络"
+                )
+            }
             if case .proxy(let endpoint) = proxy {
                 return tr(
                     "Can't reach the service — check that proxy \(endpoint.address) is running",
@@ -613,6 +625,12 @@ extension NetworkFailureKind {
                 "连不上服务,请检查网络或代理"
             )
         case .timedOut:
+            if case .direct = proxy {
+                return tr(
+                    "Direct connection timed out — check your network",
+                    "直连超时,请检查网络"
+                )
+            }
             if case .proxy(let endpoint) = proxy {
                 return tr(
                     "Connection timed out — check proxy \(endpoint.address)",
@@ -645,7 +663,7 @@ extension NetworkFailureKind {
                     "Proxy address is malformed — fix it in Settings → Data & Refresh",
                     "代理地址格式不对,请到「设置 → 数据与刷新」修改"
                 )
-            case .system, .proxy:
+            case .system, .direct, .proxy:
                 // 失败之后用户已经改过设置,下一次刷新会按新设置重试。
                 return tr(
                     "Proxy unavailable — check Settings → Data & Refresh",

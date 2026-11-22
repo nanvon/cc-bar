@@ -325,8 +325,12 @@ final class SettingsStore {
     var proxyHost: String { didSet { defaults.set(proxyHost, forKey: NetworkProxy.Keys.host) } }
     /// 0 表示未填写。
     var proxyPort: Int { didSet { defaults.set(proxyPort, forKey: NetworkProxy.Keys.port) } }
-    var useDedicatedClaudeProxy: Bool {
-        didSet { defaults.set(useDedicatedClaudeProxy, forKey: NetworkProxy.Keys.useDedicatedClaudeProxy) }
+    /// 同时写旧版 Bool，回退到旧版本时「单独配置」仍保留；直连在旧版按沿用全局处理。
+    var claudeProxyMode: ClaudeProxyMode {
+        didSet {
+            defaults.set(claudeProxyMode.rawValue, forKey: NetworkProxy.Keys.claudeMode)
+            defaults.set(claudeProxyMode == .dedicated, forKey: NetworkProxy.Keys.useDedicatedClaudeProxy)
+        }
     }
     var claudeProxyType: ProxyType {
         didSet { defaults.set(claudeProxyType.rawValue, forKey: NetworkProxy.Keys.claudeType) }
@@ -344,8 +348,14 @@ final class SettingsStore {
     }
 
     var claudeProxyResolution: ProxyResolution {
-        guard useDedicatedClaudeProxy else { return NetworkProxy.claudeUsingGlobal(proxyResolution) }
-        return NetworkProxy.manualResolution(type: claudeProxyType, host: claudeProxyHost, port: claudeProxyPort)
+        switch claudeProxyMode {
+        case .global:
+            return NetworkProxy.claudeUsingGlobal(proxyResolution)
+        case .dedicated:
+            return NetworkProxy.manualResolution(type: claudeProxyType, host: claudeProxyHost, port: claudeProxyPort)
+        case .direct:
+            return .direct
+        }
     }
 
     // 通用
@@ -468,7 +478,7 @@ final class SettingsStore {
         proxyType = defaults.string(forKey: NetworkProxy.Keys.type).flatMap(ProxyType.init(rawValue:)) ?? .http
         proxyHost = defaults.string(forKey: NetworkProxy.Keys.host) ?? ""
         proxyPort = defaults.integer(forKey: NetworkProxy.Keys.port)
-        useDedicatedClaudeProxy = defaults.bool(forKey: NetworkProxy.Keys.useDedicatedClaudeProxy)
+        claudeProxyMode = NetworkProxy.claudeMode(defaults: defaults)
         claudeProxyType = defaults.string(forKey: NetworkProxy.Keys.claudeType).flatMap(ProxyType.init(rawValue:)) ?? .http
         claudeProxyHost = defaults.string(forKey: NetworkProxy.Keys.claudeHost) ?? ""
         claudeProxyPort = defaults.integer(forKey: NetworkProxy.Keys.claudePort)

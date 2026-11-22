@@ -187,6 +187,7 @@ enum DiagnosticsBundle {
         out.row("proxy mode", settings.proxyMode.rawValue)
         switch NetworkProxy.resolve() {
         case .system: out.row("proxy", "system")
+        case .direct: out.row("proxy", "direct")
         case .proxy(let endpoint): out.row("proxy", "\(endpoint.type.rawValue) \(endpoint.address)")
         case .unavailable(let reason): out.row("proxy", "unavailable (\(reason))")
         }

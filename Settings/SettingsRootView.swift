@@ -697,9 +697,11 @@ struct SettingsRootView: View {
             PrefsRow(
                 label: "Claude proxy",
                 chinese: "Claude 代理",
-                desc: "Prevent direct connections to Claude",
-                chineseDesc: "避免直连连接 Claude 服务",
-                detail: settings.proxyMode == .system && !settings.useDedicatedClaudeProxy
+                desc: settings.claudeProxyMode == .direct
+                    ? "Claude requests connect directly without a proxy" : "Prevent direct connections to Claude",
+                chineseDesc: settings.claudeProxyMode == .direct
+                    ? "Claude 请求直连，不经过代理" : "避免直连连接 Claude 服务",
+                detail: settings.proxyMode == .system && settings.claudeProxyMode == .global
                     ? AnyView(Text(tr(
                         "Claude refresh is paused until a manual proxy is configured.",
                         "Claude 已暂停刷新，请单独配置代理或将全局代理设为手动"
@@ -707,9 +709,18 @@ struct SettingsRootView: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)) : nil
             ) {
-                Picker(tr("Claude proxy", "Claude 代理"), selection: $settings.useDedicatedClaudeProxy) {
-                    Text(tr("Use global manual proxy", "沿用全局手动代理")).tag(false)
-                    Text(tr("Configure separately", "单独配置")).tag(true)
+                Picker(tr("Claude proxy", "Claude 代理"), selection: Binding(
+                    get: { settings.claudeProxyMode },
+                    set: { mode in
+                        if mode == .direct, settings.claudeProxyMode != .direct {
+                            guard confirmClaudeDirectConnection() else { return }
+                        }
+                        settings.claudeProxyMode = mode
+                    }
+                )) {
+                    Text(tr("Use global manual proxy", "沿用全局手动代理")).tag(ClaudeProxyMode.global)
+                    Text(tr("Configure separately", "单独配置")).tag(ClaudeProxyMode.dedicated)
+                    Text(tr("Direct (no proxy)", "直连（不使用代理）")).tag(ClaudeProxyMode.direct)
                 }
                 .labelsHidden()
                 .pickerStyle(.menu)
@@ -717,18 +728,33 @@ struct SettingsRootView: View {
                 .focusEffectDisabled()
             }
 
-            if settings.useDedicatedClaudeProxy {
+            if settings.claudeProxyMode == .dedicated {
                 proxyFields(type: $settings.claudeProxyType, host: $settings.claudeProxyHost,
                             port: $settings.claudeProxyPort, forClaude: true)
             }
 
-            if settings.useDedicatedClaudeProxy || settings.proxyMode == .manual {
+            if settings.claudeProxyMode != .global || settings.proxyMode == .manual {
                 let resolution = settings.claudeProxyResolution
                 InsetDivider()
                 ProxyConnectionTestRow(resolution: resolution, forClaude: true)
                     .id(resolution)
             }
         }
+    }
+
+    /// 选择 Claude 直连前的二次确认，取消则保持原选项。
+    private func confirmClaudeDirectConnection() -> Bool {
+        let alert = NSAlert()
+        alert.messageText = tr("Set Claude requests to connect directly?", "确定将 Claude 请求设为直连？")
+        alert.informativeText = tr(
+            "Make sure your network can connect to Claude directly without risk. Claude requests will not use any proxy, including the system proxy.",
+            "请确保您的网络支持无风险直连 Claude。直连时 Claude 请求不经过任何代理，也不读取系统代理。"
+        )
+        // critical 样式在图标上叠加黄色警告标记。
+        alert.alertStyle = .critical
+        alert.addButton(withTitle: tr("Connect Directly", "设为直连"))
+        alert.addButton(withTitle: tr("Cancel", "取消"))
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     @ViewBuilder
@@ -1736,7 +1762,7 @@ private struct ProxyConnectionTestRow: View {
                     "Enter only a hostname or IP, without http:// or a port",
                     "地址只填主机名或 IP,不带 http:// 和端口"
                 )
-            case .unavailable(.claudeManualRequired), .system, .proxy:
+            case .unavailable(.claudeManualRequired), .system, .direct, .proxy:
                 return tr("Proxy unavailable", "代理不可用")
             }
         }

@@ -10,11 +10,20 @@ import os
 // - 手动：用户填写的 HTTP / SOCKS5 代理。
 // 手动模式下代理不可用时直接报错，不回退直连或系统代理：带着账号凭据的请求
 // 换一个出口发出，服务端看到的就是同一账号在两个 IP 上同时使用。
-// Claude 请求用 `claudeData(for:)`，始终要求显式配置代理。
+// Claude 请求用 `claudeData(for:)`，要求显式配置代理，或由用户确认后选择直连（不读系统代理）。
 
 nonisolated enum ProxyMode: String, CaseIterable, Identifiable, Sendable {
     case system
     case manual
+
+    var id: String { rawValue }
+}
+
+/// Claude 请求的出口：沿用全局手动代理、单独配置代理，或直连。
+nonisolated enum ClaudeProxyMode: String, CaseIterable, Identifiable, Sendable {
+    case global
+    case dedicated
+    case direct
 
     var id: String { rawValue }
 }
@@ -50,6 +59,8 @@ nonisolated enum ProxyUnavailableReason: Sendable, Hashable {
 
 nonisolated enum ProxyResolution: Sendable, Hashable {
     case system
+    /// 不走任何代理，也不读系统代理。只有 Claude 在用户确认后会解析为直连。
+    case direct
     case proxy(ProxyEndpoint)
     case unavailable(ProxyUnavailableReason)
 }
@@ -66,7 +77,9 @@ nonisolated enum NetworkProxy {
         static let type = "ccbar.settings.proxyType"
         static let host = "ccbar.settings.proxyHost"
         static let port = "ccbar.settings.proxyPort"
+        /// 旧版只有「沿用全局 / 单独配置」两项时的 Bool；没有 `claudeMode` 时据此换算。
         static let useDedicatedClaudeProxy = "ccbar.settings.useDedicatedClaudeProxy"
+        static let claudeMode = "ccbar.settings.claudeProxyMode"
         static let claudeType = "ccbar.settings.claudeProxyType"
         static let claudeHost = "ccbar.settings.claudeProxyHost"
         static let claudePort = "ccbar.settings.claudeProxyPort"
@@ -79,6 +92,13 @@ nonisolated enum NetworkProxy {
 
     private static let state = OSAllocatedUnfairLock(initialState: State())
     private static let claudeState = OSAllocatedUnfairLock(initialState: State())
+
+    /// 直连会话：空的 `connectionProxyDictionary` 表示不使用代理，系统代理和 PAC 都不读。
+    private static let directSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.connectionProxyDictionary = [:]
+        return URLSession(configuration: configuration)
+    }()
 
     // MARK: 请求
 
@@ -96,6 +116,8 @@ nonisolated enum NetworkProxy {
         switch resolution {
         case .system:
             return .shared
+        case .direct:
+            return directSession
         case .proxy(let endpoint):
             return session(for: endpoint, state: state, makeSession: makeSession)
         case .unavailable(let reason):
@@ -114,6 +136,8 @@ nonisolated enum NetworkProxy {
         switch resolution {
         case .system:
             throw ProxyUnavailableError(reason: .claudeManualRequired)
+        case .direct:
+            return directSession
         case .unavailable(let reason):
             throw ProxyUnavailableError(reason: reason)
         case .proxy(let endpoint):
@@ -163,11 +187,23 @@ nonisolated enum NetworkProxy {
 
     static func resolveClaude() -> ProxyResolution {
         let defaults = UserDefaults.standard
-        if defaults.bool(forKey: Keys.useDedicatedClaudeProxy) {
+        switch claudeMode(defaults: defaults) {
+        case .global:
+            return claudeUsingGlobal(resolve(defaults: defaults))
+        case .dedicated:
             return manualResolution(defaults: defaults, typeKey: Keys.claudeType,
                                     hostKey: Keys.claudeHost, portKey: Keys.claudePort)
+        case .direct:
+            return .direct
         }
-        return claudeUsingGlobal(resolve(defaults: defaults))
+    }
+
+    /// 没有新 key 时按旧版 Bool 换算，已有配置保持不变。
+    static func claudeMode(defaults: UserDefaults) -> ClaudeProxyMode {
+        if let mode = defaults.string(forKey: Keys.claudeMode).flatMap(ClaudeProxyMode.init(rawValue:)) {
+            return mode
+        }
+        return defaults.bool(forKey: Keys.useDedicatedClaudeProxy) ? .dedicated : .global
     }
 
     static func claudeUsingGlobal(_ global: ProxyResolution) -> ProxyResolution {
@@ -219,26 +255,17 @@ nonisolated enum NetworkProxy {
     }
 
     private static func makeSession(_ endpoint: ProxyEndpoint) -> URLSession {
-        var proxy: [String: Any] = [:]
-        switch endpoint.type {
-        case .http:
-            proxy[kCFNetworkProxiesHTTPEnable as String] = 1
-            proxy[kCFNetworkProxiesHTTPProxy as String] = endpoint.host
-            proxy[kCFNetworkProxiesHTTPPort as String] = endpoint.port
-            proxy[kCFNetworkProxiesHTTPSEnable as String] = 1
-            proxy[kCFNetworkProxiesHTTPSProxy as String] = endpoint.host
-            proxy[kCFNetworkProxiesHTTPSPort as String] = endpoint.port
-        case .socks5:
-            proxy[kCFNetworkProxiesSOCKSEnable as String] = 1
-            proxy[kCFNetworkProxiesSOCKSProxy as String] = endpoint.host
-            proxy[kCFNetworkProxiesSOCKSPort as String] = endpoint.port
-        }
-        let configuration = URLSessionConfiguration.default
-        configuration.connectionProxyDictionary = proxy
-        return URLSession(configuration: configuration)
+        makeProxySession(endpoint, configuration: .default)
     }
 
     private static func makeClaudeSession(_ endpoint: ProxyEndpoint) -> URLSession {
+        makeProxySession(endpoint, configuration: .ephemeral)
+    }
+
+    private static func makeProxySession(
+        _ endpoint: ProxyEndpoint,
+        configuration: URLSessionConfiguration
+    ) -> URLSession {
         let proxyEndpoint = NWEndpoint.hostPort(
             host: NWEndpoint.Host(endpoint.host), port: NWEndpoint.Port(rawValue: UInt16(endpoint.port))!
         )
@@ -250,7 +277,6 @@ nonisolated enum NetworkProxy {
             proxy = ProxyConfiguration(socksv5Proxy: proxyEndpoint)
         }
         proxy.allowFailover = false
-        let configuration = URLSessionConfiguration.ephemeral
         configuration.proxyConfigurations = [proxy]
         return URLSession(configuration: configuration)
     }
