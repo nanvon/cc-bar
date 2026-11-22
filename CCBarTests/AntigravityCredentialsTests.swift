@@ -92,7 +92,16 @@ final class AntigravityCredentialsTests: XCTestCase {
         var data = Data([0xff, 0x00])
         data.append(Data((AntigravityCredentials.antigravityClientID + String(repeating: "-", count: 1024) + first + second + "httpsTrailing").utf8))
         try data.write(to: binary)
-        XCTAssertEqual(Set(AntigravityCredentials.clientSecrets(inBinary: binary).values), [first, second])
+        let extracted = AntigravityCredentials.extractClientSecretsFromLocalTools(
+            homeDirectory: home, applicationRoots: [applications]
+        )
+        XCTAssertTrue(Set(extracted.values).isSuperset(of: [first, second]))
+    }
+
+    func testKeychainExtractsIdTokenEmailFallback() throws {
+        let loaded = keychain(#"{"auth_method":"oauth-personal","id_token_email":"user@example.com","token":{"access_token":"gui","refresh_token":"refresh","expiry":"2099-01-01T00:00:00Z"}}"#)
+        let account = try XCTUnwrap(AntigravityCredentials.load(homeDirectory: home, keychainLoader: { loaded }))
+        XCTAssertEqual(account.email, "user@example.com")
     }
 
     func testExpiredGUIGrantRefreshesWithoutCLIAndFormEncodesCredentials() async throws {
@@ -161,6 +170,73 @@ final class AntigravityCredentialsTests: XCTestCase {
         XCTAssertEqual(second.requestBodies.count, 1)
         XCTAssertNotEqual(first.savedKeys, second.savedKeys)
     }
+
+    func testInvalidGrantMarksLoginSignedOutAndStopsFurtherRequests() async {
+        let harness = AntigravityRefreshHarness()
+        harness.status = 400
+        harness.errorBody = #"{"error":"invalid_grant","error_description":"Token has been expired or revoked."}"#
+        var account = harness.account
+        let first = await AntigravityCredentials.ensureFreshAccessToken(account: &account, environment: harness.environment)
+        guard case .failure(.antigravitySignedOut) = first else { return XCTFail("expected signed out") }
+        XCTAssertEqual(harness.signedOut, harness.account.refreshKey)
+        let attempts = harness.requestBodies.count
+        XCTAssertGreaterThan(attempts, 0)
+
+        var again = harness.account
+        let second = await AntigravityCredentials.ensureFreshAccessToken(account: &again, environment: harness.environment)
+        guard case .failure(.antigravitySignedOut) = second else { return XCTFail("expected signed out") }
+        XCTAssertEqual(harness.requestBodies.count, attempts, "已判定失效的登录不再请求 token 接口")
+
+        // 用户在 Antigravity 重新登录后凭据变化，标记自动失效，恢复续期。
+        harness.replaceLogin()
+        harness.status = 200
+        var relogged = harness.account
+        let third = await AntigravityCredentials.ensureFreshAccessToken(account: &relogged, environment: harness.environment)
+        XCTAssertEqual(try? third.get(), "fresh-access")
+    }
+
+    func testSuccessfulClientPairIsRememberedAndTriedFirst() async throws {
+        let harness = AntigravityRefreshHarness()
+        let secret = "GOCSPX-" + String(repeating: "c", count: 28)
+        // 只有 Gemini CLI client 能续期这份登录，secret 也没有和 ID 配对。
+        harness.secrets = ["candidate-x": secret]
+        harness.acceptedClientID = AntigravityCredentials.clientID
+        var account = harness.account
+        _ = try await AntigravityCredentials.ensureFreshAccessToken(account: &account, environment: harness.environment).get()
+        let firstAttempts = harness.requestBodies.count
+        XCTAssertGreaterThan(firstAttempts, 1)
+        XCTAssertEqual(harness.clientHint,
+                       "\(AntigravityCredentials.clientID)|\(AntigravityCredentials.secretFingerprint(secret))")
+
+        let candidates = AntigravityCredentials.refreshCandidates(
+            source: .keychain, secrets: ["candidate-x": secret], hint: harness.clientHint
+        )
+        XCTAssertEqual(candidates.first?.id, AntigravityCredentials.clientID)
+        XCTAssertEqual(candidates.first?.secret, secret)
+    }
+
+    func testRefreshCandidatesFollowCredentialSource() {
+        let secret = "GOCSPX-" + String(repeating: "d", count: 28)
+        let gui = AntigravityCredentials.refreshCandidates(
+            source: .keychain, secrets: [AntigravityCredentials.antigravityClientID: secret], hint: nil
+        )
+        XCTAssertEqual(gui.first?.id, AntigravityCredentials.antigravityClientID)
+        XCTAssertEqual(gui.first?.secret, secret)
+        let gemini = AntigravityCredentials.refreshCandidates(source: .oauthCreds, secrets: [:], hint: nil)
+        XCTAssertEqual(gemini.first?.id, AntigravityCredentials.clientID)
+        // 去重：同一 (client, secret) 只出现一次。
+        let keys = gui.map { $0.id + "|" + ($0.secret ?? "") }
+        XCTAssertEqual(keys.count, Set(keys).count)
+    }
+
+    func testByteScanFindsClientIDPrecededByOtherIdentifierCharacters() {
+        let secret = "GOCSPX-" + String(repeating: "e", count: 28)
+        var result: [String: String] = [:]
+        AntigravityCredentials.extractSecrets(
+            fromData: Data(("xyz-" + AntigravityCredentials.antigravityClientID + "\u{0}" + secret).utf8), into: &result
+        )
+        XCTAssertEqual(result[AntigravityCredentials.antigravityClientID], secret)
+    }
 }
 
 final class AntigravityDesktopQuotaTests: XCTestCase {
@@ -200,7 +276,8 @@ final class AntigravityDesktopQuotaTests: XCTestCase {
         }
         let fetched = try result.get()
         XCTAssertEqual(fetched.snapshot.allLimits.count, 5)
-        XCTAssertEqual(fetched.snapshot.primaryLimit?.id, "gemini-argon-wtu-weekly")
+        XCTAssertEqual(fetched.snapshot.primaryLimit?.id, "gemini-5h")
+        XCTAssertEqual(fetched.snapshot.allLimits.last?.id, "gemini-argon-wtu-weekly")
         XCTAssertEqual(fetched.snapshot.primaryWindow?.remainingPercent, 75)
         XCTAssertEqual(fetched.snapshot.planType, "Google AI Pro")
     }
@@ -214,6 +291,8 @@ final class AntigravityDesktopQuotaTests: XCTestCase {
         }
         let snapshot = try result.get().snapshot
         XCTAssertEqual(snapshot.allLimits.count, 5)
+        XCTAssertEqual(snapshot.primaryLimit?.id, "gemini-5h")
+        XCTAssertEqual(snapshot.allLimits.last?.id, "gemini-argon-wtu-weekly")
         XCTAssertEqual(snapshot.allLimits.first { $0.id == "claude-5h" }?.window.remainingPercent, 80)
         XCTAssertEqual(snapshot.primaryWindow?.remainingPercent, 20)
     }
@@ -245,9 +324,7 @@ final class AntigravityDesktopQuotaTests: XCTestCase {
         let result = await AntigravityQuotaClient.fetch(accessToken: "gui") { request in
             let url = request.url!.absoluteString
             if url.contains("loadCodeAssist") { return try self.response(request, setup) }
-            if url.contains("fetchAvailableModels") {
-                return try self.response(request, ["models": ["gemini-3.1-pro": ["quotaInfo": ["remainingFraction": 1.0]]]])
-            }
+            XCTAssertFalse(url.contains("fetchAvailableModels"), "模型列表不再作为额度来源")
             return try self.response(request, ["error": "permission denied"], status: 403)
         }
         if case .success = result { XCTFail("模型可用性不能冒充真实额度") }
@@ -262,10 +339,74 @@ final class AntigravityDesktopQuotaTests: XCTestCase {
         XCTAssertEqual(error.httpStatusCode, 403)
     }
 
+    func testCachedSetupSkipsLoadCodeAssistAndUsesOneRequest() async throws {
+        let groups = groups(allIDs)
+        let setup = AntigravityQuotaClient.Setup(project: "cached-project", planType: "Google AI Pro", fetchedAt: Date())
+        let counter = RequestCounter()
+        let result = await AntigravityQuotaClient.fetch(accessToken: "gui", cachedSetup: setup) { request in
+            counter.append(request.url!.absoluteString)
+            XCTAssertTrue(request.url!.absoluteString.contains("daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"))
+            let body = try XCTUnwrap(JSONSerialization.jsonObject(with: request.httpBody!) as? [String: Any])
+            XCTAssertEqual(body["project"] as? String, "cached-project")
+            return try self.response(request, groups)
+        }
+        let fetched = try result.get()
+        XCTAssertEqual(counter.urls.count, 1)
+        XCTAssertEqual(fetched.snapshot.planType, "Google AI Pro")
+        XCTAssertEqual(fetched.setup, setup)
+    }
+
+    func testRejectedCachedProjectReloadsSetupOnce() async throws {
+        let stale = AntigravityQuotaClient.Setup(project: "old-project", planType: nil, fetchedAt: Date())
+        let setup = setup(), groups = groups(allIDs)
+        let result = await AntigravityQuotaClient.fetch(accessToken: "gui", cachedSetup: stale) { request in
+            if request.url!.absoluteString.contains("loadCodeAssist") { return try self.response(request, setup) }
+            let body = try XCTUnwrap(JSONSerialization.jsonObject(with: request.httpBody!) as? [String: Any])
+            if body["project"] as? String == "old-project" { return try self.response(request, ["error": "denied"], status: 403) }
+            return try self.response(request, groups)
+        }
+        let fetched = try result.get()
+        XCTAssertEqual(fetched.setup?.project, "account-project")
+        XCTAssertEqual(fetched.snapshot.planType, "Google AI Pro")
+    }
+
+    func testKnownBucketsDecideWhetherProductionIsQueried() async throws {
+        let setup = AntigravityQuotaClient.Setup(project: "p", planType: nil, fetchedAt: Date())
+        let weekly = groups(["gemini-weekly", "3p-weekly"])
+        let counter = RequestCounter()
+        let result = await AntigravityQuotaClient.fetch(
+            accessToken: "gui", cachedSetup: setup, expectedLimitIDs: ["gemini-weekly", "claude-weekly"]
+        ) { request in
+            counter.append(request.url!.absoluteString)
+            return try self.response(request, weekly)
+        }
+        XCTAssertEqual(try result.get().snapshot.allLimits.count, 2)
+        XCTAssertEqual(counter.urls.count, 1, "daily 已包含该账号见过的全部桶，不补查主域")
+    }
+
     func testProjectSupportsObjectShapeAndRejectsBlank() {
         XCTAssertEqual(AntigravityQuotaClient.projectID(in: ["cloudaicompanionProject": ["id": "p"]]), "p")
         XCTAssertNil(AntigravityQuotaClient.projectID(in: ["cloudaicompanionProject": "  "]))
     }
+
+    func testCloudUserAgentUsesCLIClientShapeForArgonBuckets() {
+        XCTAssertTrue(AntigravityQuotaClient.cloudUserAgent.hasPrefix("antigravity/cli/"))
+        XCTAssertTrue(AntigravityQuotaClient.cloudUserAgent.contains("aidev_client"))
+    }
+
+    func testUnbridgedNSURLErrorCannotConnectMapsToCannotConnect() {
+        let rawError = NSError(domain: NSURLErrorDomain, code: NSURLErrorCannotConnectToHost)
+        guard case .network(.cannotConnect) = QuotaError.from(transport: rawError) else {
+            return XCTFail("expected .network(.cannotConnect)")
+        }
+    }
+}
+
+nonisolated private final class RequestCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: [String] = []
+    var urls: [String] { lock.lock(); defer { lock.unlock() }; return stored }
+    func append(_ url: String) { lock.lock(); defer { lock.unlock() }; stored.append(url) }
 }
 
 nonisolated private final class AntigravityRefreshHarness: @unchecked Sendable {
@@ -274,8 +415,14 @@ nonisolated private final class AntigravityRefreshHarness: @unchecked Sendable {
     private var cached: AntigravityCredentials.RefreshedToken?
     private var bodies: [String] = []
     private var keys: [String] = []
+    private var hints: [CredentialFileSource: String] = [:]
+    private var signedOutKey: String?
     var status = 200
+    var errorBody = #"{"error":"rate_limit"}"#
+    /// 只有带这个 client_id 的请求才成功；nil 表示任何候选都成功。
+    var acceptedClientID: String?
     var switchOnSend = false
+    var secrets: [String: String] = [AntigravityCredentials.antigravityClientID: "GOCSPX-" + String(repeating: "a", count: 28)]
 
     init(refresh: String = "refresh") {
         login = AntigravityAccount(accessToken: "expired", refreshToken: refresh, expiryDate: .distantPast,
@@ -286,6 +433,9 @@ nonisolated private final class AntigravityRefreshHarness: @unchecked Sendable {
     var requestBodies: [String] { lock.lock(); defer { lock.unlock() }; return bodies }
     var savedKeys: [String] { lock.lock(); defer { lock.unlock() }; return keys }
     func setCached(_ token: AntigravityCredentials.RefreshedToken) { lock.lock(); defer { lock.unlock() }; cached = token }
+    var clientHint: String? { lock.lock(); defer { lock.unlock() }; return hints[login.source] }
+    func setClientHint(_ hint: String?) { lock.lock(); defer { lock.unlock() }; hints[login.source] = hint }
+    var signedOut: String? { lock.lock(); defer { lock.unlock() }; return signedOutKey }
     func replaceLogin() { lock.lock(); defer { lock.unlock() }; login.credentialSignature = UUID().uuidString; login.refreshToken = UUID().uuidString }
 
     private func record(_ request: URLRequest) -> Int {
@@ -297,12 +447,17 @@ nonisolated private final class AntigravityRefreshHarness: @unchecked Sendable {
     var environment: AntigravityCredentials.RefreshEnvironment {
         .init(
             load: { self.account },
-            secrets: { [AntigravityCredentials.antigravityClientID: "GOCSPX-" + String(repeating: "a", count: 28)] },
+            secrets: { self.lock.lock(); defer { self.lock.unlock() }; return self.secrets },
             send: { request in
-                let status = self.record(request)
+                var status = self.record(request)
                 try await Task.sleep(nanoseconds: 20_000_000)
                 if self.switchOnSend { self.replaceLogin() }
-                let json = status == 200 ? #"{"access_token":"fresh-access","refresh_token":"rotated","expires_in":3600}"# : #"{"error":"rate_limit"}"#
+                let body = String(data: request.httpBody ?? Data(), encoding: .utf8) ?? ""
+                if status == 200, let accepted = self.acceptedClientID,
+                   !body.hasPrefix("client_id=\(accepted)") { status = 401 }
+                let json = status == 200
+                    ? #"{"access_token":"fresh-access","refresh_token":"rotated","expires_in":3600}"#
+                    : (status == 401 ? #"{"error":"unauthorized_client"}"# : self.errorBody)
                 return (Data(json.utf8), HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!)
             },
             cached: { _ in self.lock.lock(); defer { self.lock.unlock() }; return self.cached },
@@ -310,7 +465,11 @@ nonisolated private final class AntigravityRefreshHarness: @unchecked Sendable {
                 self.lock.lock(); defer { self.lock.unlock() }
                 self.cached = token
                 self.keys.append(account.refreshKey)
-            }
+            },
+            loadClientHint: { source in self.lock.lock(); defer { self.lock.unlock() }; return self.hints[source] },
+            saveClientHint: { source, hint in self.lock.lock(); defer { self.lock.unlock() }; self.hints[source] = hint },
+            isSignedOut: { key in self.lock.lock(); defer { self.lock.unlock() }; return self.signedOutKey == key },
+            markSignedOut: { key in self.lock.lock(); defer { self.lock.unlock() }; self.signedOutKey = key }
         )
     }
 }

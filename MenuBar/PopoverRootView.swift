@@ -652,6 +652,7 @@ private struct ServiceBlockView: View {
                 .kerning(0.6)
                 .foregroundStyle(.tertiary)
                 .lineLimit(1)
+                .minimumScaleFactor(app == .antigravity ? 0.75 : 1)
                 .frame(width: 72, alignment: .leading)
 
             ProgressBar(value: remaining / 100, tint: color, height: 2.5)
@@ -692,7 +693,7 @@ private struct ServiceBlockView: View {
     }
 
     private func compactLimitLabel(_ limit: QuotaLimit) -> String {
-        // Antigravity 的共享窗口及 Argon 独立额度带官方组名，
+        // Antigravity 的共享窗口及 Argon / Carbon 独立额度带官方组名，
         // 用 displayName 显示；其余服务仍按窗口类型回落。
         if app == .antigravity, let name = normalizedModelLabel(limit.displayName) {
             return name.uppercased()
@@ -776,7 +777,7 @@ private struct ServiceBlockView: View {
     private var primaryLimitTitle: String {
         if isUnlimited { return "UNLIMITED" }
         guard let limit = snapshot?.primaryLimit else { return "CURRENT" }
-        // Antigravity 优先以 Argon 周额度为主条，标签使用实际 displayName。
+        // Antigravity 主条优先显示 Gemini 5H，标签使用实际 displayName。
         if app == .antigravity, let name = normalizedModelLabel(limit.displayName) {
             return name.uppercased()
         }

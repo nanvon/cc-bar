@@ -1,157 +1,165 @@
 import Foundation
-import Darwin
 
-/// Antigravity 额度客户端：优先读取 agy 的结构化额度，Cloud Mode 作为兜底。
+/// Antigravity 额度客户端：纯原生 HTTPS 直连 Google Cloud Code 接口，不启动 `agy` 子进程。
 ///
-/// 直连 `https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist`，
-/// 使用 `AntigravityCredentials` 读取的 `access_token` 作为 `Bearer`。
-/// 解析 5小时（`primaryLimit`）与周（`secondaryLimit`）窗口，以及
-/// Gemini 5小时（`geminiWindow`）/ 周（`geminiWeekly`）细粒度。
-/// 富化链路：`loadCodeAssist`（tier / plan）→ `retrieveUserQuotaSummary`
-/// （权威分组：Gemini / Claude+GPT 各含 5h + weekly，实测免费版即有）→
-/// `fetchAvailableModels`（Gemini 轮换）→ `retrieveUserQuota`（按模型分桶，仅 5h）。
-/// 见 `docs/草案-Antigravity支持-设计方案.md` §2。
+/// 每轮正常只发一个请求：daily 域 `retrieveUserQuotaSummary`。`loadCodeAssist`（project 与套餐）
+/// 按登录缓存 `setupTTL`，缓存的 project 被拒时同轮重查一次。daily 返回的分组缺少该账号已知的桶时
+/// 才补查主域 `cloudcode-pa.googleapis.com`；两域都没有分组时读 `retrieveUserQuota` 的 quota 桶。
+/// 使用 `AntigravityCredentials` 读取的 `access_token` 作为 `Bearer`，携带 CLI 客户端标识的
+/// `User-Agent` 后可拿到完整分组（含 Argon / Carbon 独立周额度、Gemini 5h/周、Claude+GPT 5h/周）。
 nonisolated enum AntigravityQuotaClient {
     static let endpoint = URL(string: "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist")!
     static let dailyEndpoint = URL(string: "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist")!
 
-    /// 取数结果，附带账号订阅层级。
+    /// 取数结果，附带账号订阅层级与本轮使用的 `loadCodeAssist` 结果（供调用方缓存）。
     struct Fetched: Sendable {
         var snapshot: QuotaSnapshot
         var account: AntigravityAccount
+        var setup: Setup?
     }
 
-    enum CLIResult: Sendable {
-        case success(QuotaSnapshot)
-        case failure(QuotaError)
-        /// agy 的登录已失效，需要用户自己在终端运行 agy 重新登录。此时没有调用 agy。
-        case signedOut
-    }
+    /// `loadCodeAssist` 的有效结果：project 与套餐几小时内不变，按登录缓存，避免每轮多打一个请求。
+    struct Setup: Sendable, Equatable {
+        var project: String?
+        var planType: String?
+        var fetchedAt: Date
 
-    /// nil 表示没装 agy 或代理没法交给它，按没有 CLI 处理。
-    static func fetchCLIQuota(sessionKey: String) async -> CLIResult? {
-        await CLIQuery.shared.fetch(sessionKey: sessionKey)
-    }
-
-    /// CLI 不携带套餐和可核实身份；仅在需要时用有效令牌补充套餐，不混入云端额度。
-    static func fetchPlan(accessToken: String) async -> Result<String?, QuotaError> {
-        let result = await cloudRequest(baseURL: dailyEndpoint, method: "loadCodeAssist", token: accessToken,
-                                        body: ["metadata": clientMetadata], dataLoader: { try await NetworkProxy.data(for: $0) })
-        return result.map { parse(root: $0).snapshot.planType }
-    }
-
-    /// agy 1.4.0 的 /quota：command.data.groups，字段使用 snake_case。
-    static func parseCLI(root: [String: Any], fetchedAt: Date = Date()) -> QuotaSnapshot? {
-        guard root["status"] as? String == "SUCCESS",
-              let command = root["command"] as? [String: Any],
-              ["usage", "quota"].contains(command["name"] as? String ?? ""),
-              let data = command["data"] as? [String: Any],
-              let groups = data["groups"] as? [[String: Any]]
-        else { return nil }
-        let normalized = groups.map { group -> [String: Any] in
-            let buckets = (group["buckets"] as? [[String: Any]] ?? []).map { bucket -> [String: Any] in
-                var result = bucket
-                result["bucketId"] = bucket["id"]
-                result["displayName"] = bucket["name"]
-                result["remainingFraction"] = bucket["remaining_fraction"]
-                result["resetTime"] = bucket["reset_time"]
-                return result
-            }
-            return ["displayName": group["name"] as? String ?? "", "buckets": buckets]
+        func isFresh(now: Date) -> Bool {
+            let age = now.timeIntervalSince(fetchedAt)
+            return age >= 0 && age < AntigravityQuotaClient.setupTTL
         }
-        let snapshot = parse(root: ["groups": normalized], fetchedAt: fetchedAt).snapshot
-        return snapshot.allLimits.isEmpty ? nil : snapshot
     }
+
+    static let setupTTL: TimeInterval = 6 * 60 * 60
+
+    /// 没有历史快照时用来判断 daily 分组是否完整的核心桶；有历史快照时改用上次实际见过的桶。
+    static let coreGroupedLimitIDs: Set<String> = ["gemini-5h", "gemini-weekly", "claude-5h", "claude-weekly"]
 
     typealias DataLoader = @Sendable (URLRequest) async throws -> (Data, URLResponse)
 
-    // 与桌面端相同的客户端形态；旧 antigravity/1.0 UA 会被标为 UNSUPPORTED_CLIENT。
+    // 携带 antigravity/cli 客户端标识与 cl 参数后，Cloud Code 会返回包含 Argon 独立周额度在内的完整分组。
     static let cloudUserAgent: String = {
         #if arch(arm64)
         let arch = "arm64"
         #else
         let arch = "amd64"
         #endif
-        return "antigravity/2.28.2 (aidev_client; os_type=darwin; arch=\(arch))"
+        return "antigravity/cli/1.5.13 (aidev_client; os_type=darwin; arch=\(arch); cl=1025641825; auth_method=consumer)"
     }()
 
     static let clientMetadata: [String: String] = [
         "ideType": "ANTIGRAVITY", "platform": "PLATFORM_UNSPECIFIED", "pluginType": "GEMINI",
     ]
 
+    /// - Parameters:
+    ///   - cachedSetup: 上次的 `loadCodeAssist` 结果，过期（`setupTTL`）则重查。
+    ///   - expectedLimitIDs: 该账号上次实际返回的桶 ID；daily 缺其中任意一个才补查主域。为空时用核心四组。
     nonisolated static func fetch(
         accessToken: String,
+        cachedSetup: Setup? = nil,
+        expectedLimitIDs: Set<String> = [],
         dataLoader: @escaping DataLoader = { try await NetworkProxy.data(for: $0) }
     ) async -> Result<Fetched, QuotaError> {
         let token = accessToken.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !token.isEmpty else { return .failure(.missingToken) }
-        var grouped: Fetched?
-        var legacy: Fetched?
-        var lastError: QuotaError = .decode("Antigravity returned no measured quota")
         let fetchedAt = Date()
-        // daily 与 production 有时只返回部分分组。只按稳定 bucket ID 补缺，不覆盖先取得的值，
-        // 不把另一域的 legacy 模型池混进已取得的分组额度。
-        for baseURL in [dailyEndpoint, endpoint] {
-            let setup = await cloudRequest(baseURL: baseURL, method: "loadCodeAssist", token: token,
-                                           body: ["metadata": clientMetadata], dataLoader: dataLoader)
-            let root: [String: Any]
-            switch setup {
-            case .success(let value): root = value
-            case .failure(let error):
-                if error.httpStatusCode == 401 || error.isRateLimited { return .failure(error) }
-                lastError = error
-                continue
+        let expected = expectedLimitIDs.isEmpty ? coreGroupedLimitIDs : expectedLimitIDs
+        var setup = cachedSetup.flatMap { $0.isFresh(now: fetchedAt) ? $0 : nil }
+        var setupFromCache = setup != nil
+        var lastError: QuotaError = .decode("Antigravity returned no measured quota")
+        let domains = [dailyEndpoint, endpoint]
+
+        // 1. 分组额度：daily 优先；只有缺少已知桶时才补查主域，按稳定桶 ID 补缺，不覆盖已取得的值。
+        var grouped: Fetched?
+        var index = 0
+        while index < domains.count {
+            let baseURL = domains[index]
+            if setup == nil {
+                switch await loadSetup(baseURL: baseURL, token: token, fetchedAt: fetchedAt, dataLoader: dataLoader) {
+                case .loaded(let value):
+                    setup = value
+                case .rejected:
+                    return .failure(.http(403, "Antigravity OAuth client cannot read this account's quota"))
+                case .failed(let error):
+                    if error.httpStatusCode == 401 || error.isRateLimited { return .failure(error) }
+                    lastError = error
+                    index += 1
+                    continue
+                }
             }
-            if rejectsConsumerClient(root) {
-                return .failure(.http(403, "Antigravity OAuth client cannot read this account's quota"))
-            }
-            let plan = parse(root: root, fetchedAt: fetchedAt)
-            let project = projectID(in: root)
-            let body: [String: Any] = project.map { ["project": $0] } ?? [:]
             let summary = await cloudRequest(baseURL: baseURL, method: "retrieveUserQuotaSummary", token: token,
-                                             body: body, dataLoader: dataLoader)
+                                             body: requestBody(setup), dataLoader: dataLoader)
             switch summary {
             case .success(let value):
                 let parsed = parse(root: value, fetchedAt: fetchedAt)
                 if !parsed.snapshot.allLimits.isEmpty {
-                    let next = merge(base: plan, enrichment: parsed)
-                    grouped = grouped.map { mergeGrouped(base: $0, enrichment: next) } ?? next
-                    if let grouped, hasCompleteGroupedQuota(grouped.snapshot) { return .success(grouped) }
+                    grouped = grouped.map { mergeGrouped(base: $0, enrichment: parsed) } ?? parsed
                 }
             case .failure(let error):
-                // 429 不允许被可选富化吞掉后继续请求其它端点 / 域名。
+                // 429 不允许被补查吞掉后继续请求其它域名。
+                if error.httpStatusCode == 401 || error.isRateLimited { return .failure(error) }
+                if setupFromCache, [400, 403, 404].contains(error.httpStatusCode ?? 0) {
+                    // 缓存的 project 可能已失效：同一域重查一次 loadCodeAssist 再试。
+                    setup = nil
+                    setupFromCache = false
+                    continue
+                }
+                lastError = error
+            }
+            if let grouped, Set(grouped.snapshot.allLimits.map(\.id)).isSuperset(of: expected) { break }
+            index += 1
+        }
+        if let grouped { return .success(finishing(grouped, setup: setup)) }
+
+        // 2. 没有分组源时读 retrieveUserQuota 的 quota 桶（语义明确的桶，不按模型列表猜窗口）。
+        for baseURL in domains {
+            let result = await cloudRequest(baseURL: baseURL, method: "retrieveUserQuota", token: token,
+                                            body: requestBody(setup), dataLoader: dataLoader)
+            switch result {
+            case .success(let value):
+                let parsed = parse(root: value, fetchedAt: fetchedAt)
+                if !parsed.snapshot.allLimits.isEmpty { return .success(finishing(parsed, setup: setup)) }
+            case .failure(let error):
                 if error.httpStatusCode == 401 || error.isRateLimited { return .failure(error) }
                 lastError = error
             }
-            if grouped != nil { continue }
-
-            // 没有分组源时保留 legacy 兜底；模型列表里全为 100% 的占位值必须用 quota 桶核实。
-            var fallback = plan
-            var modelQuota: Fetched?
-            var verifiedQuota: Fetched?
-            for method in ["fetchAvailableModels", "retrieveUserQuota"] {
-                let result = await cloudRequest(baseURL: baseURL, method: method, token: token,
-                                                body: body, dataLoader: dataLoader)
-                switch result {
-                case .success(let value):
-                    let parsed = parse(root: value, fetchedAt: fetchedAt)
-                    if method == "fetchAvailableModels" { modelQuota = parsed } else { verifiedQuota = parsed }
-                case .failure(let error):
-                    if error.httpStatusCode == 401 || error.isRateLimited { return .failure(error) }
-                    lastError = error
-                }
-            }
-            if let verifiedQuota, !verifiedQuota.snapshot.allLimits.isEmpty {
-                fallback = merge(base: fallback, enrichment: verifiedQuota)
-                if let modelQuota { fallback = merge(base: fallback, enrichment: modelQuota) }
-            } else if let modelQuota, modelQuota.snapshot.allLimits.contains(where: { $0.window.usedPercent > 0 }) {
-                fallback = merge(base: fallback, enrichment: modelQuota)
-            }
-            if !fallback.snapshot.allLimits.isEmpty { legacy = legacy ?? fallback }
         }
-        if let grouped { return .success(grouped) }
-        if let legacy { return .success(legacy) }
         return .failure(lastError)
+    }
+
+    private enum SetupResult {
+        case loaded(Setup)
+        /// 明确拒绝当前 OAuth client 读取该账号额度。
+        case rejected
+        case failed(QuotaError)
+    }
+
+    private static func loadSetup(
+        baseURL: URL, token: String, fetchedAt: Date, dataLoader: DataLoader
+    ) async -> SetupResult {
+        switch await cloudRequest(baseURL: baseURL, method: "loadCodeAssist", token: token,
+                                  body: ["metadata": clientMetadata], dataLoader: dataLoader) {
+        case .success(let root):
+            if rejectsConsumerClient(root) { return .rejected }
+            return .loaded(Setup(project: projectID(in: root),
+                                 planType: parse(root: root, fetchedAt: fetchedAt).snapshot.planType,
+                                 fetchedAt: fetchedAt))
+        case .failure(let error):
+            return .failed(error)
+        }
+    }
+
+    private static func requestBody(_ setup: Setup?) -> [String: Any] {
+        setup?.project.map { ["project": $0] } ?? [:]
+    }
+
+    /// 套餐以 loadCodeAssist 的结果为准，缺失时保留额度响应里的值。
+    private static func finishing(_ fetched: Fetched, setup: Setup?) -> Fetched {
+        var result = fetched
+        result.snapshot.planType = setup?.planType ?? fetched.snapshot.planType
+        result.account.planType = result.snapshot.planType
+        result.setup = setup
+        return result
     }
 
     static func projectID(in root: [String: Any]) -> String? {
@@ -168,27 +176,40 @@ nonisolated enum AntigravityQuotaClient {
         }
     }
 
-    private static func hasCompleteGroupedQuota(_ snapshot: QuotaSnapshot) -> Bool {
-        Set(snapshot.allLimits.map(\.id)).isSuperset(of: [
-            "gemini-argon-wtu-weekly", "gemini-5h", "gemini-weekly", "claude-5h", "claude-weekly",
-        ])
+    private static let groupedLimitOrder = [
+        "gemini-5h", "gemini-weekly", "gemini-carbon-wtu-weekly", "claude-5h", "claude-weekly", "gemini-argon-wtu-weekly",
+    ]
+
+    private static func assigningGroupedLimits(_ limits: [QuotaLimit], onto snapshot: inout QuotaSnapshot) {
+        let sorted = limits.sorted {
+            (groupedLimitOrder.firstIndex(of: $0.id) ?? 99) < (groupedLimitOrder.firstIndex(of: $1.id) ?? 99)
+        }
+        snapshot.primaryLimit = sorted.first
+        snapshot.secondaryLimit = sorted.dropFirst().first
+        snapshot.auxiliaryLimits = Array(sorted.dropFirst(2))
     }
 
     static func mergeGrouped(base: Fetched, enrichment: Fetched) -> Fetched {
         var limits = base.snapshot.allLimits
         let existing = Set(limits.map(\.id))
         limits.append(contentsOf: enrichment.snapshot.allLimits.filter { !existing.contains($0.id) })
-        let order = [
-            "gemini-argon-wtu-weekly", "gemini-5h", "gemini-weekly", "gemini-carbon-wtu-weekly", "claude-5h", "claude-weekly",
-        ]
-        limits.sort { (order.firstIndex(of: $0.id) ?? 99) < (order.firstIndex(of: $1.id) ?? 99) }
         var result = base
-        result.snapshot.primaryLimit = limits.first
-        result.snapshot.secondaryLimit = limits.dropFirst().first
-        result.snapshot.auxiliaryLimits = Array(limits.dropFirst(2))
+        assigningGroupedLimits(limits, onto: &result.snapshot)
         result.snapshot.planType = base.snapshot.planType ?? enrichment.snapshot.planType
         result.account.planType = result.snapshot.planType
         return result
+    }
+
+    /// 兼容旧缓存中仍把 Argon 放在 primaryLimit 的快照，按当前分组展示顺序重排。
+    static func reorderedGroupedSnapshot(_ snapshot: QuotaSnapshot) -> QuotaSnapshot {
+        guard snapshot.app == .antigravity,
+              snapshot.primaryLimit?.id == "gemini-argon-wtu-weekly"
+        else { return snapshot }
+        let limits = [snapshot.primaryLimit, snapshot.secondaryLimit].compactMap { $0 } + snapshot.auxiliaryLimits
+        guard limits.count > 1 else { return snapshot }
+        var updated = snapshot
+        assigningGroupedLimits(limits, onto: &updated)
+        return updated
     }
 
     private static func cloudRequest(
@@ -216,61 +237,14 @@ nonisolated enum AntigravityQuotaClient {
         } catch { return .failure(.from(transport: error)) }
     }
 
-    // MARK: - Merge
-
-    /// 富化合并：base 有值则保留，缺失用富化补齐。
-    /// 注意：`retrieveUserQuotaSummary` 是权威分组源，当它解析出真实窗口时，
-    /// 富化（fetchAvailableModels / retrieveUserQuota 等 per-model 兜底）不得覆盖。
-    /// 普通富化只补缺失；含 Argon 的完整分组按整组采用，保留独立额度及展示顺序。
-    static func merge(base: Fetched, enrichment: Fetched) -> Fetched {
-        if enrichment.snapshot.primaryLimit?.id == "gemini-argon-wtu-weekly" {
-            var snapshot = enrichment.snapshot
-            snapshot.planType = base.snapshot.planType ?? snapshot.planType
-            var account = base.account
-            account.planType = account.planType ?? enrichment.account.planType
-            return Fetched(snapshot: snapshot, account: account)
-        }
-        var snap = base.snapshot
-        // 仅当 base 无窗口时，用富化结果补齐
-        if snap.primaryLimit == nil { snap.primaryLimit = enrichment.snapshot.primaryLimit }
-        if snap.secondaryLimit == nil { snap.secondaryLimit = enrichment.snapshot.secondaryLimit }
-        if snap.geminiWindow == nil { snap.geminiWindow = enrichment.snapshot.geminiWindow }
-        if snap.geminiWeekly == nil { snap.geminiWeekly = enrichment.snapshot.geminiWeekly }
-        // 富化补齐了 weekly 且 base 已有 5h 主条 → 挂成 secondary；
-        // 富化只有 weekly（无 5h）而 base 完全无窗口 → weekly 升为主条。
-        if snap.secondaryLimit == nil, enrichment.snapshot.weeklyLimit != nil {
-            if snap.primaryLimit?.kind == .fiveHour {
-                snap.secondaryLimit = enrichment.snapshot.weeklyLimit
-            } else if snap.primaryLimit == nil {
-                snap.primaryLimit = enrichment.snapshot.weeklyLimit
-            }
-        }
-        // 富化主窗口未命中（如合并顺序问题）时，若 primary 仍缺，用富化的补。
-        if snap.primaryLimit == nil, enrichment.snapshot.primaryLimit != nil {
-            snap.primaryLimit = enrichment.snapshot.primaryLimit
-            if snap.secondaryLimit == nil {
-                snap.secondaryLimit = enrichment.snapshot.secondaryLimit
-            }
-        }
-        // auxiliaryLimits 同样缺失补齐：base 为空时采用富化（如 Claude 5H / Claude WK）。
-        if snap.auxiliaryLimits.isEmpty {
-            snap.auxiliaryLimits = enrichment.snapshot.auxiliaryLimits
-        }
-        // planType 保留 base，缺失时用富化的
-        if snap.planType == nil { snap.planType = enrichment.snapshot.planType }
-        var account = base.account
-        if account.planType == nil { account.planType = enrichment.account.planType }
-        return Fetched(snapshot: snap, account: account)
-    }
-
     // MARK: - Parse
 
     nonisolated static func parse(root: [String: Any], fetchedAt: Date = Date()) -> Fetched {
         let root = root["response"] as? [String: Any] ?? root
         // 1. 尝试新版 loadCodeAssist 的 tier 结构
         // 典型字段：currentTier, paidTier, allowedTiers, project
-        // 若包含显式额度 buckets（如 retrieveUserQuota / fetchAvailableModels 的 fallback），则走 buckets
-        var fiveHour: QuotaWindow?   // 非分组源（fetchAvailableModels / retrieveUserQuota 兜底）的 5h
+        // 若包含显式额度 buckets（retrieveUserQuota 兜底），则走 buckets
+        var fiveHour: QuotaWindow?   // 非分组源（retrieveUserQuota 兜底）的 5h
         var weekly: QuotaWindow?     // 非分组源兜底的 weekly
         var geminiWindow: QuotaWindow?
         var geminiWeekly: QuotaWindow?
@@ -315,8 +289,7 @@ nonisolated enum AntigravityQuotaClient {
             if planType == nil { planType = parsed.planType }
         }
 
-        // 3. 若包含 "quota" / "buckets" / "models"
-        // 常见于 fetchAvailableModels / retrieveUserQuota
+        // 3. 若包含 "quota" / "buckets"（retrieveUserQuota）
         if let quota = root["quota"] as? [String: Any] {
             let parsed = parseQuotaDict(quota, fetchedAt: fetchedAt)
             fiveHour = fiveHour ?? parsed.fiveHour
@@ -327,38 +300,16 @@ nonisolated enum AntigravityQuotaClient {
         if let buckets = root["buckets"] as? [[String: Any]] {
             let parsed = parseBuckets(buckets, fetchedAt: fetchedAt)
             // 与顶层 quotaInfo 反序不同：buckets 是 retrieveUserQuota 的主数据，信息最全，
-            // 新解析值非 nil 时覆盖旧值，保证富化第三段能真实覆盖早期宽松窗口；
+            // 新解析值非 nil 时覆盖旧值；
             // buckets 缺某个窗口（nil）时保留 quotaInfo 解析出的旧值。
             fiveHour = parsed.fiveHour ?? fiveHour
             weekly = parsed.weekly ?? weekly
             geminiWindow = parsed.geminiWindow ?? geminiWindow
             geminiWeekly = parsed.geminiWeekly ?? geminiWeekly
         }
-        // 3b. 仅当 buckets 缺席时，才用 models 解析（buckets 优先级更高且语义更准）
-        if root["buckets"] == nil, let models = root["models"] as? [[String: Any]] {
-            let parsed = parseModels(models, fetchedAt: fetchedAt)
-            if fiveHour == nil { fiveHour = parsed.fiveHour }
-            if weekly == nil { weekly = parsed.weekly }
-            if geminiWindow == nil { geminiWindow = parsed.geminiWindow }
-            if geminiWeekly == nil { geminiWeekly = parsed.geminiWeekly }
-        }
-        // fetchAvailableModels 的 models 实际是 dict：{ "model-id": { ..., "quotaInfo": { remainingFraction, resetTime } } }
-        if let modelsDict = root["models"] as? [String: Any] {
-            let parsed = parseModelsDict(modelsDict, fetchedAt: fetchedAt)
-            if fiveHour == nil { fiveHour = parsed.fiveHour }
-            if weekly == nil { weekly = parsed.weekly }
-            if geminiWindow == nil { geminiWindow = parsed.geminiWindow }
-            if geminiWeekly == nil { geminiWeekly = parsed.geminiWeekly }
-        }
-        // 4. fetchAvailableModels 的 "availableModels"
-        if let available = root["availableModels"] as? [[String: Any]] {
-            let parsed = parseModels(available, fetchedAt: fetchedAt)
-            if fiveHour == nil { fiveHour = parsed.fiveHour }
-            if weekly == nil { weekly = parsed.weekly }
-            if geminiWindow == nil { geminiWindow = parsed.geminiWindow }
-            if geminiWeekly == nil { geminiWeekly = parsed.geminiWeekly }
-        }
-        // 5. 若仍无窗，尝试从 currentTier 的 quotaInfo（保留只在此分支填，避免覆盖前序结果）
+        // 模型列表（fetchAvailableModels 的 models / availableModels）没有窗口类型标记，只能按顺序或重置时间猜，
+        // 猜错会显示语义错误的数字，因此不解析；分组与 quota 桶都没有时按失败处理并保留旧快照。
+        // 4. 若仍无窗，尝试从 currentTier 的 quotaInfo（保留只在此分支填，避免覆盖前序结果）
         if fiveHour == nil, weekly == nil, geminiWindow == nil, geminiWeekly == nil, claude5h == nil, claudeWeekly == nil {
             if let info = root["quotaInfo"] as? [String: Any] {
                 let parsed = parseQuotaDict(info, fetchedAt: fetchedAt)
@@ -370,19 +321,16 @@ nonisolated enum AntigravityQuotaClient {
         }
 
         // 组装 QuotaSnapshot：
-        // 分组源固定顺序：Argon 周（存在时）→ Gemini 5h / weekly → Carbon 周（存在时）→ Claude 5h / weekly。
+        // 分组源固定顺序：Gemini 5h / weekly → Carbon 周（存在时）→ Claude 5h / weekly → Argon 周（存在时）。
         // 前两条分别落 primary / secondary，其余进入 auxiliary；不把 Argon / Carbon 合入普通 Gemini 周额度。
-        // Carbon 排在共享 Gemini 窗口之后，不抢主条，主条语义仍只由 Argon 决定。
-        // - 无分组源时退化为旧行为：优先 5h 主条，weekly 作副条。
+        // Argon 排在整组末尾，只在没有其它分组窗口时才落到主条。
+        // - 无分组源（quota 桶）时：优先 5h 主条，weekly 作副条。
         // 分组源数据优先：即便兜底（buckets/models）也填了 5h，也不覆盖分组语义。
         let primaryLimit: QuotaLimit?
         let secondaryLimit: QuotaLimit?
         let auxiliaryLimits: [QuotaLimit]
         if hasGroupedData {
             var limits: [QuotaLimit] = []
-            if let argonWeekly {
-                limits.append(QuotaLimit(id: "gemini-argon-wtu-weekly", kind: .modelWeekly, displayName: "Gemini 4 Argon", window: argonWeekly, isActive: nil))
-            }
             if let geminiWindow {
                 limits.append(QuotaLimit(id: "gemini-5h", kind: .fiveHour, displayName: "Gemini 5H", window: geminiWindow, isActive: nil))
             }
@@ -394,16 +342,12 @@ nonisolated enum AntigravityQuotaClient {
             }
             if let claude5h { limits.append(QuotaLimit(id: "claude-5h", kind: .fiveHour, displayName: "Claude 5H", window: claude5h, isActive: nil)) }
             if let claudeWeekly { limits.append(QuotaLimit(id: "claude-weekly", kind: .weekly, displayName: "Claude WK", window: claudeWeekly, isActive: nil)) }
-            // 没有 Gemini / Argon 时保留原来的第三方辅助行语义，供旧云端兜底继续补主条。
-            if argonWeekly == nil, geminiWindow == nil, geminiWeekly == nil {
-                primaryLimit = nil
-                secondaryLimit = nil
-                auxiliaryLimits = limits
-            } else {
-                primaryLimit = limits.first
-                secondaryLimit = limits.dropFirst().first
-                auxiliaryLimits = Array(limits.dropFirst(2))
+            if let argonWeekly {
+                limits.append(QuotaLimit(id: "gemini-argon-wtu-weekly", kind: .modelWeekly, displayName: "Gemini 4 Argon", window: argonWeekly, isActive: nil))
             }
+            primaryLimit = limits.first
+            secondaryLimit = limits.dropFirst().first
+            auxiliaryLimits = Array(limits.dropFirst(2))
         } else {
             let primaryWindow = fiveHour ?? weekly
             let secondaryWindow = fiveHour != nil ? weekly : nil
@@ -418,7 +362,7 @@ nonisolated enum AntigravityQuotaClient {
             secondaryLimit: secondaryLimit,
             auxiliaryLimits: auxiliaryLimits,
             // 分组源已把 Gemini 窗口映射进 primary/secondary/aux，细行字段留空；
-            // 非分组 fallback（buckets/models 兜底）仍保留 geminiWindow/geminiWeekly 供 GM/GW 细行展示。
+            // 非分组 quota 桶兜底仍保留 geminiWindow/geminiWeekly 供 GM/GW 细行展示。
             geminiWindow: hasGroupedData ? nil : geminiWindow,
             geminiWeekly: hasGroupedData ? nil : geminiWeekly,
             planType: planType,
@@ -577,64 +521,6 @@ nonisolated enum AntigravityQuotaClient {
         }
     }
 
-    private static func parseModels(_ models: [[String: Any]], fetchedAt: Date) -> GroupParsed {
-        var result = GroupParsed()
-        for m in models {
-            guard let remaining = m["remainingFraction"] as? Double ?? (m["remaining_fraction"] as? Double) else { continue }
-            let modelId = (m["modelId"] as? String ?? m["name"] as? String ?? "").lowercased()
-            let reset = resetDate(value: m["resetTime"] ?? m["reset_time"])
-            let isWeekly = modelId.contains("week")
-            let windowSecs: Int = isWeekly ? 7 * 24 * 3600 : 5 * 3600
-            let window = QuotaWindow(usedPercent: max(0, min(100, 100 - remaining * 100)), resetsAt: reset, windowSeconds: windowSecs)
-            if modelId.contains("gemini") {
-                // 启发式：第一个 gemini 当作 5h，第二个当 weekly
-                if result.geminiWindow == nil { result.geminiWindow = window } else { result.geminiWeekly = window }
-            } else {
-                if result.fiveHour == nil { result.fiveHour = window } else { result.weekly = window }
-            }
-        }
-        return result
-    }
-
-    /// fetchAvailableModels 的 models 是 dict：{ "model-id": { ..., "quotaInfo": { remainingFraction, resetTime } } }
-    /// quotaInfo 无窗口类型标记，按 resetTime 距当前时间推断：
-    ///   ~0.6h（<2h）→ Gemini 5h 轮换窗口；~5h（≥2h）→ Claude/GPT 5h 轮换窗口。
-    /// 注意：该接口的 resetTime 不是自然周窗口，周额度不在本接口（由 loadCodeAssist 或旧 groups 提供）。
-    private static func parseModelsDict(_ models: [String: Any], fetchedAt: Date) -> GroupParsed {
-        var result = GroupParsed()
-        // Gemini 模型组 5h 轮换窗口：取剩余比例最小（最紧张）的一个作为主额度
-        // 与 GM 细行的共同来源；其余同组模型不再重复填充。
-        var gemini5h: QuotaWindow?
-        var gemini5hRemaining = Double.greatestFiniteMagnitude
-        for (key, value) in models {
-            guard let entry = value as? [String: Any] else { continue }
-            let info = entry["quotaInfo"] as? [String: Any] ?? entry
-            guard let remaining = remainingFraction(in: info) else { continue }
-            let modelId = key.lowercased()
-            let reset = resetDate(value: info["resetTime"] ?? info["reset_time"])
-            let usedPercent = max(0, min(100, 100 - remaining * 100))
-            let window = QuotaWindow(usedPercent: usedPercent, resetsAt: reset, windowSeconds: nil)
-            let isGemini = modelId.contains("gemini") || modelId.contains("tab_") || modelId.contains("chat_")
-            // 距当前 2h 内重置 → 5h 轮换窗口；其余（如 5h 整点/缺失）不算
-            let isFiveHour = reset.map { fetchedAt.timeIntervalSince($0) > -2 * 3600 } ?? false
-            if isGemini {
-                if isFiveHour, remaining < gemini5hRemaining {
-                    gemini5hRemaining = remaining
-                    gemini5h = window
-                }
-            } else {
-                if isFiveHour { result.fiveHour = window }
-            }
-        }
-        // Gemini 组主条 5h 与 GM 细行共用最紧张窗口；fiveHour 与 geminiWindow 都填，
-        // 保证 popover 主条（primaryLimit）与 GM 细行都有数可渲染。
-        if let gemini5h {
-            result.fiveHour = gemini5h
-            result.geminiWindow = gemini5h
-        }
-        return result
-    }
-
     private static func parseQuotaDict(_ dict: [String: Any], fetchedAt: Date) -> GroupParsed {
         var result = GroupParsed()
         for (k, v) in dict {
@@ -712,245 +598,5 @@ nonisolated enum AntigravityQuotaClient {
             return Date(timeIntervalSince1970: Double(n) > 1e12 ? Double(n) / 1000 : Double(n))
         }
         return nil
-    }
-
-    // MARK: - Official CLI
-
-    private actor CLIQuery {
-        static let shared = CLIQuery()
-        private var failedSession: String?
-        private var failedAt: Date?
-
-        private var lastError: QuotaError = .transport("Antigravity CLI quota unavailable")
-
-        private static let signedOutDefaultsKey = "antigravityCLISignedOutTokenSignatureV1"
-        /// 确认 agy 登录失效时其凭据（文件或钥匙串）的签名。凭据变了（用户重新登录过）才再调用 agy；持久化，重启后不再试。
-        private var signedOutSignature = UserDefaults.standard.string(forKey: CLIQuery.signedOutDefaultsKey)
-        private var secretCache: (key: String, secrets: [String: String])?
-
-        func fetch(sessionKey: String) async -> CLIResult? {
-            if failedSession == sessionKey, let failedAt, Date().timeIntervalSince(failedAt) < 10 * 60 {
-                return .failure(lastError)
-            }
-            guard let executable = AntigravityQuotaClient.cliExecutable() else { return nil }
-            // 代理没法交给 agy 时按没装 CLI 处理，改走云端接口（走 cc-bar 的代理），不让 agy 绕开代理直连。
-            guard let environment = NetworkProxy.subprocessEnvironment(base: ProcessInfo.processInfo.environment) else {
-                return nil
-            }
-            // agy 续期失败会自己打开浏览器登录页，所以登录失效时不调用它，只提示用户去终端重新登录。
-            let token: AntigravityCredentials.CLIToken
-            switch await Self.loadCLIToken() {
-            case .found(let found):
-                token = found
-            case .missing:
-                return .signedOut
-            case .unreadable(let error):
-                recordFailure(error, sessionKey: sessionKey, detail: "keychain read failed")
-                return .failure(error)
-            }
-            if token.signature == signedOutSignature { return .signedOut }
-            let tokenWasValid = token.isValid
-            if !tokenWasValid {
-                let secrets = await clientSecrets(for: executable)
-                switch await AntigravityCredentials.probeCLISignIn(token: token, secrets: secrets) {
-                case .valid:
-                    break
-                case .signedOut:
-                    markSignedOut(token.signature)
-                    return .signedOut
-                case .unknown(let error):
-                    recordFailure(error, sessionKey: sessionKey, detail: "sign-in probe failed")
-                    return .failure(error)
-                }
-            }
-            let run = await Task.detached(priority: .utility) {
-                AntigravityQuotaClient.runCLI(executable: executable, environment: environment)
-            }.value
-            let result = AntigravityQuotaClient.evaluateCLIRun(run)
-            switch result {
-            case .failure(let error):
-                // 续期判断为可用，agy 却没能续期（凭据仍过期）：同样按登录失效处理，不再调用它。
-                if !tokenWasValid, case .found(let current) = await Self.loadCLIToken(), !current.isValid {
-                    markSignedOut(current.signature)
-                    return .signedOut
-                }
-                recordFailure(error, sessionKey: sessionKey, detail: AntigravityQuotaClient.describe(run))
-                return .failure(error)
-            case .success(let snapshot):
-                failedSession = nil
-                failedAt = nil
-                return .success(snapshot)
-            }
-        }
-
-        private func recordFailure(_ error: QuotaError, sessionKey: String, detail: String? = nil) {
-            failedSession = sessionKey
-            failedAt = Date()
-            lastError = error
-            var message = "antigravity CLI fetch failed: \(Redact.message(error.description))"
-            if let detail, !detail.isEmpty { message += " (\(detail))" }
-            AppLog.warn(.quota, message)
-        }
-
-        private func markSignedOut(_ signature: String) {
-            signedOutSignature = signature
-            UserDefaults.standard.set(signature, forKey: Self.signedOutDefaultsKey)
-            AppLog.info(.credentials, "antigravity CLI signed out; agy skipped until its token changes")
-        }
-
-        /// 读钥匙串要起 `security` 子进程，万一弹授权框还要等用户选择，不占用 actor。
-        private static func loadCLIToken() async -> AntigravityCredentials.CLITokenLoad {
-            await Task.detached(priority: .utility) { AntigravityCredentials.loadCLIToken() }.value
-        }
-
-        /// agy 二进制近 200 MB，按路径、修改时间和大小缓存提取结果。
-        private func clientSecrets(for executable: URL) async -> [String: String] {
-            let binary = executable.resolvingSymlinksInPath()
-            let attrs = try? FileManager.default.attributesOfItem(atPath: binary.path)
-            let modified = (attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
-            let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
-            let key = "\(binary.path)|\(modified)|\(size)"
-            if let secretCache, secretCache.key == key { return secretCache.secrets }
-            let secrets = await Task.detached(priority: .utility) {
-                AntigravityCredentials.clientSecrets(inBinary: binary)
-            }.value
-            secretCache = (key, secrets)
-            return secrets
-        }
-    }
-
-    private static func cliExecutable() -> URL? {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let path = ProcessInfo.processInfo.environment["PATH"] ?? ""
-        let directories = path.split(separator: ":").map(String.init) + [
-            home.appendingPathComponent(".local/bin").path,
-            "/opt/homebrew/bin", "/usr/local/bin",
-            home.appendingPathComponent(".gemini/bin").path,
-        ]
-        return directories.lazy.filter { $0.hasPrefix("/") }.map {
-            URL(fileURLWithPath: $0).appendingPathComponent("agy")
-        }.first { FileManager.default.isExecutableFile(atPath: $0.path) }
-    }
-
-    /// 一次 agy 调用的进程结果。超时或非 0 退出时也带回已读到的 stdout：
-    /// 只要 JSON 完整，额度数据仍然可用，不因进程没及时退出而丢弃。
-    struct CLIRun: Sendable {
-        /// nil 表示进程没启动，或 stdout 读不出来（超过 1 MiB / 读取失败）。
-        var data: Data?
-        /// nil 表示没能确认进程已经退出。
-        var exitStatus: Int32?
-        var timedOut: Bool
-        /// 读取线程是否在超时内排空；false 时 `data` 可能不完整。
-        var drained: Bool
-    }
-
-    /// 按 stdout 判定成败，不要求进程正常退出：agy 可能已经输出完整 JSON，
-    /// 却因为收尾、争锁迟迟不退。JSON 不完整时解析不出来，不会把半截数据当成功。
-    static func evaluateCLIRun(_ run: CLIRun) -> Result<QuotaSnapshot, QuotaError> {
-        guard let data = run.data,
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return .failure(.transport("Antigravity CLI quota unavailable")) }
-        if root["status"] as? String != "SUCCESS" {
-            let message = (root["response"] as? String ?? "").lowercased()
-            if ["429", "rate limit", "rate_limit", "resource_exhausted"].contains(where: message.contains) {
-                return .failure(.http(429, "Antigravity CLI quota is rate limited"))
-            }
-        }
-        guard let snapshot = parseCLI(root: root) else {
-            return .failure(.decode("Antigravity CLI quota unavailable"))
-        }
-        return .success(snapshot)
-    }
-
-    /// 失败日志用：只描述进程层面发生了什么，不打印 stdout（可能含账号相关内容）。
-    private static func describe(_ run: CLIRun) -> String {
-        guard let exitStatus = run.exitStatus else { return "did not start or exit" }
-        var parts = ["exit \(exitStatus)"]
-        if run.timedOut { parts.append("timed out") }
-        if !run.drained { parts.append("stdout not drained") }
-        if run.data == nil { parts.append("no readable stdout") }
-        return parts.joined(separator: ", ")
-    }
-
-    /// 持续排空 stdout，避免管道写满；超时后终止进程，但保留已经读到的输出。
-    private static func runCLI(executable: URL, environment: [String: String]) -> CLIRun {
-        let process = Process()
-        process.executableURL = executable
-        process.arguments = ["-p", "/quota", "--output-format", "json", "--log-file", "/dev/null"]
-        var environment = environment
-        environment["AGY_CLI_DISABLE_AUTO_UPDATE"] = "true"
-        for key in ["GEMINI_API_KEY", "GOOGLE_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"] {
-            environment.removeValue(forKey: key)
-        }
-        process.environment = environment
-        process.standardInput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        let output = Pipe()
-        process.standardOutput = output
-        let completed = DispatchSemaphore(value: 0)
-        process.terminationHandler = { _ in completed.signal() }
-        do {
-            try process.run()
-        } catch {
-            return CLIRun(data: nil, exitStatus: nil, timedOut: false, drained: false)
-        }
-        output.fileHandleForWriting.closeFile()
-        let buffer = CLIOutput()
-        let reader = DispatchGroup()
-        reader.enter()
-        DispatchQueue.global(qos: .utility).async {
-            defer { reader.leave() }
-            do {
-                while let chunk = try output.fileHandleForReading.read(upToCount: 8192), !chunk.isEmpty {
-                    if !buffer.append(chunk) {
-                        if process.isRunning { kill(process.processIdentifier, SIGKILL) }
-                        break
-                    }
-                }
-            } catch {
-                buffer.invalidate()
-            }
-        }
-        let timedOut = completed.wait(timeout: .now() + 30) == .timedOut
-        if timedOut {
-            process.terminate()
-            if completed.wait(timeout: .now() + 0.5) == .timedOut {
-                kill(process.processIdentifier, SIGKILL)
-                _ = completed.wait(timeout: .now() + 1)
-            }
-        }
-        let drained = reader.wait(timeout: .now() + 1) == .success
-        output.fileHandleForReading.closeFile()
-        let exitStatus: Int32? = process.isRunning ? nil : process.terminationStatus
-        return CLIRun(data: buffer.result(), exitStatus: exitStatus, timedOut: timedOut, drained: drained)
-    }
-
-    nonisolated private final class CLIOutput: @unchecked Sendable {
-        private let lock = NSLock()
-        private var data = Data()
-        private var valid = true
-
-        func append(_ chunk: Data) -> Bool {
-            lock.lock()
-            defer { lock.unlock() }
-            guard valid, data.count + chunk.count <= 1024 * 1024 else {
-                valid = false
-                return false
-            }
-            data.append(chunk)
-            return true
-        }
-
-        func invalidate() {
-            lock.lock()
-            defer { lock.unlock() }
-            valid = false
-        }
-
-        func result() -> Data? {
-            lock.lock()
-            defer { lock.unlock() }
-            return valid ? data : nil
-        }
     }
 }

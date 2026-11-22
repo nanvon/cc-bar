@@ -1,7 +1,8 @@
 import CryptoKit
 import Foundation
-import Security
 import LocalAuthentication
+import os
+import Security
 
 /// Antigravity（Google Antigravity / Gemini Code Assist）凭据管理。
 ///
@@ -60,17 +61,15 @@ nonisolated enum AntigravityCredentials {
     /// Antigravity 桌面端 / agy 各自内置了自己的 client secret，
     /// 这些 secret 属于官方客户端、对安装者公开，从本机读取等于“读取自己机器上的官方组件”，
     /// 且永远与官方客户端同步，不受 Google 轮换影响。
+    private static let extractedSecretsCache = OSAllocatedUnfairLock<(key: String, secrets: [String: String])?>(
+        initialState: nil
+    )
+
     static func extractClientSecretsFromLocalTools(
         homeDirectory home: URL = FileManager.default.homeDirectoryForCurrentUser,
         applicationRoots: [URL]? = nil
     ) -> [String: String] {
-        var result: [String: String] = [:]
-
-        // GUI 自带 OAuth 配置；不依赖另装 Gemini CLI / agy。只读，不启动桌面端。
-        for path in desktopOAuthArtifacts(homeDirectory: home, applicationRoots: applicationRoots) {
-            guard let data = try? Data(contentsOf: path, options: [.mappedIfSafe]) else { continue }
-            extractSecrets(fromData: data, into: &result)
-        }
+        var candidateFiles: [URL] = desktopOAuthArtifacts(homeDirectory: home, applicationRoots: applicationRoots)
 
         // 1. Gemini CLI：npm 包 bundle（~/.gemini/… 或 /opt/homebrew/… 或 /usr/local/…）
         let candidateDirs: [URL] = [
@@ -81,22 +80,42 @@ nonisolated enum AntigravityCredentials {
         ]
         for dir in candidateDirs {
             guard let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { continue }
-            for file in files where file.pathExtension == "js" {
-                guard let data = try? Data(contentsOf: file), let text = String(data: data, encoding: .utf8) else { continue }
-                extractSecrets(from: text, into: &result)
-            }
+            candidateFiles.append(contentsOf: files.filter { $0.pathExtension == "js" })
         }
 
-        // 2. Antigravity App：~/.gemini/bin/agy 二进制
+        // 2. agy CLI 二进制（若桌面端未安装时作为 secret 提取来源）
         let agyPaths = [
+            home.appendingPathComponent(".local/bin/agy"),
+            URL(fileURLWithPath: "/opt/homebrew/bin/agy"),
+            URL(fileURLWithPath: "/usr/local/bin/agy"),
             home.appendingPathComponent(".gemini/bin/agy"),
             home.appendingPathComponent(".gemini/antigravity/bin/agy"),
         ]
-        for path in agyPaths where FileManager.default.fileExists(atPath: path.path) {
-            guard let data = try? Data(contentsOf: path) else { continue }
-            extractSecrets(fromData: data, into: &result)
+        candidateFiles.append(contentsOf: agyPaths)
+
+        var seenPaths = Set<String>()
+        var existing: [(url: URL, signature: String)] = []
+        for candidate in candidateFiles {
+            let resolved = candidate.resolvingSymlinksInPath().standardizedFileURL
+            guard seenPaths.insert(resolved.path).inserted,
+                  FileManager.default.fileExists(atPath: resolved.path) else { continue }
+            let attrs = try? FileManager.default.attributesOfItem(atPath: resolved.path)
+            let modified = (attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+            let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
+            existing.append((resolved, "\(resolved.path)|\(modified)|\(size)"))
         }
 
+        let cacheKey = existing.map(\.signature).joined(separator: "\n")
+        if let cached = extractedSecretsCache.withLock({ $0 }), cached.key == cacheKey {
+            return cached.secrets
+        }
+
+        var result: [String: String] = [:]
+        for item in existing {
+            guard let data = try? Data(contentsOf: item.url, options: [.mappedIfSafe]) else { continue }
+            extractSecrets(fromData: data, into: &result)
+        }
+        extractedSecretsCache.withLock { $0 = (cacheKey, result) }
         return result
     }
 
@@ -128,38 +147,74 @@ nonisolated enum AntigravityCredentials {
             .flatMap { bundle in relativePaths.map { bundle.appendingPathComponent($0) } }
     }
 
-    /// 从二进制数据中按块解码 ASCII 段并扫描 secret。
-    private static func extractSecrets(fromData data: Data, into result: inout [String: String]) {
-        if let text = String(data: data, encoding: .utf8) {
-            extractSecrets(from: text, into: &result)
-            return
-        }
-        // 二进制：整个文件按 Latin-1 转字符串（保留所有字节），
-        // 以便跨块就近配对 client ID 与 secret。
-        let text = String(data: data, encoding: .isoLatin1) ?? ""
-        extractSecrets(from: text, into: &result)
-    }
-
     /// 官方 OAuth secret 是固定长度字符串；二进制字符串池不保证 ID 与 secret 相邻。
-    /// 近邻配对只作为优先候选，所有 secret 都保留，刷新时逐一核实，不按字符串池顺序硬配对。
-    private static func extractSecrets(from text: String, into result: inout [String: String]) {
-        let idPattern = #"[0-9]{10,}-[a-z0-9]+\.apps\.googleusercontent\.com"#
-        let secretPattern = #"GOCSPX-[A-Za-z0-9_-]{28}"#
-        guard let ids = try? NSRegularExpression(pattern: idPattern),
-              let secrets = try? NSRegularExpression(pattern: secretPattern) else { return }
-        let ns = text as NSString
-        let range = NSRange(location: 0, length: ns.length)
-        let idMatches = ids.matches(in: text, range: range)
-        for match in secrets.matches(in: text, range: range) {
-            let secret = ns.substring(with: match.range)
-            let key = SHA256.hash(data: Data(secret.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
-            result["candidate-" + key] = secret
-            if let nearest = idMatches.min(by: {
-                abs($0.range.location - match.range.location) < abs($1.range.location - match.range.location)
-            }), abs(nearest.range.location - match.range.location) < 512 {
-                result[ns.substring(with: nearest.range)] = secret
+    /// 直接在字节里定位 `GOCSPX-` 与 `.apps.googleusercontent.com`，不把整个文件（桌面端
+    /// language_server 约 200 MB）转成字符串。近邻配对只作为优先候选，所有 secret 都保留，
+    /// 刷新时逐一核实，不按字符串池顺序硬配对。
+    static func extractSecrets(fromData data: Data, into result: inout [String: String]) {
+        let secretPrefix = Array("GOCSPX-".utf8)
+        let idSuffix = Array(".apps.googleusercontent.com".utf8)
+        let secretBodyLength = 28
+        data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
+            guard let base = raw.baseAddress else { return }
+            let bytes = raw.assumingMemoryBound(to: UInt8.self)
+            let count = raw.count
+            func offsets(of pattern: [UInt8]) -> [Int] {
+                var found: [Int] = []
+                var position = 0
+                pattern.withUnsafeBytes { needle in
+                    while position < count,
+                          let hit = memmem(base + position, count - position, needle.baseAddress, needle.count) {
+                        let offset = base.distance(to: UnsafeRawPointer(hit))
+                        found.append(offset)
+                        position = offset + needle.count
+                    }
+                }
+                return found
+            }
+            // client ID：后缀前面是 `数字{10,}-[a-z0-9]+`。
+            var ids: [(offset: Int, id: String)] = []
+            for suffixOffset in offsets(of: idSuffix) {
+                var start = suffixOffset
+                while start > 0 {
+                    let byte = bytes[start - 1]
+                    guard (0x30...0x39).contains(byte) || (0x61...0x7a).contains(byte) || byte == 0x2d else { break }
+                    start -= 1
+                }
+                let head = String(decoding: UnsafeBufferPointer(rebasing: bytes[start..<suffixOffset]), as: UTF8.self)
+                // 往前多吃进的字母 / 连字符要去掉：只取最后两段 `数字-字母数字`。
+                let parts = head.split(separator: "-", omittingEmptySubsequences: false)
+                guard parts.count >= 2 else { continue }
+                let project = parts[parts.count - 2], suffix = parts[parts.count - 1]
+                let digits = project.reversed().prefix { $0.isASCII && $0.isNumber }
+                guard digits.count >= 10, !suffix.isEmpty else { continue }
+                let id = String(digits.reversed()) + "-" + suffix
+                ids.append((suffixOffset - id.utf8.count, id + ".apps.googleusercontent.com"))
+            }
+            for prefixOffset in offsets(of: secretPrefix) {
+                let bodyStart = prefixOffset + secretPrefix.count
+                let bodyEnd = bodyStart + secretBodyLength
+                guard bodyEnd <= count else { continue }
+                let body = UnsafeBufferPointer(rebasing: bytes[bodyStart..<bodyEnd])
+                guard body.allSatisfy(isSecretByte) else { continue }
+                let secret = "GOCSPX-" + String(decoding: body, as: UTF8.self)
+                result["candidate-" + secretFingerprint(secret)] = secret
+                if let nearest = ids.min(by: { abs($0.offset - prefixOffset) < abs($1.offset - prefixOffset) }),
+                   abs(nearest.offset - prefixOffset) < 512 {
+                    result[nearest.id] = secret
+                }
             }
         }
+    }
+
+    private static func isSecretByte(_ byte: UInt8) -> Bool {
+        (0x30...0x39).contains(byte) || (0x41...0x5a).contains(byte) || (0x61...0x7a).contains(byte)
+            || byte == 0x5f || byte == 0x2d
+    }
+
+    /// secret 的短指纹：用于候选去重和记住可用的 client 配对，不保存 secret 本身。
+    static func secretFingerprint(_ secret: String) -> String {
+        SHA256.hash(data: Data(secret.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
     }
 
     /// 钥匙串是 GUI / 新版 agy 的当前登录态，优先于可能已过期的遗留文件。
@@ -205,27 +260,26 @@ nonisolated enum AntigravityCredentials {
     static let cliKeychainService = "gemini"
     static let cliKeychainAccount = "antigravity"
 
-    /// agy 的一份登录凭据。
+    /// 钥匙串 / CLI 文件里的一份登录凭据。
     nonisolated struct CLIToken: Sendable {
         var accessToken: String?
         var refreshToken: String?
         var expiryDate: Date?
-        /// 凭据的指纹，用来判断用户是否重新登录过（agy 自己续期后也会变）。
+        /// 凭据的指纹，用来判断用户是否重新登录过。
         var signature: String
         var source: CredentialFileSource = .cliToken
         var idToken: String?
+        var fallbackEmail: String?
 
         var account: AntigravityAccount {
             let claims = idToken.flatMap { JWT.decodePayload($0) }
             return AntigravityAccount(
-                email: claims?["email"] as? String, displayName: claims?["name"] as? String,
+                email: nonEmpty(claims?["email"] as? String) ?? fallbackEmail,
+                displayName: nonEmpty(claims?["name"] as? String),
                 accessToken: accessToken, refreshToken: refreshToken, expiryDate: expiryDate,
                 idToken: idToken, credentialSignature: signature, source: source
             )
         }
-
-        /// access_token 是否还在有效期内（留 5 分钟余量）。
-        var isValid: Bool { accessToken != nil && !AntigravityCredentials.isExpired(expiryDate: expiryDate) }
     }
 
     nonisolated enum CLITokenLoad: Sendable {
@@ -234,19 +288,6 @@ nonisolated enum AntigravityCredentials {
         case missing
         /// 凭据存在但读不出来（文件损坏、钥匙串授权被拒等），无法判断登录状态。
         case unreadable(QuotaError)
-    }
-
-    /// 读取 GUI / agy 共用的登录凭据：钥匙串优先，缺失时读旧 CLI 文件。
-    /// 钥匙串与 Claude 凭据一样经 `/usr/bin/security` 读取。agy 也是经 `security` 写入的，条目只信任 `security`，
-    /// 所以读取不弹授权框，cc-bar 升级也不受影响；agy 改变写入方式时才可能询问。会阻塞，调用方放到后台执行。
-    nonisolated static func loadCLIToken(
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
-        keychainLoader: () -> CLITokenLoad = { loadCLITokenFromKeychain() }
-    ) -> CLITokenLoad {
-        switch keychainLoader() {
-        case .missing: return loadCLITokenFile(homeDirectory: homeDirectory)
-        case let result: return result
-        }
     }
 
     private static func loadCLITokenFile(homeDirectory: URL) -> CLITokenLoad {
@@ -310,87 +351,15 @@ nonisolated enum AntigravityCredentials {
 
     nonisolated private static func cliToken(root: [String: Any], signature: String, source: CredentialFileSource) -> CLIToken {
         let token = root["token"] as? [String: Any] ?? root
+        let fallbackEmail = nonEmpty(root["id_token_email"] as? String ?? root["email"] as? String)
         return CLIToken(
             accessToken: nonEmpty(token["access_token"] as? String ?? token["accessToken"] as? String),
             refreshToken: nonEmpty(token["refresh_token"] as? String ?? token["refreshToken"] as? String),
             expiryDate: parseExpiryDate(token["expiry"] ?? token["expiry_date"] ?? token["expires_at"] ?? token["expiresAt"]),
             signature: signature, source: source,
-            idToken: nonEmpty(token["id_token"] as? String ?? token["idToken"] as? String)
+            idToken: nonEmpty(token["id_token"] as? String ?? token["idToken"] as? String),
+            fallbackEmail: fallbackEmail
         )
-    }
-
-    nonisolated enum CLISignInProbe: Sendable {
-        /// refresh_token 可用，agy 能自己续期。
-        case valid
-        /// Google 明确拒绝了 refresh_token（`invalid_grant`）或没有 refresh_token，agy 需要重新登录。
-        case signedOut
-        /// 网络、服务端或 client secret 原因无法判断。
-        case unknown(QuotaError)
-    }
-
-    /// 从 agy 二进制里提取 OAuth client secret（`[client_id 或 unmatched-位置: secret]`）。
-    /// 二进制很大，调用方按文件签名缓存结果。
-    nonisolated static func clientSecrets(inBinary url: URL) -> [String: String] {
-        guard let data = try? Data(contentsOf: url, options: [.mappedIfSafe]) else { return [:] }
-        var result: [String: String] = [:]
-        extractSecrets(fromData: data, into: &result)
-        return result
-    }
-
-    /// 用 agy 的 refresh_token 向 Google 试着续期一次，只用来判断 agy 的登录是否还有效。
-    /// 拿到的新 token 直接丢弃，不写回任何文件；agy 随后会自己续期并写回。
-    /// 只试 Antigravity client（agy 登录页里的 client_id），secret 来自 agy 二进制。
-    nonisolated static func probeCLISignIn(
-        token: CLIToken,
-        secrets: [String: String]
-    ) async -> CLISignInProbe {
-        guard let refreshToken = token.refreshToken else { return .signedOut }
-
-        // 精确配对的 secret 优先，其余 secret 逐个试，最后试不带 secret。
-        var candidates: [String?] = []
-        for secret in [secrets[antigravityClientID]].compactMap({ $0 }) + Array(secrets.values)
-        where !candidates.contains(secret) {
-            candidates.append(secret)
-        }
-        candidates.append(nil)
-
-        var lastErr = QuotaError.tokenRefreshFailed("agy refresh probe: no usable OAuth client")
-        for secret in candidates {
-            var req = URLRequest(url: tokenEndpoint)
-            req.httpMethod = "POST"
-            req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-            req.setValue("application/json", forHTTPHeaderField: "Accept")
-            req.timeoutInterval = 30
-            var body = "client_id=\(percent(antigravityClientID))"
-            if let secret, !secret.isEmpty {
-                body += "&client_secret=\(percent(secret))"
-            }
-            body += "&refresh_token=\(percent(refreshToken))&grant_type=refresh_token"
-            req.httpBody = body.data(using: .utf8)
-
-            let data: Data
-            let resp: URLResponse
-            do {
-                (data, resp) = try await NetworkProxy.data(for: req)
-            } catch {
-                return .unknown(QuotaError.from(transport: error))
-            }
-            guard let http = resp as? HTTPURLResponse else {
-                return .unknown(.tokenRefreshFailed("agy refresh probe: non-http response"))
-            }
-            if (200..<300).contains(http.statusCode) { return .valid }
-            let msg = String(data: data, encoding: .utf8) ?? ""
-            let asHTTP = QuotaError.http(http.statusCode, msg)
-            if asHTTP.looksLikeInterceptedResponse || http.statusCode >= 500 || http.statusCode == 429 {
-                return .unknown(asHTTP)
-            }
-            // client 校验在 grant 校验之前：secret 不对时是 invalid_client，换下一个；
-            // 只有 client 通过后 Google 才会就 refresh_token 本身回 invalid_grant。
-            let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-            if root?["error"] as? String == "invalid_grant" { return .signedOut }
-            lastErr = .tokenRefreshFailed("agy refresh probe: http \(http.statusCode): \(msg)")
-        }
-        return .unknown(lastErr)
     }
 
     private static func loadOAuthCreds(homeDirectory: URL) throws -> AntigravityAccount? {
@@ -473,15 +442,30 @@ nonisolated enum AntigravityCredentials {
         var send: @Sendable (URLRequest) async throws -> (Data, URLResponse)
         var cached: @Sendable (String) -> RefreshedToken?
         var save: @Sendable (RefreshedToken, AntigravityAccount) throws -> Void
+        /// 上次续期成功的 client 配对（`client_id|secret 指纹`，无 secret 时指纹为 `none`），按凭据来源记。
+        var loadClientHint: @Sendable (CredentialFileSource) -> String? = { _ in nil }
+        var saveClientHint: @Sendable (CredentialFileSource, String?) -> Void = { _, _ in }
+        /// 已被 Google 拒绝续期的登录（`refreshKey`）。原始凭据变化后 key 随之变化，自动解除。
+        var isSignedOut: @Sendable (String) -> Bool = { _ in false }
+        var markSignedOut: @Sendable (String) -> Void = { _ in }
 
         static let live = RefreshEnvironment(
             load: { try AntigravityCredentials.load() },
             secrets: { extractClientSecretsFromLocalTools() },
             send: { try await NetworkProxy.data(for: $0) },
             cached: { loadRefreshCache(key: $0) },
-            save: { token, account in try persistRefreshedToken(token, account: account) }
+            save: { token, account in try persistRefreshedToken(token, account: account) },
+            loadClientHint: { UserDefaults.standard.string(forKey: clientHintDefaultsKey + $0.rawValue) },
+            saveClientHint: { source, hint in
+                UserDefaults.standard.set(hint, forKey: clientHintDefaultsKey + source.rawValue)
+            },
+            isSignedOut: { UserDefaults.standard.string(forKey: signedOutDefaultsKey) == $0 },
+            markSignedOut: { UserDefaults.standard.set($0, forKey: signedOutDefaultsKey) }
         )
     }
+
+    private static let clientHintDefaultsKey = "antigravityOAuthClientHintV1."
+    private static let signedOutDefaultsKey = "antigravitySignedOutRefreshKeyV1"
 
     /// 若 `access_token` 临近过期则通过 Google OAuth 静默刷新。
     /// 返回当前可用的 `access_token`。
@@ -495,7 +479,8 @@ nonisolated enum AntigravityCredentials {
             return .success(current)
         }
         guard account.refreshToken != nil else {
-            return .failure(.tokenRefreshFailed("no refresh_token for antigravity"))
+            // 没有 refresh_token 就只能等官方客户端重新登录，不再每轮尝试续期。
+            return .failure(.antigravitySignedOut)
         }
         do {
             let refreshed = try await Coordinator.shared.refresh(
@@ -557,46 +542,24 @@ nonisolated enum AntigravityCredentials {
         let cached = await Task.detached(priority: .utility) { environment.cached(account.refreshKey) }.value
         if let cached, !isExpired(expiryDate: cached.expiryDate),
            !forceRefresh || cached.accessToken != account.accessToken { return cached }
-        guard let refreshToken = cached?.refreshToken ?? current.refreshToken else { throw QuotaError.missingToken }
+        guard let refreshToken = cached?.refreshToken ?? current.refreshToken else { throw QuotaError.antigravitySignedOut }
+        // Google 已拒绝过这份登录：不再发请求，等用户在 Antigravity 中重新登录（凭据变化即解除）。
+        if environment.isSignedOut(account.refreshKey) { throw QuotaError.antigravitySignedOut }
 
-        // 候选 client：Antigravity 原生 client 优先（jetski 真源，agy 生态），Gemini CLI 次之。
-        // client_secret 从本机官方组件按需提取，不硬编码进源码。
         let localSecrets = await Task.detached(priority: .utility) { environment.secrets() }.value
-        // 官方组件内的 client ID 与 secret 存在多种来源与顺序（npm bundle、agy 二进制），
-        // 无法保证精确配对。策略：为每个内置 clientID 在提取结果中做多重候选回退：
-        // 1. 精确 key；2. 已知别名 key；3. 仅有一个 secret 时直接采用。
-        let secretPool = localSecrets
-        let geminiSecret = secretPool[clientID]
-            ?? secretPool["764086051850-6qr4p6gpi6hn506pt8ejuq83di341hur.apps.googleusercontent.com"]
-        let antigravitySecret = secretPool[antigravityClientID]
-            ?? secretPool["884354919052-36trc1jjb3tguiac32ov6cod268c5blh.apps.googleusercontent.com"]
-        // 窗口内未配对成功的 secret 也并入候选池（二进制中 secret 与 id 距离常超过 512 字符，
-        // 无法就近配对；把这些 secret 都作为「无精确配对」候选逐一尝试）。
-        let unmatched = secretPool.values.filter { $0 != geminiSecret && $0 != antigravitySecret }
-        let extras: [(id: String, secret: String?)] = unmatched.flatMap { s in
-            [(antigravityClientID, s), (clientID, s)]
-        }
-        let single = secretPool.count == 1 ? secretPool.values.first : nil
-        var candidates: [(id: String, secret: String?)] = [
-            (antigravityClientID, antigravitySecret ?? single),
-            (clientID, geminiSecret ?? single),
-            (antigravityClientID, nil), // 无 secret 兜底：部分 Google client 允许缺省
-            (clientID, nil),
-        ]
-        candidates.append(contentsOf: extras)
-        if account.source == .oauthCreds { candidates.swapAt(0, 1) }
+        let hint = environment.loadClientHint(account.source)
+        let candidates = refreshCandidates(source: account.source, secrets: localSecrets, hint: hint)
 
         var lastErr: Error?
-        for cand in candidates {
-            // 清理提取值：粘连的尾缀（如 "...ZtsXhttps"）在此剔除
-            let secret = cand.secret
+        var sawInvalidGrant = false
+        for (index, cand) in candidates.enumerated() {
             var req = URLRequest(url: tokenEndpoint)
             req.httpMethod = "POST"
             req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
             req.setValue("application/json", forHTTPHeaderField: "Accept")
             req.timeoutInterval = 30
             var body = "client_id=\(percent(cand.id))"
-            if let secret, !secret.isEmpty {
+            if let secret = cand.secret, !secret.isEmpty {
                 body += "&client_secret=\(percent(secret))"
             }
             body += "&refresh_token=\(percent(refreshToken))"
@@ -632,22 +595,75 @@ nonisolated enum AntigravityCredentials {
                     throw QuotaError.tokenRefreshFailed("Antigravity login changed during refresh")
                 }
                 try await Task.detached(priority: .utility) { try environment.save(refreshed, account) }.value
+                // 记住可用的配对，下次续期只发这一个请求。
+                let fingerprint = cand.secret.map(secretFingerprint) ?? "none"
+                environment.saveClientHint(account.source, "\(cand.id)|\(fingerprint)")
                 return refreshed
             }
             let msg = String(data: data, encoding: .utf8) ?? ""
-            // 401/400 且提示 client_secret 缺失时尝试下一候选，其余 4xx 直接重试下一候选
             // 代理 / 网关拦截页同样会带 4xx 回来，但换 client 候选救不了它，
             // 文案也不该说成"令牌刷新失败"——同 CodexTokenRefresher，只按响应体形状区分。
             let asHTTP = QuotaError.http(http.statusCode, msg)
             if http.statusCode == 429 || http.statusCode >= 500 || asHTTP.looksLikeInterceptedResponse { throw asHTTP }
-            lastErr = asHTTP.looksLikeInterceptedResponse
-                ? asHTTP
-                : QuotaError.tokenRefreshFailed("http \(http.statusCode): \(msg) [client=\(cand.id.prefix(8))...]")
-            // 若是明确的 client mismatch，继续下一候选；否则也继续（Gemini/Antigravity 需遍历）
-            continue
+            let errorCode = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String
+            if errorCode == "invalid_grant" {
+                // 记住的配对已核实过 client，正确 client 返回 invalid_grant 即 refresh_token 失效，立即停止。
+                if index == 0, hint != nil { return try signedOut(account, environment) }
+                sawInvalidGrant = true
+            } else if index == 0, hint != nil {
+                // 记住的配对不再可用（官方客户端更新后 secret 轮换），清掉后继续试其它候选。
+                environment.saveClientHint(account.source, nil)
+            }
+            lastErr = QuotaError.tokenRefreshFailed("http \(http.statusCode): \(msg) [client=\(cand.id.prefix(8))...]")
         }
+        // 所有候选都没成功且有 invalid_grant：refresh_token 已失效，记下后不再重复请求。
+        if sawInvalidGrant { return try signedOut(account, environment) }
         if let err = lastErr { throw err }
         throw QuotaError.tokenRefreshFailed("all OAuth clients failed")
+    }
+
+    private static func signedOut(_ account: AntigravityAccount, _ environment: RefreshEnvironment) throws -> RefreshedToken {
+        environment.markSignedOut(account.refreshKey)
+        AppLog.warn(.credentials, "antigravity refresh_token rejected (invalid_grant); waiting for a new Antigravity login")
+        throw QuotaError.antigravitySignedOut
+    }
+
+    /// 续期候选顺序：上次成功的配对 → 按凭据来源确定的 client（GUI / agy / jetski 用 Antigravity client，
+    /// oauth_creds 用 Gemini CLI client）带精确配对的 secret → 另一个 client → 未配对 secret → 不带 secret。
+    /// 去重后返回；记住配对后正常情况下只发一个请求。
+    static func refreshCandidates(
+        source: CredentialFileSource, secrets: [String: String], hint: String?
+    ) -> [(id: String, secret: String?)] {
+        let preferred = source == .oauthCreds ? clientID : antigravityClientID
+        let other = preferred == clientID ? antigravityClientID : clientID
+        // 官方组件里 client ID 存在别名（npm bundle、agy 二进制各自内置）。
+        let aliases = [
+            clientID: "764086051850-6qr4p6gpi6hn506pt8ejuq83di341hur.apps.googleusercontent.com",
+            antigravityClientID: "884354919052-36trc1jjb3tguiac32ov6cod268c5blh.apps.googleusercontent.com",
+        ]
+        func exact(_ id: String) -> String? { secrets[id] ?? aliases[id].flatMap { secrets[$0] } }
+        let uniqueSecrets = Array(Set(secrets.values)).sorted()
+        let single = uniqueSecrets.count == 1 ? uniqueSecrets.first : nil
+
+        var list: [(id: String, secret: String?)] = []
+        if let hint {
+            let parts = hint.split(separator: "|", maxSplits: 1).map(String.init)
+            if parts.count == 2, [clientID, antigravityClientID].contains(parts[0]) {
+                if parts[1] == "none" {
+                    list.append((parts[0], nil))
+                } else if let secret = uniqueSecrets.first(where: { secretFingerprint($0) == parts[1] }) {
+                    list.append((parts[0], secret))
+                }
+            }
+        }
+        list.append((preferred, exact(preferred) ?? single))
+        list.append((other, exact(other) ?? single))
+        for secret in uniqueSecrets { list.append((preferred, secret)) }
+        for secret in uniqueSecrets { list.append((other, secret)) }
+        list.append((preferred, nil))
+        list.append((other, nil))
+        var seen = Set<String>()
+        return list.filter { seen.insert($0.id + "|" + ($0.secret ?? "")).inserted }
     }
 
     // MARK: - Write back

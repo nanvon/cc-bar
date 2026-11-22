@@ -405,7 +405,7 @@ enum QuotaHistoryStore {
         snapshot: QuotaSnapshot,
         sampledAt: Date
     ) -> QuotaHistoryPayload {
-        // Argon 成为展示主条后，共享 Gemini 周额度移到 auxiliary，仍按原口径记录时间线。
+        // Antigravity 按稳定 ID 读取共享 Gemini 5h / weekly，不混入 Argon / Carbon 独立周池。
         let geminiLimits = snapshot.app == .antigravity ? snapshot.allLimits.filter {
             $0.id == "gemini-5h" || $0.id == "gemini-weekly"
         } : []

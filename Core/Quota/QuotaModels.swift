@@ -126,6 +126,7 @@ nonisolated enum QuotaSnapshotSource: String, Sendable, Codable {
     case cache
     /// 兼容旧版额度缓存和周期记录。
     case cliFallback
+    /// 兼容旧版 Antigravity CLI 缓存。
     case antigravityCLI
 
     var displayName: String {
@@ -155,6 +156,10 @@ nonisolated struct QuotaRefreshState: Sendable, Equatable {
     var lastErrorIsNetwork: Bool = false
     var inFlight: Bool = false
     var source: QuotaSnapshotSource?
+    /// 连续的非 429 失败次数与定时刷新冷却截止时间，见 `QuotaRefreshPolicy.failureCooldown`。
+    /// `storeQuota` 成功时清零；手动刷新不受冷却限制。
+    var consecutiveFailures: Int = 0
+    var failureCooldownUntil: Date?
 }
 
 nonisolated struct PrimaryQuotaState: Sendable, Equatable {
@@ -517,6 +522,9 @@ nonisolated enum QuotaError: Error, CustomStringConvertible {
     /// `desktopAccessDenied`:改用 Claude Desktop 登录只差钥匙串授权(用户拒绝过),
     /// 此时提示去设置里授权。
     case credentialsExpired(desktopAccessDenied: Bool)
+    /// Antigravity 的 refresh_token 已被 Google 拒绝（`invalid_grant`）或缺失，
+    /// cc-bar 无法续期；需要用户在 Antigravity 中重新登录，凭据变化后自动解除。
+    case antigravitySignedOut
 
     var description: String {
         switch self {
@@ -529,6 +537,8 @@ nonisolated enum QuotaError: Error, CustomStringConvertible {
         case .credentialsExpired(let desktopAccessDenied):
             return "claude credentials expired; waiting for Claude Code to refresh"
                 + (desktopAccessDenied ? " (Claude Desktop keychain access denied)" : "")
+        case .antigravitySignedOut:
+            return "antigravity sign-in revoked; waiting for a new Antigravity login"
         }
     }
 
@@ -707,6 +717,8 @@ extension QuotaError {
                 "Sign-in expired — run claude in Terminal once",
                 "登录已过期,请在终端运行一次 claude"
             )
+        case .antigravitySignedOut:
+            return tr("Sign in to Antigravity again, then refresh", "请在 Antigravity 中重新登录,然后刷新")
         case .network(let kind):
             return kind.userMessage(using: proxy)
         case .http(let code, _):

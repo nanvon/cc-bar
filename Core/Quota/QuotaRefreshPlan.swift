@@ -41,7 +41,7 @@ struct QuotaRefreshPlan: Equatable, Sendable {
 }
 
 /// 单个服务这一轮能否开始请求额度。纯函数，主账号和导入账号共用，便于单测。
-/// 判断顺序与原各服务的 `beginXxxRefresh` 一致：请求中 → 退避中 → 定时刷新的最短成功间隔。
+/// 判断顺序与原各服务的 `beginXxxRefresh` 一致：请求中 → 退避中 → 定时刷新的最短成功间隔 → 定时刷新的失败冷却。
 /// 手动刷新不受最短间隔限制，但同样遵守 429 退避。
 nonisolated enum QuotaRefreshGate {
     enum Decision: Equatable, Sendable {
@@ -67,6 +67,9 @@ nonisolated enum QuotaRefreshGate {
         {
             return .skip
         }
+        if reason == .periodic, let cooldownUntil = state.failureCooldownUntil, cooldownUntil > now {
+            return .skip
+        }
         return .start
     }
 }
@@ -79,9 +82,21 @@ nonisolated enum QuotaRefreshPolicy {
 
     static func minSuccessInterval(for app: QuotaApp) -> TimeInterval {
         switch app {
-        // agy CLI 取数较重，定时刷新至少隔 2 分钟。
+        // Antigravity 额度接口易受限流，定时刷新至少隔 2 分钟。
         case .antigravity: return 120
         case .codex, .claude, .cursor, .commandCode, .opencodeGo: return defaultMinSuccessInterval
+        }
+    }
+
+    /// 连续非 429 失败后定时刷新的冷却时长；nil 表示不冷却（沿用原行为）。
+    /// Antigravity 失败时每轮可能打多个 Google 接口，按 2 → 4 → 8 → 15 分钟递增，避免持续打失败请求。
+    static func failureCooldown(for app: QuotaApp, consecutiveFailures: Int) -> TimeInterval? {
+        switch app {
+        case .antigravity:
+            guard consecutiveFailures > 0 else { return nil }
+            let exponent = Double(min(consecutiveFailures - 1, 3))
+            return min(120 * pow(2, exponent), 15 * 60)
+        case .codex, .claude, .cursor, .commandCode, .opencodeGo: return nil
         }
     }
 

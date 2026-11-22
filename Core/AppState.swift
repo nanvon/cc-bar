@@ -111,11 +111,8 @@ final class AppState {
         guard let cached = claudeProfile, cached.accountKey == claudeProfileAccountKey(account) else { return nil }
         return cached.profile
     }
-    /// 上次在 agy 取数后补查套餐 / 邮箱的时间。agy JSON 不带套餐，不定期重查会一直停在旧订阅；
-    /// 成功后隔 `antigravityPlanRefreshInterval` 重查，失败或缺字段时隔 `antigravityPlanRetryInterval` 再试。仅内存。
-    @ObservationIgnored private var antigravityPlanAttempt: (at: Date, succeeded: Bool)?
-    private let antigravityPlanRefreshInterval: TimeInterval = 6 * 60 * 60
-    private let antigravityPlanRetryInterval: TimeInterval = 60 * 60
+    /// 当前登录的 `loadCodeAssist` 结果（project / 套餐），按 `AntigravityQuotaClient.setupTTL` 复用。仅内存，切号时清空。
+    @ObservationIgnored private var antigravitySetup: AntigravityQuotaClient.Setup?
     var antigravityAccount: AntigravityAccount? {
         didSet {
             if oldValue?.email != antigravityAccount?.email || oldValue?.accessToken != antigravityAccount?.accessToken
@@ -777,7 +774,9 @@ final class AppState {
         quotaCache = QuotaCache.load()
         for (app, record) in quotaCache.providers {
             var state = primaryQuotaStates[app] ?? PrimaryQuotaState()
-            state.snapshot = record.snapshot
+            state.snapshot = app == .antigravity
+                ? AntigravityQuotaClient.reorderedGroupedSnapshot(record.snapshot)
+                : record.snapshot
             state.source = .cache
             state.refresh.lastSuccessAt = record.updatedAt
             state.refresh.source = .cache
@@ -1795,7 +1794,7 @@ final class AppState {
             antigravityError = nil
         } catch {
             // 钥匙串临时锁定 / 读取被拒时保留已有展示，但阻止用旧登录发请求。
-            antigravityError = "\(error)"
+            antigravityError = (error as? QuotaError)?.userMessage ?? "\(error)"
         }
     }
 
@@ -1812,7 +1811,7 @@ final class AppState {
         antigravityQuotaSource = nil
         antigravityQuotaError = nil
         resetPrimaryQuotaRefreshState(.antigravity)
-        antigravityPlanAttempt = nil
+        antigravitySetup = nil
         quotaCache.antigravity = nil
         saveQuotaCache()
     }
@@ -2192,60 +2191,6 @@ final class AppState {
             return
         }
         let initialLoginKey = account.refreshKey
-        // agy 的完整额度（含 Pro 的 Argon 独立周额度）不要求先成功续期旧云端凭据。
-        let sessionKey = account.refreshToken ?? account.accessToken ?? account.source.rawValue
-        let cliResult = await AntigravityQuotaClient.fetchCLIQuota(sessionKey: sessionKey)
-        guard antigravityAccount?.refreshKey == initialLoginKey, antigravityError == nil else { return }
-        if case .success(var snapshot)? = cliResult {
-            guard let current = antigravityAccount,
-                  !antigravityIdentityChanged(previous: current, next: account) else { return }
-            account = current
-            account.planType = account.planType ?? antigravityQuota?.planType
-            var planRateLimit: QuotaError?
-            let now = Date()
-            let planCheckDue = antigravityPlanCheckDue(now: now)
-            // 先记一次失败，拿不到令牌时也按重试间隔再试，不每轮读钥匙串。
-            if planCheckDue { antigravityPlanAttempt = (now, false) }
-            if planCheckDue, let token = await antigravityPlanLookupToken(account: account) {
-                var succeeded = false
-                switch await AntigravityQuotaClient.fetchPlan(accessToken: token) {
-                case .success(let plan):
-                    // 订阅变化（升级、到期）以服务端最新值为准；没返回套餐时保留旧值。
-                    if let plan {
-                        account.planType = plan
-                        succeeded = true
-                    }
-                case .failure(let error):
-                    if error.isRateLimited { planRateLimit = error }
-                }
-                if account.email == nil, planRateLimit == nil {
-                    account.email = await AntigravityQuotaClient.fetchAccountEmail(accessToken: token)
-                }
-                antigravityPlanAttempt = (now, succeeded && account.email != nil)
-            }
-            guard let current = antigravityAccount,
-                  !antigravityIdentityChanged(previous: current, next: account) else { return }
-            antigravityAccount = account
-            snapshot.planType = account.planType
-            storeQuota(.antigravity, snapshot: snapshot, source: .antigravityCLI)
-            if let planRateLimit { markQuotaFailure(.antigravity, planRateLimit.userMessage, error: planRateLimit) }
-            // CLI JSON 不含可核实账号身份；与 Claude CLI 一样只展示，不生成系统提醒。
-            return
-        }
-        let hasCLISnapshot = antigravityQuotaSource == .antigravityCLI
-            || quotaCache.antigravity?.source == .antigravityCLI
-            || antigravityQuota?.primaryLimit?.id == "gemini-argon-wtu-weekly"
-        switch cliResult {
-        case .failure(let error)? where error.isRateLimited || hasCLISnapshot:
-            markQuotaFailure(.antigravity, error.userMessage, error: error)
-            return
-        case .signedOut? where hasCLISnapshot:
-            // 已有 agy 额度时不改用云端的另一额度池；保留快照，请用户自己去 agy 重新登录，cc-bar 不打开登录页。
-            markQuotaFailure(.antigravity, tr("Sign in to Antigravity again, then refresh", "请在 Antigravity 中重新登录,然后刷新"))
-            return
-        default:
-            break
-        }
         let refreshed = await AntigravityCredentials.ensureFreshAccessToken(account: &account)
         guard antigravityAccount?.refreshKey == initialLoginKey, antigravityError == nil else { return }
         var activeToken: String
@@ -2261,7 +2206,12 @@ final class AppState {
         }
         // 版本只决定是否提醒；token 轮换或切号期间取到的额度照常展示，与原有行为一致。
         let alertEntryVersion = primaryQuotaAlertVersion(for: .antigravity)
-        var result = await AntigravityQuotaClient.fetch(accessToken: activeToken)
+        // 上次实际见过的桶：daily 缺少其中任意一个才补查主域；没有历史时客户端用核心四组。
+        let knownLimitIDs = Set(antigravityQuota?.allLimits.map(\.id) ?? [])
+        let cachedSetup = antigravitySetup
+        var result = await AntigravityQuotaClient.fetch(
+            accessToken: activeToken, cachedSetup: cachedSetup, expectedLimitIDs: knownLimitIDs
+        )
         // 有效期内的令牌也可能被撤销；401 仅允许一次同登录续期重试，429 不进入此分支。
         if case .failure(let error) = result, error.httpStatusCode == 401 {
             guard antigravityAccount?.refreshKey == account.refreshKey, antigravityError == nil else { return }
@@ -2272,7 +2222,9 @@ final class AppState {
             case .success(let token):
                 activeToken = token
                 antigravityAccount = account
-                result = await AntigravityQuotaClient.fetch(accessToken: token)
+                result = await AntigravityQuotaClient.fetch(
+                    accessToken: token, cachedSetup: cachedSetup, expectedLimitIDs: knownLimitIDs
+                )
             case .failure(let error):
                 markQuotaFailure(.antigravity, error.userMessage, error: error)
                 return
@@ -2300,31 +2252,18 @@ final class AppState {
             }
             account.planType = fetched.account.planType ?? account.planType
             antigravityAccount = account
+            antigravitySetup = fetched.setup ?? antigravitySetup
             let snapshot = fetched.snapshot
+            // 补查主域后仍缺上次见过的桶（如 Argon）：可能是套餐变化，也可能是固定 UA 版本被收紧，留一条日志便于排查。
+            let missingLimitIDs = knownLimitIDs.subtracting(snapshot.allLimits.map(\.id))
+            if !missingLimitIDs.isEmpty {
+                AppLog.warn(.quota, "antigravity buckets missing since last refresh: \(missingLimitIDs.sorted().joined(separator: ","))")
+            }
             storeQuota(.antigravity, snapshot: snapshot, source: .api)
             if alertCurrent { observePrimaryQuota(snapshot, settingsVersion: alertSettingsVersion) }
         case .failure(let err):
             markQuotaFailure(.antigravity, err.userMessage, error: err)
         }
-    }
-
-    private func antigravityPlanCheckDue(now: Date) -> Bool {
-        guard let attempt = antigravityPlanAttempt else { return true }
-        let interval = attempt.succeeded ? antigravityPlanRefreshInterval : antigravityPlanRetryInterval
-        return now.timeIntervalSince(attempt.at) >= interval
-    }
-
-    /// agy 取数后查套餐 / 邮箱用的令牌：优先 agy 自己的（agy 刚取过额度，会自行续期），
-    /// 与 CLI 额度属于同一账号；没有有效的再退回 cc-bar 读到的云端令牌。
-    private func antigravityPlanLookupToken(account: AntigravityAccount) async -> String? {
-        let cliToken = await Task.detached(priority: .utility) { AntigravityCredentials.loadCLIToken() }.value
-        if case .found(let token) = cliToken, token.isValid, let accessToken = token.accessToken {
-            return accessToken
-        }
-        if let accessToken = account.accessToken, !AntigravityCredentials.isExpired(expiryDate: account.expiryDate) {
-            return accessToken
-        }
-        return nil
     }
 
     private func loadCursorQuota(reason: QuotaRefreshReason) async {
@@ -2621,6 +2560,8 @@ final class AppState {
             state.refresh.lastSuccessAt = updatedAt
             state.refresh.lastError = nil
             state.refresh.lastErrorIsNetwork = false
+            state.refresh.consecutiveFailures = 0
+            state.refresh.failureCooldownUntil = nil
             if QuotaRefreshPolicy.clearsBackoffOnSuccess(app, source: source) {
                 state.refresh.backoffUntil = nil
             }
@@ -2686,12 +2627,24 @@ final class AppState {
 
     /// 取数失败：保留已有快照，只记错误；429 进入退避。
     private func markQuotaFailure(_ app: QuotaApp, _ message: String, error: QuotaError? = nil) {
+        if let error, error.isRateLimited {
+            AppLog.warn(
+                .quota,
+                "\(app.rawValue) rate limited (429), backing off \(Int(rateLimitBackoff))s: \(Redact.message(error.description))"
+            )
+        }
         updatePrimaryState(app) { state in
             state.error = message
             state.refresh.lastError = message
             state.refresh.lastErrorIsNetwork = error?.isNetworkFailure == true
             if error?.isRateLimited == true {
                 state.refresh.backoffUntil = Date().addingTimeInterval(rateLimitBackoff)
+            } else if error != nil {
+                // 只统计真实发出过请求的失败；退避提示、未登录等不带 error 的调用不计数。
+                state.refresh.consecutiveFailures += 1
+                state.refresh.failureCooldownUntil = QuotaRefreshPolicy.failureCooldown(
+                    for: app, consecutiveFailures: state.refresh.consecutiveFailures
+                ).map { Date().addingTimeInterval($0) }
             }
         }
     }
@@ -2831,6 +2784,13 @@ final class AppState {
                     "antigravity", .info,
                     "antigravity source=\(antigravityQuotaSource?.rawValue ?? "—") plan=\(q.planType ?? "—") \(format(q))\(extra)"
                 ))
+                let isBackingOff = antigravityRefreshState.backoffUntil.map { $0 > Date() } ?? false
+                if !isBackingOff, let err = antigravityQuotaError ?? antigravityError {
+                    lines.append((
+                        "antigravity.error", .warn,
+                        "antigravity refresh error: \(Redact.message(err))"
+                    ))
+                }
             } else {
                 lines.append((
                     "antigravity", .warn,

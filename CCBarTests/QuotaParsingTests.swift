@@ -141,35 +141,27 @@ final class QuotaParsingTests: XCTestCase {
         ]]
     }
 
-    private func antigravityCLIRoot(groups: [[String: Any]]) -> [String: Any] {
-        let cliGroups = groups.map { group -> [String: Any] in
-            let buckets = (group["buckets"] as? [[String: Any]] ?? []).map { bucket -> [String: Any] in
-                var result = bucket
-                result["id"] = result.removeValue(forKey: "bucketId")
-                result["name"] = result.removeValue(forKey: "displayName")
-                result["remaining_fraction"] = result.removeValue(forKey: "remainingFraction")
-                result["reset_time"] = result.removeValue(forKey: "resetTime")
-                return result
-            }
-            return ["name": group["displayName"] as? String ?? "", "buckets": buckets]
-        }
-        return ["status": "SUCCESS", "num_turns": 0, "command": ["name": "usage", "data": ["groups": cliGroups]]]
-    }
-
-    func testAntigravityArgonIsPrimaryAndSharedWindowsKeepTheirOrder() {
+    func testAntigravityGemini5HIsPrimaryAndArgonIsLast() {
         let snapshot = AntigravityQuotaClient.parse(root: ["groups": antigravityGroupsWithArgon()]).snapshot
         XCTAssertEqual(snapshot.allLimits.map(\.id), [
-            "gemini-argon-wtu-weekly", "gemini-5h", "gemini-weekly", "claude-5h", "claude-weekly",
+            "gemini-5h", "gemini-weekly", "claude-5h", "claude-weekly", "gemini-argon-wtu-weekly",
         ])
         XCTAssertEqual(snapshot.allLimits.map(\.displayName), [
-            "Gemini 4 Argon", "Gemini 5H", "Gemini WK", "Claude 5H", "Claude WK",
+            "Gemini 5H", "Gemini WK", "Claude 5H", "Claude WK", "Gemini 4 Argon",
         ])
-        XCTAssertEqual(snapshot.primaryLimit?.kind, .modelWeekly)
-        XCTAssertEqual(snapshot.primaryWindow?.remainingPercent ?? 0, 75.31, accuracy: 0.001)
-        XCTAssertEqual(snapshot.auxiliaryLimits.first?.window.remainingPercent ?? 0, 84.39504, accuracy: 0.001)
-        XCTAssertEqual(snapshot.weeklyLimit?.id, "gemini-argon-wtu-weekly")
+        XCTAssertEqual(snapshot.primaryLimit?.id, "gemini-5h")
+        XCTAssertEqual(snapshot.primaryLimit?.kind, .fiveHour)
+        XCTAssertEqual(snapshot.primaryWindow?.remainingPercent ?? 0, 100, accuracy: 0.001)
+        XCTAssertEqual(snapshot.secondaryLimit?.id, "gemini-weekly")
+        XCTAssertEqual(snapshot.secondaryWindow?.remainingPercent ?? 0, 84.39504, accuracy: 0.001)
+        XCTAssertEqual(snapshot.auxiliaryLimits.last?.id, "gemini-argon-wtu-weekly")
+        XCTAssertEqual(snapshot.auxiliaryLimits.last?.window.remainingPercent ?? 0, 75.31, accuracy: 0.001)
+        XCTAssertEqual(snapshot.weeklyLimit?.id, "gemini-weekly")
         XCTAssertEqual(snapshot.fiveHourLimit?.id, "gemini-5h")
-        XCTAssertTrue(snapshot.modelLimits.isEmpty, "主条中的 Argon 不应再重复显示")
+        XCTAssertTrue(snapshot.modelLimits.isEmpty)
+        XCTAssertEqual(MenuBarQuotaSelection.limits(in: snapshot, choice: .primary).map(\.id), ["gemini-5h"])
+        XCTAssertEqual(MenuBarQuotaSelection.limits(in: snapshot, choice: .weekly).map(\.id), ["gemini-weekly"])
+        XCTAssertEqual(MenuBarQuotaSelection.limits(in: snapshot, choice: .both).map(\.id), ["gemini-5h", "gemini-weekly"])
     }
 
     func testAntigravityCarbonWeeklyStaysSeparateFromSharedGeminiWeekly() {
@@ -185,9 +177,9 @@ final class QuotaParsingTests: XCTestCase {
         ]]
         let snapshot = AntigravityQuotaClient.parse(root: ["groups": groups]).snapshot
         XCTAssertEqual(snapshot.allLimits.map(\.id), [
-            "gemini-argon-wtu-weekly", "gemini-5h", "gemini-weekly", "gemini-carbon-wtu-weekly", "claude-5h", "claude-weekly",
+            "gemini-5h", "gemini-weekly", "gemini-carbon-wtu-weekly", "claude-5h", "claude-weekly", "gemini-argon-wtu-weekly",
         ])
-        XCTAssertEqual(snapshot.primaryLimit?.id, "gemini-argon-wtu-weekly")
+        XCTAssertEqual(snapshot.primaryLimit?.id, "gemini-5h")
         let shared = snapshot.allLimits.first { $0.id == "gemini-weekly" }
         XCTAssertEqual(shared?.window.remainingPercent ?? 0, 84.39504, accuracy: 0.001, "Carbon 不应并入普通 Gemini 周额度")
         let carbon = snapshot.allLimits.first { $0.id == "gemini-carbon-wtu-weekly" }
@@ -200,107 +192,7 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertEqual(withoutArgon.auxiliaryLimits.first?.id, "gemini-carbon-wtu-weekly")
     }
 
-    func testAntigravityCLIParsesSnakeCaseGroupsAndServerResetTime() throws {
-        let now = Date(timeIntervalSince1970: 1_792_389_600)
-        let snapshot = try XCTUnwrap(AntigravityQuotaClient.parseCLI(
-            root: antigravityCLIRoot(groups: antigravityGroupsWithArgon()), fetchedAt: now
-        ))
-        XCTAssertEqual(snapshot.allLimits.count, 5)
-        XCTAssertEqual(snapshot.primaryWindow?.remainingPercent ?? 0, 75.31, accuracy: 0.001)
-        XCTAssertEqual(snapshot.primaryWindow?.windowSeconds, 604_800)
-        XCTAssertEqual(snapshot.primaryWindow?.resetsAt, ISO8601DateFormatter().date(from: "2026-10-26T03:40:17Z"))
-        XCTAssertEqual(snapshot.fetchedAt, now)
-    }
-
-    func testAntigravityCLIRejectsFailureEmptyAndUnrelatedCommand() {
-        var root = antigravityCLIRoot(groups: antigravityGroupsWithArgon())
-        root["status"] = "ERROR"
-        XCTAssertNil(AntigravityQuotaClient.parseCLI(root: root))
-        XCTAssertNil(AntigravityQuotaClient.parseCLI(root: antigravityCLIRoot(groups: [])))
-        root = ["status": "SUCCESS", "command": ["name": "models", "data": ["groups": antigravitySummaryGroups()]]]
-        XCTAssertNil(AntigravityQuotaClient.parseCLI(root: root))
-    }
-
-    // MARK: - Antigravity CLI 进程结果判定
-
-    private func antigravityCLIData(_ root: [String: Any]) throws -> Data {
-        try JSONSerialization.data(withJSONObject: root)
-    }
-
-    func testAntigravityCLIAcceptsCompleteJSONWhenProcessTimesOut() throws {
-        let run = AntigravityQuotaClient.CLIRun(
-            data: try antigravityCLIData(antigravityCLIRoot(groups: antigravityGroupsWithArgon())),
-            exitStatus: 143,
-            timedOut: true,
-            drained: true
-        )
-        guard case .success(let snapshot) = AntigravityQuotaClient.evaluateCLIRun(run) else {
-            return XCTFail("超时前已经拿到的完整 JSON 应按成功处理")
-        }
-        XCTAssertEqual(snapshot.weeklyLimit?.id, "gemini-argon-wtu-weekly")
-    }
-
-    func testAntigravityCLIAcceptsCompleteJSONWithNonZeroExit() throws {
-        let run = AntigravityQuotaClient.CLIRun(
-            data: try antigravityCLIData(antigravityCLIRoot(groups: antigravityGroupsWithArgon())),
-            exitStatus: 1,
-            timedOut: false,
-            drained: true
-        )
-        guard case .success = AntigravityQuotaClient.evaluateCLIRun(run) else {
-            return XCTFail("非 0 退出但 JSON 完整时仍应接受")
-        }
-    }
-
-    func testAntigravityCLIRejectsTruncatedJSONAfterTimeout() throws {
-        let full = try antigravityCLIData(antigravityCLIRoot(groups: antigravityGroupsWithArgon()))
-        let run = AntigravityQuotaClient.CLIRun(
-            data: full.prefix(full.count / 2),
-            exitStatus: 143,
-            timedOut: true,
-            drained: false
-        )
-        guard case .failure(.transport) = AntigravityQuotaClient.evaluateCLIRun(run) else {
-            return XCTFail("半截 JSON 不能当成成功")
-        }
-    }
-
-    func testAntigravityCLIReportsRateLimitWithNonZeroExit() throws {
-        var root = antigravityCLIRoot(groups: [])
-        root["status"] = "ERROR"
-        root["response"] = "RESOURCE_EXHAUSTED: quota rate limit"
-        let run = AntigravityQuotaClient.CLIRun(
-            data: try antigravityCLIData(root),
-            exitStatus: 1,
-            timedOut: false,
-            drained: true
-        )
-        guard case .failure(.http(let code, _)) = AntigravityQuotaClient.evaluateCLIRun(run) else {
-            return XCTFail("应识别为 429")
-        }
-        XCTAssertEqual(code, 429)
-    }
-
-    func testAntigravityCLICompleteSuccessWithoutGroupsIsDecodeFailure() throws {
-        let run = AntigravityQuotaClient.CLIRun(
-            data: try antigravityCLIData(antigravityCLIRoot(groups: [])),
-            exitStatus: 0,
-            timedOut: false,
-            drained: true
-        )
-        guard case .failure(.decode) = AntigravityQuotaClient.evaluateCLIRun(run) else {
-            return XCTFail("没有额度分组时应判为数据无法识别")
-        }
-    }
-
-    func testAntigravityCLILaunchFailureIsTransport() {
-        let run = AntigravityQuotaClient.CLIRun(data: nil, exitStatus: nil, timedOut: false, drained: false)
-        guard case .failure(.transport) = AntigravityQuotaClient.evaluateCLIRun(run) else {
-            return XCTFail("进程没起来时应为传输失败")
-        }
-    }
-
-    func testAntigravityDisabledOrInvalidArgonDoesNotReplaceSharedWeeklyQuota() throws {
+    func testAntigravityDisabledOrInvalidArgonDoesNotReplaceSharedWeeklyQuota() {
         for groups in [
             antigravityGroupsWithArgon(disabled: true),
             antigravityGroupsWithArgon(remaining: .nan),
@@ -308,7 +200,7 @@ final class QuotaParsingTests: XCTestCase {
             antigravityGroupsWithArgon(remaining: 1.1),
             antigravitySummaryGroups(), // Ultra 等没有独立 Argon 桶时保留四个共享窗口。
         ] {
-            let snapshot = try XCTUnwrap(AntigravityQuotaClient.parseCLI(root: antigravityCLIRoot(groups: groups)))
+            let snapshot = AntigravityQuotaClient.parse(root: ["groups": groups]).snapshot
             XCTAssertEqual(snapshot.allLimits.count, 4)
             XCTAssertEqual(snapshot.primaryLimit?.id, "gemini-5h")
             XCTAssertEqual(snapshot.secondaryLimit?.id, "gemini-weekly")
@@ -321,20 +213,32 @@ final class QuotaParsingTests: XCTestCase {
         var argon = try XCTUnwrap(groups.last?["buckets"] as? [[String: Any]])
         argon[0].removeValue(forKey: "resetTime")
         groups[groups.count - 1]["buckets"] = argon
-        let snapshot = try XCTUnwrap(AntigravityQuotaClient.parseCLI(root: antigravityCLIRoot(groups: groups)))
-        XCTAssertEqual(snapshot.primaryWindow?.remainingPercent, 0)
-        XCTAssertNil(snapshot.primaryWindow?.resetsAt)
+        let snapshot = AntigravityQuotaClient.parse(root: ["groups": groups]).snapshot
+        let parsedArgon = try XCTUnwrap(snapshot.allLimits.last)
+        XCTAssertEqual(parsedArgon.id, "gemini-argon-wtu-weekly")
+        XCTAssertEqual(parsedArgon.window.remainingPercent, 0)
+        XCTAssertNil(parsedArgon.window.resetsAt)
         XCTAssertEqual(snapshot.allLimits.count, 5)
     }
 
-    func testAntigravityGroupedArgonReplacesOlderBaseWithoutMixingPools() {
-        let base = antigravityFetch(buckets: [
-            antigravityBucket(modelId: "claude-opus-5-5-high", remaining: 0.1, reset: "2026-10-19T11:07:39Z"),
+    func testAntigravityReordersLegacyCachedSnapshotWithArgonPrimary() {
+        let current = AntigravityQuotaClient.parse(root: ["groups": antigravityGroupsWithArgon()]).snapshot
+        let argon = current.allLimits.last!
+        let legacy = QuotaSnapshot(
+            app: .antigravity,
+            primaryLimit: argon,
+            secondaryLimit: current.primaryLimit,
+            auxiliaryLimits: [current.secondaryLimit!] + current.auxiliaryLimits.dropLast(),
+            planType: current.planType,
+            fetchedAt: current.fetchedAt
+        )
+        let reordered = AntigravityQuotaClient.reorderedGroupedSnapshot(legacy)
+        XCTAssertEqual(reordered.allLimits.map(\.id), [
+            "gemini-5h", "gemini-weekly", "claude-5h", "claude-weekly", "gemini-argon-wtu-weekly",
         ])
-        let enriched = AntigravityQuotaClient.parse(root: ["groups": antigravityGroupsWithArgon()])
-        let merged = AntigravityQuotaClient.merge(base: base, enrichment: enriched).snapshot
-        XCTAssertEqual(merged.allLimits.map(\.id), enriched.snapshot.allLimits.map(\.id))
-        XCTAssertEqual(merged.primaryWindow?.remainingPercent ?? 0, 75.31, accuracy: 0.001)
+        XCTAssertEqual(reordered.primaryLimit?.id, "gemini-5h")
+        XCTAssertEqual(reordered.secondaryLimit?.id, "gemini-weekly")
+        XCTAssertEqual(reordered.auxiliaryLimits.last?.id, "gemini-argon-wtu-weekly")
     }
 
     func testAntigravityFiveRowsRoundTripThroughSnapshotCache() throws {
@@ -475,7 +379,7 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertEqual(fetched.snapshot.primaryWindow?.usedPercent ?? 0, 55, accuracy: 0.01)
     }
 
-    /// 富化补齐周额度：主条已是 5h 时，周额度应落在 secondary 而不是被丢掉。
+    /// quota 桶同时有 5h 与周额度：主条为 5h，周额度落在 secondary 而不是被丢掉。
     func testAntigravityRetrieveUserQuotaWeeklyFillsSecondarySlot() {
         let fetched = antigravityFetch(buckets: [
             antigravityBucket(modelId: "claude-opus-4-6-thinking", remaining: 0.55, reset: "2026-09-02T11:04:10Z"),
@@ -488,55 +392,6 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertEqual(fetched.snapshot.secondaryLimit?.kind, .weekly)
         XCTAssertEqual(fetched.snapshot.secondaryWindow?.usedPercent ?? 0, 10, accuracy: 0.01)
         XCTAssertEqual(fetched.snapshot.weekly?.usedPercent ?? 0, 10, accuracy: 0.01)
-    }
-
-    /// merge 语义：base 已有 primary(5h)，富化只含 weekly 时 secondary 应被补齐且保持周语义。
-    func testAntigravityMergeFillsSecondaryWeeklyWithoutOverwritingPrimary() {
-        // base: 5h 第三方窗口（claude-opus…5h）
-        let base = antigravityFetch(buckets: [
-            antigravityBucket(modelId: "claude-opus-4-6-thinking", remaining: 0.55, reset: "2026-09-02T11:04:10Z"),
-        ])
-        XCTAssertEqual(base.snapshot.primaryLimit?.kind, .fiveHour)
-        XCTAssertNil(base.snapshot.secondaryLimit)
-
-        // enrichment: 只有 weekly 桶（无 5h）
-        let enrichment = antigravityFetch(buckets: [
-            antigravityBucket(modelId: "claude-opus-4-6", remaining: 0.9, reset: "2026-09-07T00:00:00Z", bucketId: "WEEKLY"),
-        ])
-        XCTAssertEqual(enrichment.snapshot.primaryLimit?.kind, .weekly, "只有 weekly 时主条应为 weekly")
-
-        // merge 应把 weekly 挂到 secondary，同时保留 base 的 5h 主条
-        let merged = AntigravityQuotaClient.merge(base: base, enrichment: enrichment)
-
-        XCTAssertEqual(merged.snapshot.primaryLimit?.kind, .fiveHour)
-        XCTAssertEqual(merged.snapshot.primaryWindow?.usedPercent ?? 0, 45, accuracy: 0.01)
-        XCTAssertEqual(merged.snapshot.secondaryLimit?.kind, .weekly)
-        XCTAssertEqual(merged.snapshot.secondaryLimit?.window.usedPercent ?? 0, 10, accuracy: 0.01)
-    }
-
-    /// merge 时 base（loadCodeAssist）无 aux，富化（retrieveUserQuotaSummary）带
-    /// Claude 5H / Claude WK 两行：aux 必须被补进快照，否则 UI 只剩 Gemini 两行。
-    func testAntigravityMergeCarriesAuxiliaryLimitsFromSummary() {
-        // base：loadCodeAssist 无任何额度窗口
-        let base = AntigravityQuotaClient.parse(
-            root: ["currentTier": ["id": "free-tier"]],
-            fetchedAt: Date(timeIntervalSince1970: 1_750_000_000)
-        )
-        XCTAssertNil(base.snapshot.primaryLimit)
-        XCTAssertTrue(base.snapshot.auxiliaryLimits.isEmpty)
-
-        // enrichment：retrieveUserQuotaSummary 分组源
-        let enrichment = AntigravityQuotaClient.parse(
-            root: ["groups": antigravitySummaryGroups()],
-            fetchedAt: Date(timeIntervalSince1970: 1_750_000_000)
-        )
-        XCTAssertEqual(enrichment.snapshot.auxiliaryLimits.map(\.displayName), ["Claude 5H", "Claude WK"])
-
-        let merged = AntigravityQuotaClient.merge(base: base, enrichment: enrichment)
-
-        XCTAssertEqual(merged.snapshot.primaryLimit?.displayName, "Gemini 5H")
-        XCTAssertEqual(merged.snapshot.secondaryLimit?.displayName, "Gemini WK")
-        XCTAssertEqual(merged.snapshot.auxiliaryLimits.map(\.displayName), ["Claude 5H", "Claude WK"])
     }
 
     func testCodexTemporaryWeeklyOnlyResponseUsesWeeklyAsPrimary() {
