@@ -292,9 +292,20 @@ final class CycleUsageAggregator {
             return model.lowercased().hasPrefix("openai-codex/") ? .codex : nil
         case .opencode:
             return model.lowercased().hasPrefix("openai/") ? .codex : nil
-        case .cursor, .antigravity:
+        case .antigravity:
+            return countsTowardAntigravityGeminiPool(model: model) ? .antigravity : nil
+        case .cursor:
             return nil
         }
+    }
+
+    /// Antigravity 周期只接入 Gemini 共享池（5H / WK）：Argon / Carbon 有独立周额度池，
+    /// Claude / GPT 走另一组额度，未识别模型（`unknown`）无法判断归属，都不计入。
+    nonisolated static func countsTowardAntigravityGeminiPool(model: String) -> Bool {
+        let name = model.lowercased()
+        return name.hasPrefix("gemini-")
+            && name != "gemini-4-argon"
+            && name != "gemini-4-carbon"
     }
 
     /// Codex / Claude 自己日志里的请求是否计入订阅消耗，按模型名近似判断。
@@ -464,7 +475,9 @@ final class CycleUsageAggregator {
                 if cycle.extraResetCount > 0 {
                     quality = .worst(quality, .estimated)
                 }
+                // Antigravity 周期在首次消耗后才建立，起点之前没有用量，首个采样晚于起点不算缺数据。
                 if cycle.boundaryQuality == .observed,
+                   cycle.app != .antigravity,
                    let firstSampleAt = cycle.firstSampleAt,
                    firstSampleAt.timeIntervalSince(cycle.startAt) > 10 * 60 {
                     quality = .incomplete

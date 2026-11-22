@@ -515,6 +515,18 @@ enum QuotaCycleStore {
         return result
     }
 
+    /// Antigravity 周期统计只接入的 Gemini 共享池。
+    nonisolated static let antigravityTrackedLimitIDs: Set<String> = ["gemini-5h", "gemini-weekly"]
+
+    /// 参与周期记录的窗口。Antigravity 按 id 取 Gemini 共享池：账号含 Argon 时
+    /// primary / secondary 槽位会错开，不能按槽位读取。
+    nonisolated private static func trackedLimits(in snapshot: QuotaSnapshot, app: UsageApp) -> [QuotaLimit] {
+        if app == .antigravity {
+            return snapshot.allLimits.filter { antigravityTrackedLimitIDs.contains($0.id) }
+        }
+        return [snapshot.primaryLimit, snapshot.secondaryLimit].compactMap { $0 }
+    }
+
     /// 只记录主账号的标准 5 小时 / 周窗口；导入账号和模型专项窗口由调用方排除。
     nonisolated static func record(
         payload: QuotaCyclePayload,
@@ -531,7 +543,7 @@ enum QuotaCycleStore {
             app: app,
             sampledAt: sampledAt
         )
-        let limits = [snapshot.primaryLimit, snapshot.secondaryLimit].compactMap { $0 }
+        let limits = trackedLimits(in: snapshot, app: app)
         // 不按 is_active 过滤：is_active 只表示「当前哪个限制在起约束作用」，
         // 非当前约束的窗口（如 5 小时未满时的 weekly）同样返回有效的 percent / resets_at，
         // 过滤会导致周期记录停更，页面停留在旧值。
@@ -543,6 +555,9 @@ enum QuotaCycleStore {
 
             let startAt = scheduledEndAt.addingTimeInterval(-TimeInterval(seconds))
             let usedPercent = normalizedPercent(limit.window.usedPercent)
+            // Antigravity 未消耗的池子 resetTime 等于「采样时刻 + 窗口时长」，每次刷新都顺延，
+            // 写入会不断生成假周期；有用量后服务端才锁定 resetTime，此时再建周期。
+            if app == .antigravity, usedPercent <= 0 { continue }
             let boundaryQuality: QuotaCycleBoundaryQuality = limit.window.windowSeconds == nil
                 ? .inferred
                 : .observed

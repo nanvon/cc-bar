@@ -1,12 +1,13 @@
 import Charts
 import SwiftUI
 
-/// 额度页「额度用满预估」：Codex / Claude × 5 小时 / 周的周期卡，宽画布一行四张。
+/// 额度页「额度用满预估」：Codex / Claude / Antigravity（Gemini 共享池）× 5 小时 / 周的周期卡，
+/// 宽画布一行最多四张。
 /// 区块自带标题与一句口径说明，便于单独截图分享；卡内不写解释。
 /// 进度条显示服务端返回的额度已用比例，条色与「N%」统一按剩余额度着色。
 struct QuotaCycleCardsSection: View {
     @Environment(AppState.self) private var appState
-    /// 受侧栏服务筛选约束：全部 → Codex + Claude；单选时只含该服务。
+    /// 受侧栏服务筛选约束：全部 → 已启用的 Codex / Claude / Antigravity；单选时只含该服务。
     let apps: [UsageApp]
     let isWide: Bool
 
@@ -45,7 +46,7 @@ struct QuotaCycleCardsSection: View {
             LazyVGrid(
                 columns: Array(
                     repeating: GridItem(.flexible(), spacing: 12, alignment: .top),
-                    count: isWide ? max(1, cards.count) : min(2, max(1, cards.count))
+                    count: isWide ? min(4, max(1, cards.count)) : min(2, max(1, cards.count))
                 ),
                 alignment: .leading,
                 spacing: 12
@@ -94,7 +95,7 @@ struct QuotaCycleCardsSection: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 4) {
                     ServiceTile(app: app, size: 12)
-                    Text("\(app.displayName) · \(cycleKindShort(kind))")
+                    Text(cycleCardTitle(app: app, kind: kind))
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -157,7 +158,7 @@ struct QuotaCycleCardsSection: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 4) {
                 ServiceTile(app: app, size: 12)
-                Text("\(app.displayName) · \(cycleKindShort(kind))")
+                Text(cycleCardTitle(app: app, kind: kind))
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -259,8 +260,8 @@ private extension AppState {
             // DSH 没有额度周期，额度页不出现该服务。
             return nil
         case .antigravity:
-            // Antigravity 用量不进周期统计。
-            return nil
+            guard antigravityAccount != nil else { return nil }
+            return QuotaHistoryAccountKey.antigravityPrimary(email: antigravityAccount?.email)
         }
     }
 }
@@ -347,7 +348,7 @@ private struct QuotaCycleHistoryPanel: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 6) {
                 ServiceTile(app: app, size: 12)
-                Text(app.displayName)
+                Text(cycleServiceName(app))
                     .font(.system(size: 12, weight: .semibold))
                     .lineLimit(1)
                 Spacer(minLength: 8)
@@ -640,6 +641,17 @@ private enum CycleHistoryFormat {
 }
 
 // MARK: - 周期卡共享的纯函数
+
+/// 周期所属额度的名称。Antigravity 只接入 Gemini 共享池，名称里带上池名。
+private func cycleServiceName(_ app: UsageApp) -> String {
+    app == .antigravity ? "\(app.displayName) · Gemini" : app.displayName
+}
+
+/// 周期卡标签：`服务 · 5 小时`，Antigravity 为 `Antigravity · Gemini 5 小时`。
+private func cycleCardTitle(app: UsageApp, kind: QuotaLimitKind) -> String {
+    let separator = app == .antigravity ? " " : " · "
+    return "\(cycleServiceName(app))\(separator)\(cycleKindShort(kind))"
+}
 
 /// 周期类型短标签：5 小时 / 周，用于周期卡标签。
 private func cycleKindShort(_ kind: QuotaLimitKind) -> String {

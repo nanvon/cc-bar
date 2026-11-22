@@ -860,7 +860,17 @@ final class AppState {
                 )
             }
         }
-        // Antigravity 暂无本地用量周期，仅记录额度历史，不参与 cycle 统计
+        // Antigravity 缓存账号绑定存的是邮箱，与当前账号邮箱一致才补记。
+        if let record = quotaCache.providers[.antigravity], let account = antigravityAccount,
+           record.accountID == account.email {
+            recordQuotaCycles(
+                accountKey: QuotaHistoryAccountKey.antigravityPrimary(email: account.email),
+                app: .antigravity,
+                snapshot: record.snapshot,
+                source: .cache,
+                sampledAt: record.updatedAt
+            )
+        }
     }
 
     // MARK: - Imported Codex accounts
@@ -2575,7 +2585,7 @@ final class AppState {
             accountID: accountID
         )
         saveQuotaCache()
-        // 额度历史只记 Codex、Claude、Antigravity；周期记录只记 Codex、Claude。
+        // 额度历史与周期记录都只记 Codex、Claude、Antigravity（周期只取 Gemini 共享池）。
         switch app {
         case .codex:
             recordCodexQuotaHistory(snapshot: mergedSnapshot, sampledAt: updatedAt)
@@ -2587,14 +2597,27 @@ final class AppState {
             break
         }
         let cycleApp: UsageApp?
+        let cycleAccountKey: String?
         switch app {
-        case .codex: cycleApp = .codex
-        case .claude: cycleApp = .claude
-        case .antigravity, .cursor, .commandCode, .opencodeGo: cycleApp = nil
+        case .codex:
+            cycleApp = .codex
+            cycleAccountKey = accountID
+        case .claude:
+            cycleApp = .claude
+            cycleAccountKey = accountID
+        case .antigravity:
+            // 缓存账号绑定存的是邮箱，周期账号键与额度历史一致。
+            cycleApp = .antigravity
+            cycleAccountKey = antigravityAccount == nil
+                ? nil
+                : QuotaHistoryAccountKey.antigravityPrimary(email: antigravityAccount?.email)
+        case .cursor, .commandCode, .opencodeGo:
+            cycleApp = nil
+            cycleAccountKey = nil
         }
-        if let cycleApp, let accountID {
+        if let cycleApp, let cycleAccountKey {
             recordQuotaCycles(
-                accountKey: accountID,
+                accountKey: cycleAccountKey,
                 app: cycleApp,
                 snapshot: mergedSnapshot,
                 source: source,

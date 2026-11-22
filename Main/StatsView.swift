@@ -632,7 +632,7 @@ struct StatsView: View {
 
     // MARK: Quota
 
-    /// 额度页随侧栏服务筛选：全部 → 按 Provider 自定义顺序的 Codex / Claude；
+    /// 额度页随侧栏服务筛选：全部 → 按 Provider 自定义顺序的 Codex / Claude / Antigravity；
     /// 单选只看该服务；其他服务没有额度周期与额度历史，整页显示空态。
     private var quotaApps: [UsageApp] {
         let ordered: [UsageApp] = SettingsStore.shared.orderedProviders.compactMap { provider in
@@ -640,14 +640,16 @@ struct StatsView: View {
             switch provider.app {
             case .codex: return .codex
             case .claude: return .claude
-            case .antigravity, .cursor, .commandCode, .opencodeGo: return nil
+            case .antigravity: return .antigravity
+            case .cursor, .commandCode, .opencodeGo: return nil
             }
         }
         switch serviceFilter {
         case .all: return ordered
         case .codex: return ordered.contains(.codex) ? [.codex] : []
         case .claude: return ordered.contains(.claude) ? [.claude] : []
-        case .cursor, .pi, .opencode, .dsh, .antigravity: return []
+        case .antigravity: return ordered.contains(.antigravity) ? [.antigravity] : []
+        case .cursor, .pi, .opencode, .dsh: return []
         }
     }
 
@@ -661,8 +663,8 @@ struct StatsView: View {
                     Text(tr("No quota data", "暂无额度数据"))
                         .font(.system(size: 13, weight: .medium))
                     Text(tr(
-                        "Only Codex and Claude Code report quota cycles.",
-                        "只有 Codex 与 Claude Code 提供额度周期。"
+                        "Only Codex, Claude Code, and Antigravity report quota cycles.",
+                        "只有 Codex、Claude Code 与 Antigravity 提供额度周期。"
                     ))
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
@@ -1023,7 +1025,18 @@ struct StatsView: View {
                         isLoading: appState.refreshState(for: .claude).inFlight
                     ))
                 }
-            case .cursor, .pi, .opencode, .dsh, .antigravity:
+            case .antigravity:
+                let key = QuotaHistoryAccountKey.antigravityPrimary(email: appState.antigravityAccount?.email)
+                if shouldShowTimelineSection(accountKey: key, snapshot: appState.antigravityQuota, accountExists: appState.antigravityAccount != nil) {
+                    sections.append(timelineSection(
+                        accountKey: key,
+                        title: "Antigravity · Gemini",
+                        app: .antigravity,
+                        snapshot: appState.antigravityQuota,
+                        isLoading: appState.refreshState(for: .antigravity).inFlight
+                    ))
+                }
+            case .cursor, .pi, .opencode, .dsh:
                 break
             }
         }
@@ -1083,6 +1096,16 @@ struct StatsView: View {
 
     private func window(of kind: QuotaLimitKind, in snapshot: QuotaSnapshot?) -> QuotaWindow? {
         guard let snapshot else { return nil }
+        // Antigravity 按 id 取 Gemini 共享池，账号含 Argon 时 5H / 周槽位会错开。
+        if snapshot.app == .antigravity {
+            let id: String
+            switch kind {
+            case .fiveHour: id = "gemini-5h"
+            case .weekly: id = "gemini-weekly"
+            case .modelWeekly, .unknown: return nil
+            }
+            return snapshot.allLimits.first { $0.id == id }?.window
+        }
         switch kind {
         case .fiveHour: return snapshot.fiveHourLimit?.window
         case .weekly: return snapshot.weeklyLimit?.window

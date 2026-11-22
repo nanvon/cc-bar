@@ -1168,6 +1168,11 @@ final class UsageService {
         async let dshTask: DshSessionScanner.Result? = Self.scanIfEnabled(.dsh, in: apps, skipped: nil) {
             DshSessionScanner.scan(previous: [:], roots: dshRoots, minimumMtime: dateFrom, onProgress: progress)
         }
+        // Antigravity 对话库没有按时间过滤的入口，整体读取；读不出的库不进刷新集合，其对话沿用旧桶。
+        let antigravityRoots = roots.antigravityRoots
+        async let antigravityTask: AntigravityScanner.Result? = Self.scanIfEnabled(.antigravity, in: apps, skipped: nil) {
+            AntigravityScanner.scan(previous: nil, roots: antigravityRoots, onProgress: progress)
+        }
         async let codexTask: CodexJSONLScanner.Result? = Self.scanIfEnabled(.codex, in: apps, skipped: nil) {
             await CodexJSONLScanner.scan(
                 previous: [:],
@@ -1185,6 +1190,7 @@ final class UsageService {
         let pi = await piTask
         let opencode = await opencodeTask
         let dsh = await dshTask
+        let antigravity = await antigravityTask
         let scanEnded = Date()
         guard localUsageApps().isSuperset(of: apps) else {
             requestCycleUsageRebuild(reasons: mergedReasons)
@@ -1206,7 +1212,8 @@ final class UsageService {
             requestedCycleIDs: affectedCycleIDs,
             failedApps: failedApps
         )
-        let entries = [claude?.entries, codex?.entries, pi?.entries, opencode?.entries, dsh?.entries]
+        let entries = [claude?.entries, codex?.entries, pi?.entries, opencode?.entries, dsh?.entries,
+                       antigravity?.entries]
             .compactMap { $0 }.flatMap { $0 }
         let refreshedKeys = Set(entries.map(\.conversationKey))
             .union((claude?.conversationSeeds ?? []).map(\.key))
@@ -1214,6 +1221,7 @@ final class UsageService {
             .union((pi?.conversationSeeds ?? []).map(\.key))
             .union((opencode?.refreshedSessionIDs ?? []).map { "opencode:\($0)" })
             .union((dsh?.newState.values.compactMap(\.conversationID) ?? []).map { "dsh:\($0)" })
+            .union((antigravity?.refreshedConversationIDs ?? []).map { "antigravity:\($0)" })
         let preservedKeys = previousCycleKeys.subtracting(refreshedKeys).union(ledgerBacked.map(\.key))
         await commitCycleAggregation(
             exactEntries: entries.filter { !failedApps.contains($0.app) },
@@ -1288,10 +1296,14 @@ final class UsageService {
         pi: PiJSONLScanner.Result?,
         opencode: OpencodeScanner.Result?,
         opencodeDatabaseURL: URL,
-        dshFailed: Bool = false
+        dshFailed: Bool = false,
+        antigravity: AntigravityScanner.Result? = nil
     ) -> Set<UsageApp> {
         var result = failedApps
         if let pi, pi.failedFileCount > 0 { result.insert(.pi) }
+        if let antigravity, antigravity.failedDatabaseCount > 0 || !antigravity.isComplete {
+            result.insert(.antigravity)
+        }
         if let opencode, opencode.error != nil || !opencode.isComplete,
            FileManager.default.fileExists(atPath: opencodeDatabaseURL.path) {
             result.insert(.opencode)
@@ -1307,7 +1319,7 @@ final class UsageService {
 
     /// 周期统计需要覆盖的来源。有 Codex 周期时，Pi / OpenCode / DSH 里的 Codex 订阅用量也要归集。
     nonisolated static func requiredCycleSourceApps(cycles: [QuotaCycleRecord]) -> Set<UsageApp> {
-        let apps = Set(cycles.map(\.app)).intersection([.codex, .claude])
+        let apps = Set(cycles.map(\.app)).intersection([.codex, .claude, .antigravity])
         return apps.contains(.codex) ? apps.union(CycleUsageAggregator.otherAgentSourceApps) : apps
     }
 
@@ -1415,7 +1427,7 @@ final class UsageService {
         #if DEBUG
         await cycleReadyForTesting?()
         #endif
-        let failedProviderNames = [UsageApp.codex, .claude, .pi, .opencode, .dsh]
+        let failedProviderNames = [UsageApp.codex, .claude, .pi, .opencode, .dsh, .antigravity]
             .filter { failedApps.contains($0) }
             .map { app -> String in
                 switch app {
@@ -1423,6 +1435,7 @@ final class UsageService {
                 case .claude: return "Claude Code"
                 case .pi: return "Pi"
                 case .dsh: return "DSH"
+                case .antigravity: return "Antigravity"
                 default: return "OpenCode"
                 }
             }
@@ -1597,6 +1610,12 @@ final class UsageService {
                 DshSessionScanner.scan(previous: [:], roots: dshRoots, onProgress: progress)
             }
             : nil
+        let antigravityRoots = roots.antigravityRoots
+        let antigravityTask: Task<AntigravityScanner.Result, Never>? = pendingApps.contains(.antigravity)
+            ? Task.detached(priority: .utility) {
+                AntigravityScanner.scan(previous: nil, roots: antigravityRoots, onProgress: progress)
+            }
+            : nil
         let claude = await claudeTask?.value
         if claude?.hasDeferredMessages == true { UsageLogWatcher.shared.requestRescan() }
         var codex = await codexTask?.value
@@ -1604,6 +1623,7 @@ final class UsageService {
         let pi = await piTask?.value
         let opencode = await opencodeTask?.value
         let dsh = await dshTask?.value
+        let antigravity = await antigravityTask?.value
         let pendingCycles = Self.cyclesToRebuild(cycles, for: pendingApps)
         let failedApps = Self.cycleSourceFailedApps(
             Self.cycleRebuildFailedApps(
@@ -1614,7 +1634,8 @@ final class UsageService {
             pi: pi,
             opencode: opencode,
             opencodeDatabaseURL: opencodeDatabaseURL,
-            dshFailed: dsh.map { !$0.isComplete } ?? false
+            dshFailed: dsh.map { !$0.isComplete } ?? false,
+            antigravity: antigravity
         )
         let pendingCycleIDs = Set(pendingCycles.map(\.id))
         let rebuildableCycleIDs = Self.cycleRebuildableCycleIDs(
@@ -1622,7 +1643,8 @@ final class UsageService {
             requestedCycleIDs: pendingCycleIDs,
             failedApps: failedApps
         )
-        let entries: [UsageEntry] = [claude?.entries, codex?.entries, pi?.entries, opencode?.entries, dsh?.entries]
+        let entries: [UsageEntry] = [claude?.entries, codex?.entries, pi?.entries, opencode?.entries, dsh?.entries,
+                                     antigravity?.entries]
             .compactMap { $0 }.flatMap { $0 }
         guard localUsageApps().isSuperset(of: pendingApps) else {
             Task { await rebuildCycleUsageIfNeeded() }
@@ -2141,9 +2163,9 @@ final class UsageService {
             entries: claude.entries + codex.entries + pi.entries,
             seeds: claude.conversationSeeds + codex.conversationSeeds + pi.conversationSeeds
         )
-        // OpenCode / DSH 从空状态扫描，给出的是现存会话的完整用量；DSH 冻结时不重灌。
+        // OpenCode / DSH / Antigravity 从空状态扫描，给出的是现存会话的完整用量；DSH 冻结时不重灌。
         let cycleEntries = claude.entries + codex.entries + pi.entries + opencode.entries
-            + dsh.entries
+            + dsh.entries + antigravity.entries
         let freshDshContributions = rebuildDsh
             ? DshContributionStore.apply(scan: dsh, to: dshContributions).contributions
             : dshContributions
@@ -2173,11 +2195,15 @@ final class UsageService {
             // DSH 冻结时整份保留。
             let refreshedOpencodeKeys = Set(opencode.refreshedSessionIDs.map { "opencode:\($0)" })
             let refreshedDshKeys = Set(dsh.newState.values.compactMap(\.conversationID).map { "dsh:\($0)" })
+            let refreshedAntigravityKeys = Set(antigravity.refreshedConversationIDs.map { "antigravity:\($0)" })
             let preserved = baselineCycles.filter {
                 guard apps.contains($0.app) else { return false }
                 switch $0.app {
                 case .opencode:
                     return !refreshedOpencodeKeys.contains($0.conversationKey ?? "")
+                case .antigravity:
+                    // 源库已删除或本轮读不出的对话保留原周期桶。
+                    return !refreshedAntigravityKeys.contains($0.conversationKey ?? "")
                 case .dsh:
                     return dshFrozen || !refreshedDshKeys.contains($0.conversationKey ?? "")
                 default:
@@ -2490,7 +2516,11 @@ final class UsageService {
                 opencode: opencode,
                 opencodeDatabaseURL: opencodeDatabaseURL,
                 // DSH 只有从零完整扫描才能直接灌入；冻结或带旧 watermark 时留给补算。
-                dshFailed: initialApps.contains(.dsh) && (dshFrozen || !dsh.isComplete || !dshPrevious.isEmpty)
+                dshFailed: initialApps.contains(.dsh) && (dshFrozen || !dsh.isComplete || !dshPrevious.isEmpty),
+                // Antigravity 带旧状态时只给出变动对话，不能直接灌入，留给补算。
+                antigravity: initialApps.contains(.antigravity) && prev.antigravity != nil
+                    ? AntigravityScanner.Result()
+                    : antigravity
             )
             let initialCycleIDs = Set(initialCycles.map(\.id))
             let rebuildableCycleIDs = Self.cycleRebuildableCycleIDs(
@@ -2499,9 +2529,9 @@ final class UsageService {
                 failedApps: failedApps
             )
             dshCycleRebuilt = initialApps.contains(.dsh) && !failedApps.contains(.dsh)
-            // 从零扫描时 OpenCode / DSH 给出的是全部会话的完整用量，可以直接灌入。
+            // 从零扫描时 OpenCode / DSH / Antigravity 给出的是全部会话的完整用量，可以直接灌入。
             cycleAggregator.rebuildRange(
-                exactEntries: (cycleEntries + opencode.entries + dsh.entries)
+                exactEntries: (cycleEntries + opencode.entries + dsh.entries + antigravity.entries)
                     .filter { !failedApps.contains($0.app) },
                 cycles: cycles,
                 accountSegments: appState?.quotaCycles.accountSegments ?? [],
@@ -2532,7 +2562,15 @@ final class UsageService {
                 cycles: cycles,
                 accountSegments: appState?.quotaCycles.accountSegments ?? []
             )
-            cycleChanged = ingested || opencodeReplaced
+            // Antigravity 同口径：刷新对话整库重读，按对话替换；读不出的库不在刷新集合里，沿用旧桶。
+            let antigravityReplaced = antigravity.isComplete && cycleAggregator.replaceConversations(
+                app: .antigravity,
+                conversationKeys: Set(antigravity.refreshedConversationIDs.map { "antigravity:\($0)" }),
+                entries: antigravity.entries,
+                cycles: cycles,
+                accountSegments: appState?.quotaCycles.accountSegments ?? []
+            )
+            cycleChanged = ingested || opencodeReplaced || antigravityReplaced
         }
 
         // DSH 没有 seen 集合兜底去重，贡献与 watermark 必须同进同退：能提交时两者每轮一起更新内存，

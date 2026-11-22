@@ -37,7 +37,7 @@
 | [草案-DSH本地用量-技术方案.md](草案-DSH本地用量-技术方案.md) | 已落地：官方 `facebook/zstd` 1.5.7 SPM 依赖（App 与 CCBarTests 都链接 `libzstd`）、`DshZstdFrames` / `DshZstdDecoder` / `DshSessionScanner`、逐会话贡献缓存（落 Application Support）与两个聚合器的 `replaceLocal`、`UsageService` 第 5 个扫描任务、DeepSeek 分段价、统计页 / 设置页 / 脱敏诊断接入。不接入额度 Timeline 和 Cycles。实施中与草案的三处偏差（S1 拆两个文件、UI 穷举分支提前到 S2、`DshContributionStore.apply` 返回 `Update`）见草案头部说明 |
 | [草案-统计页改版与项目分析-需求.md](草案-统计页改版与项目分析-需求.md) | **已实施（三期一次落地，未发版）**：侧栏改为概览 / 对话 / 项目 / 额度，概览合并为「用量构成」+「高消耗对话」，新增项目页（worktree 归入主仓库、未归属说明），额度页合并周期与时间线；最终行为以 产品需求 §7 / 界面布局 §3 为准 |
 | [草案-统计页改版与项目分析-技术方案.md](草案-统计页改版与项目分析-技术方案.md) | **已实施**：偏差——第 3 期周期桶加可选 `conversationKey`，未升 payload 版本（旧桶计入「其他」）；对话页项目筛选也改用统计页项目身份。原文：详写第 1 期（项目汇总从对话桶派生、未归属按残差计算、不改存储格式）；第 2 期 worktree / 分支、第 3 期周期桶加项目维度的前置事项已记录 |
-| [草案-Antigravity额度预估-设计方案.md](草案-Antigravity额度预估-设计方案.md) | **草案（待确认）**：在主窗口「额度」页接入 Antigravity 的额度用满预估、历史周期与额度变化时间线；数据层按 `limitID` 隔离 6 个独立额度池并过滤 0% 滑动空窗，增量走 `replaceConversations`；UI「全部」视图展示 Gemini 5H / WK，单选 Antigravity 时按活跃消耗展开其余池 |
+| [草案-Antigravity额度预估-设计方案.md](草案-Antigravity额度预估-设计方案.md) | 已实现待验收（2026-11-22 精简范围）：额度页接入 Antigravity Gemini 5H / WK 的用满预估、历史周期与额度变化时间线；只建 `gemini-5h` / `gemini-weekly` 周期并跳过 0% 采样，本机用量只计 Argon / Carbon 以外的 `gemini-*`，增量走 `replaceConversations`；其余 4 个池不接入。待用户手动验收 |
 
 ## 历史参考
 
