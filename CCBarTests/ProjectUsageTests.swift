@@ -231,7 +231,7 @@ final class ProjectUsageTests: XCTestCase {
         let providers = model.composition[.provider] ?? []
         XCTAssertEqual(
             providers.map(\.id),
-            ["provider:openAI", "provider:anthropic", "provider:deepseek", "provider:opencodeGo", "provider:other"],
+            ["provider:openAI", "provider:anthropic", "provider:deepseek", "provider:opencode", "provider:other"],
             "全部列出；「其他」提供商不参与排名，固定在最后"
         )
         XCTAssertEqual(providers.first?.totals.costUSD, 18)
