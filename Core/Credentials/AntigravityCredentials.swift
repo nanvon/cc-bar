@@ -1,8 +1,6 @@
 import CryptoKit
 import Foundation
-import LocalAuthentication
 import os
-import Security
 
 /// Antigravity（Google Antigravity / Gemini Code Assist）凭据管理。
 ///
@@ -723,43 +721,108 @@ nonisolated enum AntigravityCredentials {
     }
 
     private static let refreshCacheService = "com.nanvon.ccbar.antigravity-refresh"
+    private static let refreshCacheMigratedDefaultsKey = "antigravityRefreshCacheSecurityCLIMigratedV1"
+
+    /// 改用系统 `/usr/bin/security` 读写续期缓存，使 ACL 绑定到系统固定签名的 `security` 二进制，
+    /// 避免 ad-hoc 签名的 CCBar 每次发版更新后都触发钥匙串重新授权弹窗。
+    private static func ensureSecurityCLIMigrated() {
+        guard !UserDefaults.standard.bool(forKey: refreshCacheMigratedDefaultsKey) else { return }
+        deleteAllRefreshCacheItems()
+        UserDefaults.standard.set(true, forKey: refreshCacheMigratedDefaultsKey)
+    }
+
+    private static func deleteAllRefreshCacheItems() {
+        for _ in 0..<5 {
+            let res = runSecurity(arguments: ["delete-generic-password", "-s", refreshCacheService])
+            if res.status == 44 || res.status != 0 { break }
+        }
+    }
 
     private static func loadRefreshCache(key: String) -> RefreshedToken? {
-        let context = LAContext()
-        context.interactionNotAllowed = true
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: refreshCacheService, kSecAttrAccount as String: key,
-            kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne,
-            kSecUseAuthenticationContext as String: context,
-        ]
-        var result: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let data = result as? Data else { return nil }
-        return try? JSONDecoder().decode(RefreshedToken.self, from: data)
+        ensureSecurityCLIMigrated()
+        let res = runSecurity(arguments: [
+            "find-generic-password", "-s", refreshCacheService, "-a", key, "-w",
+        ])
+        guard res.status == 0, !res.stdout.isEmpty else { return nil }
+        return decodeRefreshCacheOutput(res.stdout)
+    }
+
+    static func decodeRefreshCacheOutput(_ output: Data) -> RefreshedToken? {
+        let trimmed = String(data: output, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty else { return nil }
+        let raw = Data(trimmed.utf8)
+        if let decoded = try? JSONDecoder().decode(RefreshedToken.self, from: raw) {
+            return decoded
+        }
+        if let hexData = dataFromHex(trimmed),
+           let decoded = try? JSONDecoder().decode(RefreshedToken.self, from: hexData) {
+            return decoded
+        }
+        return nil
     }
 
     private static func saveRefreshCache(_ token: RefreshedToken, key: String) throws {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: refreshCacheService,
-            // 单条缓存，切号时替换，避免保留多个历史账号的令牌。
-            kSecAttrAccount as String: key,
-        ]
+        ensureSecurityCLIMigrated()
         let data = try JSONEncoder().encode(token)
-        let status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
-        if status == errSecItemNotFound {
-            // 删除仅限 CCBar 自己的续期缓存，不接触 gemini / antigravity。
-            SecItemDelete([kSecClass as String: kSecClassGenericPassword,
-                           kSecAttrService as String: refreshCacheService] as CFDictionary)
-            var add = query
-            add[kSecValueData as String] = data
-            add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-            let added = SecItemAdd(add as CFDictionary, nil)
-            guard added == errSecSuccess else { throw QuotaError.transport("Antigravity refresh cache write failed: \(added)") }
-        } else if status != errSecSuccess {
-            throw QuotaError.transport("Antigravity refresh cache write failed: \(status)")
+        let hex = data.map { String(format: "%02x", $0) }.joined()
+        // 单条缓存，切号时先清旧记录，避免保留多个历史账号的令牌。
+        deleteAllRefreshCacheItems()
+        // 通过 `security -i` 从 stdin 传入命令，避免 token 十六进制数据出现在进程命令行参数中。
+        let command = "add-generic-password -U -s \"\(refreshCacheService)\" -a \"\(key)\" -X \"\(hex)\"\n"
+        let res = runSecurity(arguments: ["-i"], stdin: Data(command.utf8))
+        guard res.status == 0 else {
+            throw QuotaError.transport("Antigravity refresh cache write failed: exit \(res.status) \(res.stderr)")
         }
+    }
+
+    private static func runSecurity(
+        arguments: [String],
+        stdin: Data? = nil
+    ) -> (status: Int32, stdout: Data, stderr: String) {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+        proc.arguments = arguments
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        proc.standardOutput = outPipe
+        proc.standardError = errPipe
+        if let stdin {
+            let inPipe = Pipe()
+            proc.standardInput = inPipe
+            do {
+                try proc.run()
+            } catch {
+                return (-1, Data(), String(describing: error))
+            }
+            inPipe.fileHandleForWriting.write(stdin)
+            inPipe.fileHandleForWriting.closeFile()
+        } else {
+            do {
+                try proc.run()
+            } catch {
+                return (-1, Data(), String(describing: error))
+            }
+        }
+        proc.waitUntilExit()
+        let stdout = outPipe.fileHandleForReading.readDataToEndOfFile()
+        let stderr = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return (proc.terminationStatus, stdout, stderr)
+    }
+
+    private static func dataFromHex(_ hex: String) -> Data? {
+        guard hex.count.isMultiple(of: 2) else { return nil }
+        var bytes = Data()
+        bytes.reserveCapacity(hex.count / 2)
+        var index = hex.startIndex
+        while index < hex.endIndex {
+            let next = hex.index(index, offsetBy: 2)
+            guard let byte = UInt8(hex[index..<next], radix: 16) else { return nil }
+            bytes.append(byte)
+            index = next
+        }
+        return bytes
     }
 
     // MARK: - Helpers

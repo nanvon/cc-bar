@@ -400,6 +400,27 @@ final class AntigravityDesktopQuotaTests: XCTestCase {
             return XCTFail("expected .network(.cannotConnect)")
         }
     }
+
+    func testDecodeRefreshCacheOutputSupportsPlainJSONAndHex() throws {
+        let token = AntigravityCredentials.RefreshedToken(
+            accessToken: "ya29.test",
+            refreshToken: "1//refresh",
+            expiryDate: Date(timeIntervalSince1970: 1_800_000_000)
+        )
+        let encoded = try JSONEncoder().encode(token)
+        var withNewline = encoded
+        withNewline.append(contentsOf: "\n".utf8)
+        let plain = try XCTUnwrap(AntigravityCredentials.decodeRefreshCacheOutput(withNewline))
+        XCTAssertEqual(plain.accessToken, token.accessToken)
+        XCTAssertEqual(plain.refreshToken, token.refreshToken)
+
+        let hexString = encoded.map { String(format: "%02x", $0) }.joined() + "\n"
+        let hexDecoded = try XCTUnwrap(AntigravityCredentials.decodeRefreshCacheOutput(Data(hexString.utf8)))
+        XCTAssertEqual(hexDecoded.accessToken, token.accessToken)
+        XCTAssertEqual(hexDecoded.refreshToken, token.refreshToken)
+
+        XCTAssertNil(AntigravityCredentials.decodeRefreshCacheOutput(Data("not-json".utf8)))
+    }
 }
 
 nonisolated private final class RequestCounter: @unchecked Sendable {
