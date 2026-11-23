@@ -289,11 +289,12 @@ struct PopoverRootView: View {
     }
 
     private func otherAgentSubscriptionCost(for app: QuotaApp, from: Date, to: Date) -> Decimal {
-        guard app == .codex else { return 0 }
-        let sources = SettingsStore.shared.enabledCodexSubscriptionSources
-        guard !sources.isEmpty else { return 0 }
+        guard let usageApp = app.usageApp,
+              let sources = SettingsStore.shared.enabledCycleSubscriptionSourcesByApp[usageApp],
+              !sources.isEmpty
+        else { return 0 }
         return appState.usageService.aggregator.otherAgentSubscriptionCost(
-            for: .codex, sources: sources, from: from, to: to
+            for: usageApp, sources: sources, from: from, to: to
         )
     }
 
@@ -320,15 +321,23 @@ struct PopoverRootView: View {
 
     private func todayCost(for app: QuotaApp) -> Decimal? {
         switch app {
-        case .codex: appState.codexTodayCost.map { (cost: Decimal) -> Decimal in
-            let (from, to) = Self.todayBounds()
-            return cost + otherAgentSubscriptionCost(for: .codex, from: from, to: to)
+        case .codex:
+            return todayCostIncludingOtherAgents(appState.codexTodayCost, for: .codex)
+        case .claude:
+            return appState.claudeTodayCost
+        case .antigravity:
+            return todayCostIncludingOtherAgents(appState.antigravityTodayCost, for: .antigravity)
+        case .cursor:
+            return cursorTodayCost
+        case .commandCode, .opencodeGo:
+            return nil
         }
-        case .claude: appState.claudeTodayCost
-        case .antigravity: nil
-        case .cursor: cursorTodayCost
-        case .commandCode: nil
-        case .opencodeGo: nil
+    }
+
+    private func todayCostIncludingOtherAgents(_ baseCost: Decimal?, for app: QuotaApp) -> Decimal? {
+        baseCost.map { cost in
+            let (from, to) = Self.todayBounds()
+            return cost + otherAgentSubscriptionCost(for: app, from: from, to: to)
         }
     }
 

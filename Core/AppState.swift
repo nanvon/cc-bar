@@ -287,6 +287,7 @@ final class AppState {
 
     var codexTodayCost: Decimal?
     var claudeTodayCost: Decimal?
+    var antigravityTodayCost: Decimal?
 
     /// 每家独立记录官方状态。失败时降级为未知，保留上次成功时间。
     private(set) var serviceStatuses: [QuotaApp: ServiceStatus] = [:]

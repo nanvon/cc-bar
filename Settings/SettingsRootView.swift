@@ -446,6 +446,21 @@ struct SettingsRootView: View {
             }
             InsetDivider()
             PrefsRow(
+                label: "Include Antigravity subscription usage in Pi, OpenCode and DSH",
+                chinese: "包含 Pi、OpenCode、DSH 中的 Antigravity 订阅用量",
+                desc: "Adds Antigravity subscription usage from enabled agents to the primary Antigravity account in quota estimates and popover spend.",
+                chineseDesc: "将已启用的 Pi、OpenCode 和 DSH 中的 Antigravity 订阅用量计入主账号的额度预估和弹出面板花费"
+            ) {
+                Toggle("", isOn: Binding(
+                    get: { settings.cycleIncludesOtherAgentsForAntigravity },
+                    set: { settings.cycleIncludesOtherAgentsForAntigravity = $0 }
+                ))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .tint(.green)
+            }
+            InsetDivider()
+            PrefsRow(
                 label: "Estimate Pi output speed",
                 chinese: "估算 Pi 输出速度",
                 desc: "Pi logs only record total request time, including the wait before the first token, so the estimate reads low. Requests timed by the Pi timing plugin always use actual generation time.",

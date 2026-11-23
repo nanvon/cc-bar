@@ -226,7 +226,7 @@ struct QuotaCycleCardsSection: View {
             cycles: appState.quotaCycles.records,
             kind: kind,
             app: app,
-            otherAgentSources: SettingsStore.shared.enabledCodexSubscriptionSources
+            otherAgentSourcesByApp: SettingsStore.shared.enabledCycleSubscriptionSourcesByApp
         )
     }
 
@@ -317,7 +317,7 @@ struct QuotaCycleHistorySection: View {
             cycles: appState.quotaCycles.records,
             kind: kind,
             app: app,
-            otherAgentSources: SettingsStore.shared.enabledCodexSubscriptionSources,
+            otherAgentSourcesByApp: SettingsStore.shared.enabledCycleSubscriptionSourcesByApp,
             now: now
         )
         return Array(

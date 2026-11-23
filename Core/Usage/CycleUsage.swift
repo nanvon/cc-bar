@@ -273,12 +273,18 @@ final class CycleUsageAggregator {
 
     private var buckets: [BucketKey: CycleUsageBucket] = [:]
 
-    /// 可归入 Codex 周期的其他 Agent。桶的 `app` 记来源 Agent，展示层按设置决定是否计入。
+    /// 可归入 Codex / Antigravity 周期的其他 Agent。桶的 `app` 记来源 Agent，展示层按设置决定是否计入。
     nonisolated static let otherAgentSourceApps: Set<UsageApp> = [.pi, .opencode, .dsh]
+
+    /// 识别为 Antigravity 订阅渠道的路由段（小写）。
+    private nonisolated static let antigravityRouteSegments: Set<String> = [
+        "antigravity", "antigravity-acp", "agy", "agy-cli", "google-antigravity"
+    ]
 
     /// 请求归属的额度周期服务；nil 表示不进入周期统计。
     /// Pi / DSH 只认订阅渠道 `openai-codex/`（Pi 的 `openai/` 是 API Key）；OpenCode 的订阅和 API Key
     /// 都记作 `openai/`，日志无法区分，一律视为订阅。
+    /// 三个 Agent 中带 Antigravity 路由段（含 `magpie/agy-cli/...` 多段路由）且属于 Gemini 共享池的模型归入 `.antigravity`。
     nonisolated static func cycleApp(for entry: UsageEntry) -> UsageApp? {
         cycleApp(app: entry.app, model: entry.model)
     }
@@ -289,14 +295,25 @@ final class CycleUsageAggregator {
         case .codex, .claude:
             return app
         case .pi, .dsh:
-            return model.lowercased().hasPrefix("openai-codex/") ? .codex : nil
+            if model.lowercased().hasPrefix("openai-codex/") { return .codex }
+            return isAntigravitySubscriptionModel(model) ? .antigravity : nil
         case .opencode:
-            return model.lowercased().hasPrefix("openai/") ? .codex : nil
+            if model.lowercased().hasPrefix("openai/") { return .codex }
+            return isAntigravitySubscriptionModel(model) ? .antigravity : nil
         case .antigravity:
             return countsTowardAntigravityGeminiPool(model: model) ? .antigravity : nil
         case .cursor:
             return nil
         }
+    }
+
+    /// 其他 Agent 日志里带 Antigravity 路由段、且去除路由前缀后属于 Gemini 共享池的模型。
+    nonisolated static func isAntigravitySubscriptionModel(_ model: String) -> Bool {
+        let identity = ModelIdentity.parse(model)
+        guard !identity.route.isEmpty,
+              identity.route.contains(where: { antigravityRouteSegments.contains($0) })
+        else { return false }
+        return countsTowardAntigravityGeminiPool(model: identity.name)
     }
 
     /// Antigravity 周期只接入 Gemini 共享池（5H / WK）：Argon / Carbon 有独立周额度池，
@@ -447,12 +464,12 @@ final class CycleUsageAggregator {
     }
 
     /// 只计订阅消耗：Codex / Claude 自己日志里非订阅模型的桶不计入（见 `isSubscriptionUsage`）。
-    /// - Parameter otherAgentSources: 额外计入 Codex 周期的来源。空集合时只计服务自己的日志。
+    /// - Parameter otherAgentSourcesByApp: 按目标服务（`.codex` / `.antigravity`）指定额外计入周期的来源；未指定时只计服务自己的日志。
     func summaries(
         cycles: [QuotaCycleRecord],
         kind: QuotaLimitKind,
         app: UsageApp?,
-        otherAgentSources: Set<UsageApp> = [],
+        otherAgentSourcesByApp: [UsageApp: Set<UsageApp>],
         now: Date = Date()
     ) -> [CycleUsageSummary] {
         let grouped = Dictionary(grouping: buckets.values, by: \.cycleID)
@@ -463,8 +480,9 @@ final class CycleUsageAggregator {
                 var totals = UsageTotals.zero
                 var currentAllowanceTotals = UsageTotals.zero
                 var quality: CycleUsageQuality = cycle.boundaryQuality == .observed ? .exact : .estimated
+                let allowedExternal = otherAgentSourcesByApp[cycle.app] ?? []
                 for bucket in grouped[cycle.id] ?? []
-                    where (bucket.app == cycle.app || (cycle.app == .codex && otherAgentSources.contains(bucket.app)))
+                    where (bucket.app == cycle.app || allowedExternal.contains(bucket.app))
                         && Self.isSubscriptionUsage(app: bucket.app, model: bucket.model) {
                     totals.add(bucket.usageTotals)
                     if bucket.allowanceSegmentID == cycle.latestAllowanceSegment?.id {
@@ -495,6 +513,23 @@ final class CycleUsageAggregator {
                 )
             }
             .sorted { $0.cycle.endAt > $1.cycle.endAt }
+    }
+
+    /// 兼容旧调用点：只额外计入 Codex 周期的便捷重载。
+    func summaries(
+        cycles: [QuotaCycleRecord],
+        kind: QuotaLimitKind,
+        app: UsageApp?,
+        otherAgentSources: Set<UsageApp> = [],
+        now: Date = Date()
+    ) -> [CycleUsageSummary] {
+        summaries(
+            cycles: cycles,
+            kind: kind,
+            app: app,
+            otherAgentSourcesByApp: otherAgentSources.isEmpty ? [:] : [.codex: otherAgentSources],
+            now: now
+        )
     }
 
     private func bestAllowanceSegment(

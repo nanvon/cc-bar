@@ -1311,25 +1311,29 @@ final class UsageService {
         if dshFailed {
             result.insert(.dsh)
         }
-        if result.contains(.codex) {
+        if result.contains(.codex) || result.contains(.antigravity) {
             result.formUnion(CycleUsageAggregator.otherAgentSourceApps)
         }
         return result
     }
 
-    /// 周期统计需要覆盖的来源。有 Codex 周期时，Pi / OpenCode / DSH 里的 Codex 订阅用量也要归集。
+    /// 周期统计需要覆盖的来源。有 Codex 或 Antigravity 周期时，Pi / OpenCode / DSH 里的对应订阅用量也要归集。
     nonisolated static func requiredCycleSourceApps(cycles: [QuotaCycleRecord]) -> Set<UsageApp> {
         let apps = Set(cycles.map(\.app)).intersection([.codex, .claude, .antigravity])
-        return apps.contains(.codex) ? apps.union(CycleUsageAggregator.otherAgentSourceApps) : apps
+        return (apps.contains(.codex) || apps.contains(.antigravity))
+            ? apps.union(CycleUsageAggregator.otherAgentSourceApps)
+            : apps
     }
 
-    /// 重建这些来源时要清桶重灌的周期：来源本身的周期，加上其他 Agent 归入的 Codex 周期。
+    /// 重建这些来源时要清桶重灌的周期：来源本身的周期，加上其他 Agent 归入的 Codex / Antigravity 周期。
     nonisolated static func cyclesToRebuild(
         _ cycles: [QuotaCycleRecord],
         for sourceApps: Set<UsageApp>
     ) -> [QuotaCycleRecord] {
         let includesOtherAgents = !sourceApps.isDisjoint(with: CycleUsageAggregator.otherAgentSourceApps)
-        return cycles.filter { sourceApps.contains($0.app) || (includesOtherAgents && $0.app == .codex) }
+        return cycles.filter {
+            sourceApps.contains($0.app) || (includesOtherAgents && ($0.app == .codex || $0.app == .antigravity))
+        }
     }
 
     nonisolated static func pendingInitialCycleRebuildApps(
@@ -3137,5 +3141,6 @@ final class UsageService {
         guard let appState else { return }
         appState.codexTodayCost = aggregator.todaySubscriptionCost(for: .codex)
         appState.claudeTodayCost = aggregator.todaySubscriptionCost(for: .claude)
+        appState.antigravityTodayCost = aggregator.todaySubscriptionCost(for: .antigravity)
     }
 }

@@ -2583,6 +2583,81 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertEqual(totalInput(otherAgentSources: allSources), 131)
     }
 
+    func testAntigravityCycleAttributionAndIndependentToggle() {
+        XCTAssertEqual(CycleUsageAggregator.cycleApp(app: .pi, model: "antigravity/gemini-3.8-flash"), .antigravity)
+        XCTAssertEqual(CycleUsageAggregator.cycleApp(app: .pi, model: "magpie/agy-cli/gemini-4-hydrogen"), .antigravity)
+        XCTAssertEqual(CycleUsageAggregator.cycleApp(app: .opencode, model: "antigravity-acp/gemini-4-hydrogen"), .antigravity)
+        XCTAssertEqual(CycleUsageAggregator.cycleApp(app: .dsh, model: "agy/gemini-4-neon"), .antigravity)
+        XCTAssertEqual(CycleUsageAggregator.cycleApp(app: .pi, model: "google-antigravity/gemini-4-hydrogen"), .antigravity)
+        XCTAssertNil(CycleUsageAggregator.cycleApp(app: .pi, model: "antigravity/gemini-4-argon"))
+        XCTAssertNil(CycleUsageAggregator.cycleApp(app: .pi, model: "magpie/agy-cli/gemini-4-carbon"))
+        XCTAssertNil(CycleUsageAggregator.cycleApp(app: .pi, model: "antigravity/claude-sonnet-5"))
+        XCTAssertNil(CycleUsageAggregator.cycleApp(app: .pi, model: "google/gemini-4-hydrogen"))
+
+        let start = Date(timeIntervalSince1970: 200_000)
+        let end = start.addingTimeInterval(5 * 3600)
+        let agyCycle = QuotaCycleRecord(
+            id: "antigravity:primary:user@example.com:5h:\(Int(end.timeIntervalSince1970))",
+            app: .antigravity,
+            accountKey: "primary:user@example.com",
+            limitKind: .fiveHour,
+            startAt: start,
+            endAt: end,
+            boundaryQuality: .observed,
+            firstSampleAt: start.addingTimeInterval(60),
+            lastSampleAt: start.addingTimeInterval(3600),
+            peakUsedPercent: 20,
+            lastUsedPercent: 20,
+            allowanceSegments: [QuotaCycleAllowanceSegment(id: "seg-1", startAt: start, endAt: nil, resetCount: 0, peakUsedPercent: 20)]
+        )
+        let segments = [
+            QuotaCycleAccountSegment(app: .antigravity, accountKey: "primary:user@example.com", startAt: start, endAt: nil)
+        ]
+        func makeEntry(_ app: UsageApp, _ key: String, _ model: String, input: Int) -> UsageEntry {
+            UsageEntry(
+                app: app,
+                conversationKey: key,
+                model: model,
+                speed: .standard,
+                timestamp: start.addingTimeInterval(600),
+                inputTokens: input,
+                outputTokens: 0,
+                cacheReadTokens: 0,
+                cacheCreationTokens: 0,
+                costUSD: Decimal(input) / 1000,
+                requestCount: 1
+            )
+        }
+
+        let aggregator = CycleUsageAggregator()
+        aggregator.ingest(
+            entries: [
+                makeEntry(.antigravity, "agy:1", "gemini-4-hydrogen", input: 100),
+                makeEntry(.pi, "pi:1", "magpie/agy-cli/gemini-4-hydrogen", input: 25),
+                makeEntry(.pi, "pi:2", "antigravity/gemini-4-argon", input: 40),
+                makeEntry(.opencode, "oc:1", "agy/gemini-3.8-flash", input: 10),
+                makeEntry(.dsh, "dsh:1", "antigravity-acp/gemini-4-hydrogen", input: 5)
+            ],
+            cycles: [agyCycle],
+            accountSegments: segments
+        )
+
+        func totalInput(_ sourcesByApp: [UsageApp: Set<UsageApp>]) -> Int? {
+            aggregator.summaries(
+                cycles: [agyCycle],
+                kind: .fiveHour,
+                app: .antigravity,
+                otherAgentSourcesByApp: sourcesByApp,
+                now: start.addingTimeInterval(3600)
+            ).first?.totals.inputTokens
+        }
+
+        XCTAssertEqual(totalInput([:]), 100)
+        XCTAssertEqual(totalInput([.codex: CycleUsageAggregator.otherAgentSourceApps]), 100)
+        XCTAssertEqual(totalInput([.antigravity: CycleUsageAggregator.otherAgentSourceApps]), 140)
+        XCTAssertEqual(totalInput([.antigravity: [.pi, .dsh]]), 130)
+    }
+
     func testSubscriptionUsageMatchesOnlyOfficialModels() {
         let codex: [(String, Bool)] = [
             ("gpt-6.1-sol", true),

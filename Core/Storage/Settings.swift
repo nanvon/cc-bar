@@ -298,6 +298,13 @@ final class SettingsStore {
         didSet { defaults.set(cycleIncludesOtherAgents, forKey: Keys.cycleIncludesOtherAgents) }
     }
 
+    /// 额度页用满预估和 Popover 花费中，Antigravity 是否计入 Pi / OpenCode / DSH 里的 Antigravity 订阅用量
+    /// （默认只算 Antigravity 自己的日志）。
+    /// 只影响展示：周期桶始终按来源 Agent 分别归集，切换不需要重建。
+    var cycleIncludesOtherAgentsForAntigravity: Bool {
+        didSet { defaults.set(cycleIncludesOtherAgentsForAntigravity, forKey: Keys.cycleIncludesOtherAgentsForAntigravity) }
+    }
+
     /// Pi 没有计时插件记录时，是否用请求总耗时（含首字等待）近似计算输出速度（默认关闭）。
     /// 只影响展示：精确与近似计时在桶里分开累计，切换不需要重建；插件记录的精确计时始终计入。
     var piEstimatedOutputSpeed: Bool {
@@ -466,6 +473,7 @@ final class SettingsStore {
         let tusRaw = defaults.string(forKey: Keys.tokenUnitStyle) ?? TokenUnitStyle.automatic.rawValue
         tokenUnitStyle = TokenUnitStyle(rawValue: tusRaw) ?? .automatic
         cycleIncludesOtherAgents = defaults.object(forKey: Keys.cycleIncludesOtherAgents) as? Bool ?? false
+        cycleIncludesOtherAgentsForAntigravity = defaults.object(forKey: Keys.cycleIncludesOtherAgentsForAntigravity) as? Bool ?? false
         piEstimatedOutputSpeed = defaults.object(forKey: Keys.piEstimatedOutputSpeed) as? Bool ?? false
         showServiceStatus = defaults.object(forKey: Keys.showServiceStatus) as? Bool ?? true
         showRecentConversations = defaults.object(forKey: Keys.showRecentConversations) as? Bool ?? true
@@ -722,6 +730,18 @@ final class SettingsStore {
         return CycleUsageAggregator.otherAgentSourceApps.intersection(enabledLocalUsageApps)
     }
 
+    var enabledAntigravitySubscriptionSources: Set<UsageApp> {
+        guard cycleIncludesOtherAgentsForAntigravity else { return [] }
+        return CycleUsageAggregator.otherAgentSourceApps.intersection(enabledLocalUsageApps)
+    }
+
+    var enabledCycleSubscriptionSourcesByApp: [UsageApp: Set<UsageApp>] {
+        [
+            .codex: enabledCodexSubscriptionSources,
+            .antigravity: enabledAntigravitySubscriptionSources
+        ]
+    }
+
     /// 统计页实际采用的可见性：在用户偏好之上叠加运行时账号可用性。
     /// Cursor 没有本地日志，账号消失后远端缓存不会再更新，继续展示只会留下一条空服务行；
     /// 但偏好本身保留，用户重新登录 Cursor 后自动恢复，不需要再去设置页打开一次。
@@ -883,6 +903,7 @@ final class SettingsStore {
         static let statsRankMetric = "ccbar.settings.statsRankMetric"
         static let tokenUnitStyle = "ccbar.settings.tokenUnitStyle"
         static let cycleIncludesOtherAgents = "ccbar.settings.cycleIncludesOtherAgents"
+        static let cycleIncludesOtherAgentsForAntigravity = "ccbar.settings.cycleIncludesOtherAgentsForAntigravity"
         static let piEstimatedOutputSpeed = "ccbar.settings.piEstimatedOutputSpeed"
         static let showServiceStatus = "ccbar.settings.showServiceStatus"
         static let showRecentConversations = "ccbar.settings.showRecentConversations"

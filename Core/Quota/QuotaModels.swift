@@ -61,7 +61,7 @@ nonisolated struct QuotaProviderDescriptor: Sendable, Hashable, Identifiable {
             vendor: "Google",
             logoName: "antigravity",
             fallback: "A",
-            showsCost: false,
+            showsCost: true,
             supportsMenuBar: true,
             supportsFloatingHUD: true
         ),
