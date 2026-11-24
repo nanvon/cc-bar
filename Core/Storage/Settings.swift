@@ -299,7 +299,7 @@ final class SettingsStore {
     }
 
     /// 额度页用满预估和 Popover 花费中，Antigravity 是否计入 Pi / OpenCode / DSH 里的 Antigravity 订阅用量
-    /// （默认只算 Antigravity 自己的日志）。
+    /// （默认关）。经 Magpie agy 插件的用量由 `AntigravityBridgeUsage` 提供，不受此开关影响。
     /// 只影响展示：周期桶始终按来源 Agent 分别归集，切换不需要重建。
     var cycleIncludesOtherAgentsForAntigravity: Bool {
         didSet { defaults.set(cycleIncludesOtherAgentsForAntigravity, forKey: Keys.cycleIncludesOtherAgentsForAntigravity) }

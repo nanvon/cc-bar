@@ -316,6 +316,12 @@ final class CycleUsageAggregator {
         return countsTowardAntigravityGeminiPool(model: identity.name)
     }
 
+    /// 经 Magpie 的 agy 插件转发的用量：插件对话库（`AntigravityBridgeUsage`）已覆盖时不再计日志里的这一份。
+    nonisolated static func isBridgedAntigravityModel(_ model: String) -> Bool {
+        let route = ModelIdentity.parse(model).route
+        return route.first?.hasPrefix("magpie") == true && route.contains("agy-cli")
+    }
+
     /// Antigravity 周期只接入 Gemini 共享池（5H / WK）：Argon / Carbon 有独立周额度池，
     /// Claude / GPT 走另一组额度，未识别模型（`unknown`）无法判断归属，都不计入。
     nonisolated static func countsTowardAntigravityGeminiPool(model: String) -> Bool {
@@ -341,7 +347,9 @@ final class CycleUsageAggregator {
                 .map { String(name.dropFirst($0.count)) } ?? name
             guard !bare.contains("/") else { return false }
             return ["gpt-", "codex-", "chatgpt-", "o1", "o3", "o4"].contains { bare.hasPrefix($0) }
-        case .pi, .opencode, .dsh, .cursor, .antigravity:
+        case .antigravity:
+            return countsTowardAntigravityGeminiPool(model: model)
+        case .pi, .opencode, .dsh, .cursor:
             return true
         }
     }
@@ -465,14 +473,18 @@ final class CycleUsageAggregator {
 
     /// 只计订阅消耗：Codex / Claude 自己日志里非订阅模型的桶不计入（见 `isSubscriptionUsage`）。
     /// - Parameter otherAgentSourcesByApp: 按目标服务（`.codex` / `.antigravity`）指定额外计入周期的来源；未指定时只计服务自己的日志。
+    /// - Parameter bridgeBuckets: agy 插件对话库归入 Antigravity 周期的用量，始终计入。
+    /// - Parameter bridgeCoverageStart: 对话库最早用量时间；之后结束的周期不再计日志里经 Magpie 转发的 agy 用量。
     func summaries(
         cycles: [QuotaCycleRecord],
         kind: QuotaLimitKind,
         app: UsageApp?,
         otherAgentSourcesByApp: [UsageApp: Set<UsageApp>],
+        bridgeBuckets: [CycleUsageBucket] = [],
+        bridgeCoverageStart: Date? = nil,
         now: Date = Date()
     ) -> [CycleUsageSummary] {
-        let grouped = Dictionary(grouping: buckets.values, by: \.cycleID)
+        let grouped = Dictionary(grouping: Array(buckets.values) + bridgeBuckets, by: \.cycleID)
         return cycles
             .filter { $0.limitKind == kind }
             .filter { app == nil || $0.app == app }
@@ -481,9 +493,13 @@ final class CycleUsageAggregator {
                 var currentAllowanceTotals = UsageTotals.zero
                 var quality: CycleUsageQuality = cycle.boundaryQuality == .observed ? .exact : .estimated
                 let allowedExternal = otherAgentSourcesByApp[cycle.app] ?? []
+                let excludesBridged = cycle.app == .antigravity
+                    && (bridgeCoverageStart.map { $0 < cycle.endAt } ?? false)
                 for bucket in grouped[cycle.id] ?? []
                     where (bucket.app == cycle.app || allowedExternal.contains(bucket.app))
-                        && Self.isSubscriptionUsage(app: bucket.app, model: bucket.model) {
+                        && Self.isSubscriptionUsage(app: bucket.app, model: bucket.model)
+                        && !(excludesBridged && bucket.app != .antigravity
+                            && Self.isBridgedAntigravityModel(bucket.model)) {
                     totals.add(bucket.usageTotals)
                     if bucket.allowanceSegmentID == cycle.latestAllowanceSegment?.id {
                         currentAllowanceTotals.add(bucket.usageTotals)

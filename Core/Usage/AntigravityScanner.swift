@@ -494,7 +494,7 @@ nonisolated enum AntigravityScanner {
         return url.path
     }
 
-    private static func makeEntry(conversationID: String, record: UsageRecord) -> UsageEntry {
+    static func makeEntry(conversationID: String, record: UsageRecord) -> UsageEntry {
         let timestamp = record.timestamp ?? Date(timeIntervalSince1970: 0)
         let model = record.model ?? "unknown"
         let total = record.input + record.output + record.cacheRead + record.cacheCreation

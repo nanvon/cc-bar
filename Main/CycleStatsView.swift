@@ -222,12 +222,7 @@ struct QuotaCycleCardsSection: View {
         kind: QuotaLimitKind,
         app: UsageApp?
     ) -> [CycleUsageSummary] {
-        appState.usageService.cycleAggregator.summaries(
-            cycles: appState.quotaCycles.records,
-            kind: kind,
-            app: app,
-            otherAgentSourcesByApp: SettingsStore.shared.enabledCycleSubscriptionSourcesByApp
-        )
+        appState.cycleSummaries(kind: kind, app: app)
     }
 
     private func accountKey(for app: UsageApp) -> String? {
@@ -240,6 +235,24 @@ struct QuotaCycleCardsSection: View {
 }
 
 private extension AppState {
+    /// 周期卡与历史周期共用的汇总，含 agy 插件对话库归入 Antigravity 周期的用量。
+    func cycleSummaries(kind: QuotaLimitKind, app: UsageApp?, now: Date = Date()) -> [CycleUsageSummary] {
+        let bridge = usageService.antigravityBridge
+        return usageService.cycleAggregator.summaries(
+            cycles: quotaCycles.records,
+            kind: kind,
+            app: app,
+            otherAgentSourcesByApp: SettingsStore.shared.enabledCycleSubscriptionSourcesByApp,
+            bridgeBuckets: app == nil || app == .antigravity
+                ? bridge.cycleBuckets(
+                    cycles: quotaCycles.records, kind: kind, accountSegments: quotaCycles.accountSegments
+                )
+                : [],
+            bridgeCoverageStart: bridge.coverageStart,
+            now: now
+        )
+    }
+
     /// 额度周期归属的主账号；未登录或该服务没有额度周期时为 nil。周期卡与历史周期共用。
     func cycleAccountKey(for app: UsageApp) -> String? {
         switch app {
@@ -313,13 +326,7 @@ struct QuotaCycleHistorySection: View {
     private func completedSummaries(app: UsageApp) -> [CycleUsageSummary] {
         guard let accountKey = appState.cycleAccountKey(for: app) else { return [] }
         let now = Date()
-        let summaries = appState.usageService.cycleAggregator.summaries(
-            cycles: appState.quotaCycles.records,
-            kind: kind,
-            app: app,
-            otherAgentSourcesByApp: SettingsStore.shared.enabledCycleSubscriptionSourcesByApp,
-            now: now
-        )
+        let summaries = appState.cycleSummaries(kind: kind, app: app, now: now)
         return Array(
             summaries
                 .filter { $0.cycle.accountKey == accountKey && $0.cycle.isComplete(at: now) && $0.hasLocalUsage }

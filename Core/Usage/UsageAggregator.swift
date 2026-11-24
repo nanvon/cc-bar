@@ -158,11 +158,15 @@ final class UsageAggregator {
 
     /// 其他 Agent 里归入该额度服务订阅的本地用量费用（归属规则同 `CycleUsageAggregator.cycleApp`），
     /// 不含该服务自己的日志。
-    func otherAgentSubscriptionCost(for quotaApp: UsageApp, sources: Set<UsageApp>, from: Date, to: Date) -> Decimal {
+    /// - Parameter excludingBridged: 不计经 Magpie 转发的 agy 用量（已由 `AntigravityBridgeUsage` 提供）。
+    func otherAgentSubscriptionCost(
+        for quotaApp: UsageApp, sources: Set<UsageApp>, from: Date, to: Date, excludingBridged: Bool = false
+    ) -> Decimal {
         var sum: Decimal = 0
         for b in localBuckets.values
         where b.app != quotaApp && sources.contains(b.app) && b.day >= from && b.day < to
-            && CycleUsageAggregator.cycleApp(app: b.app, model: b.model) == quotaApp {
+            && CycleUsageAggregator.cycleApp(app: b.app, model: b.model) == quotaApp
+            && !(excludingBridged && CycleUsageAggregator.isBridgedAntigravityModel(b.model)) {
             sum += b.costUSD
         }
         return sum

@@ -77,6 +77,7 @@ nonisolated struct UsageLogPathMatcher: Sendable {
             files.append(database.deletingLastPathComponent()
                 .appendingPathComponent(database.lastPathComponent + "-wal"))
         }
+        let bridgeRoots = apps.contains(.antigravity) ? roots.antigravityBridgeRoots : []
         // FSEvents 上报的是解析过符号链接的真实路径，两种写法都收下。
         func variants(_ urls: [URL]) -> [String] {
             Array(Set(urls.flatMap { [$0.path, $0.resolvingSymlinksInPath().path] }))
@@ -84,7 +85,7 @@ nonisolated struct UsageLogPathMatcher: Sendable {
         return UsageLogPathMatcher(
             directories: variants(directories),
             files: Set(variants(files)),
-            databaseDirectories: variants(AntigravityScanner.conversationDirectories(roots: antigravityRoots))
+            databaseDirectories: variants(AntigravityScanner.conversationDirectories(roots: antigravityRoots + bridgeRoots))
         )
     }
 
@@ -161,6 +162,8 @@ final class UsageLogWatcher {
             // Antigravity：`~/.gemini/antigravity*/conversations` 与 `~/.config/antigravity`。
             (.antigravity, ".gemini"),
             (.antigravity, ".config/antigravity"),
+            // Magpie 的 agy 插件数据根。
+            (.antigravity, ".local/state/magpie-agy-bridge/agy-home"),
         ]
         return candidates.compactMap { app, path in
             apps.contains(app) ? home.appendingPathComponent(path, isDirectory: true).path : nil

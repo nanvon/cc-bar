@@ -289,12 +289,15 @@ struct PopoverRootView: View {
     }
 
     private func otherAgentSubscriptionCost(for app: QuotaApp, from: Date, to: Date) -> Decimal {
-        guard let usageApp = app.usageApp,
-              let sources = SettingsStore.shared.enabledCycleSubscriptionSourcesByApp[usageApp],
+        guard let usageApp = app.usageApp else { return 0 }
+        let bridge = appState.usageService.antigravityBridge
+        let bridgeCost = usageApp == .antigravity ? bridge.cost(from: from, to: to) : 0
+        guard let sources = SettingsStore.shared.enabledCycleSubscriptionSourcesByApp[usageApp],
               !sources.isEmpty
-        else { return 0 }
-        return appState.usageService.aggregator.otherAgentSubscriptionCost(
-            for: usageApp, sources: sources, from: from, to: to
+        else { return bridgeCost }
+        return bridgeCost + appState.usageService.aggregator.otherAgentSubscriptionCost(
+            for: usageApp, sources: sources, from: from, to: to,
+            excludingBridged: usageApp == .antigravity && (bridge.coverageStart.map { $0 < to } ?? false)
         )
     }
 

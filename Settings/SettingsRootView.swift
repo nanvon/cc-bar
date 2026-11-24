@@ -448,8 +448,8 @@ struct SettingsRootView: View {
             PrefsRow(
                 label: "Include Antigravity subscription usage in Pi, OpenCode and DSH",
                 chinese: "包含 Pi、OpenCode、DSH 中的 Antigravity 订阅用量",
-                desc: "Adds Antigravity subscription usage from enabled agents to the primary Antigravity account in quota estimates and popover spend.",
-                chineseDesc: "将已启用的 Pi、OpenCode 和 DSH 中的 Antigravity 订阅用量计入主账号的额度预估和弹出面板花费"
+                desc: "Adds usage from enabled agents that connect to Antigravity directly to the primary account in quota estimates and popover spend. Usage through the Magpie agy plugin is always included.",
+                chineseDesc: "将已启用的 Pi、OpenCode 和 DSH 直连 Antigravity 的用量计入主账号的额度预估和弹出面板花费。经 Magpie agy 插件的用量始终计入"
             ) {
                 Toggle("", isOn: Binding(
                     get: { settings.cycleIncludesOtherAgentsForAntigravity },
@@ -1264,8 +1264,8 @@ struct SettingsRootView: View {
             isDetected = info.signedIn || cursorKeychainRequired
         case .antigravity:
             sourceLines.append(tr(
-                "Usage: reads conversation records of the Antigravity app, IDE and CLI in ~/.gemini and calculates tokens and cost on this Mac. Model names in the app's records are partly inferred, so costs are estimates.",
-                "用量：读取 ~/.gemini 中 Antigravity App、IDE 和 CLI 的对话记录，在本机计算 Token 和费用。App 记录里的模型名部分靠推断，费用为估算。"
+                "Usage: reads conversation records of the Antigravity app, IDE and CLI in ~/.gemini and calculates tokens and cost on this Mac. Model names in the app's records are partly inferred, so costs are estimates. Quota estimates and popover spend also read the Magpie agy plugin's conversation records in ~/.local/state/magpie-agy-bridge.",
+                "用量：读取 ~/.gemini 中 Antigravity App、IDE 和 CLI 的对话记录，在本机计算 Token 和费用。App 记录里的模型名部分靠推断，费用为估算。额度预估和弹出面板花费还读取 ~/.local/state/magpie-agy-bridge 中 Magpie agy 插件的对话记录。"
             ))
             isDetected = info.signedIn || localRecordState(for: .antigravity) != .missing
         case .commandCode:

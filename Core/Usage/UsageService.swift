@@ -17,6 +17,8 @@ nonisolated struct UsageScanRoots: Sendable {
     var dshAdditionalRoots: [URL] = []
     /// Antigravity 数据根（含 `conversations/`）。默认空：测试不注入就不会读到真实对话库。
     var antigravityRoots: [URL] = []
+    /// agy 插件数据根，只供额度预估与 Popover 花费。默认空，理由同上。
+    var antigravityBridgeRoots: [URL] = []
 
     /// DSH / DS Bot 的全部扫描根。
     var dshRoots: [URL] { [dshRoot] + dshAdditionalRoots }
@@ -35,7 +37,8 @@ nonisolated struct UsageScanRoots: Sendable {
             opencodeDatabaseURL: OpencodeScanner.defaultDatabaseURL(),
             dshRoot: DshSessionScanner.defaultRoot,
             dshAdditionalRoots: [DshSessionScanner.dsBotRoot],
-            antigravityRoots: AntigravityScanner.defaultRoots()
+            antigravityRoots: AntigravityScanner.defaultRoots(),
+            antigravityBridgeRoots: AntigravityBridgeUsage.defaultRoots()
         )
     }
 }
@@ -170,6 +173,7 @@ final class UsageService {
     let aggregator = UsageAggregator()
     let conversationAggregator = ConversationAggregator()
     let cycleAggregator = CycleUsageAggregator()
+    let antigravityBridge: AntigravityBridgeUsage
     private(set) var isScanning = false
     private(set) var isCycleRebuilding = false
     private(set) var isRefreshingPricingCatalog = false
@@ -279,6 +283,9 @@ final class UsageService {
         self.backfillURL = backfillURL
         self.cursorCacheDirectory = cursorCacheDirectory
         self.localUsageApps = localUsageApps
+        antigravityBridge = AntigravityBridgeUsage(
+            roots: roots.antigravityBridgeRoots, cacheDirectory: cursorCacheDirectory
+        )
     }
 
     /// 统计页读取的完整 Cursor 自然日覆盖范围。只有身份匹配的独立远端缓存会进入此集合。
@@ -472,6 +479,7 @@ final class UsageService {
             CursorUsageCache.load(in: cursorCacheDirectory)
         }.value
         cursorUsageCache = cursorPayload
+        await antigravityBridge.refresh(scans: false)
 
         // 个人历史用量一次性补录：见 ImportedUsageBackfill 注释。这里先合并一次保证扫描前即可展示；
         // runScan 每轮还会按同样规则重新合并，兜底缓存失效清空聚合器的情况。文件不存在时是纯 no-op。
@@ -2468,6 +2476,7 @@ final class UsageService {
         let opencode = await opencodeTask
         let dsh = await dshTask
         let antigravity = await antigravityTask
+        await antigravityBridge.refresh(scans: apps.contains(.antigravity))
         guard localUsageApps().isSuperset(of: apps) else {
             scanQueued = true
             return false
