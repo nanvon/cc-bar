@@ -76,6 +76,12 @@ nonisolated struct QuotaTimelinePeriod: Sendable, Equatable, Identifiable {
     }
 }
 
+nonisolated struct WeeklyToFiveHourRatio: Sendable, Equatable {
+    var ratio: Double
+    var fiveHourConsumedPercent: Int
+    var weeklyConsumedPercent: Int
+}
+
 nonisolated struct QuotaHistoryPayload: Sendable, Equatable, Codable {
     static let currentVersion = 3
 
@@ -150,6 +156,54 @@ enum QuotaHistoryStore {
 
     nonisolated static func seriesKey(accountKey: String, limitKind: QuotaLimitKind) -> String {
         "\(accountKey)|\(limitKind.rawValue)"
+    }
+
+    /// 按最近保留的官方百分比变动事件，估算 1 个周额度相当于多少个 5 小时额度。
+    /// 仅统计未跨窗的净消耗（过滤掉 `deltaPercent >= 20` 的重置恢复）；当周额度累计消耗
+    /// 不足 `minimumWeeklyConsumedPercent` 时返回 nil，避免整数百分比取整放大早期误差。
+    nonisolated static func weeklyToFiveHourRatio(
+        payload: QuotaHistoryPayload,
+        accountKey: String,
+        minimumWeeklyConsumedPercent: Int = 5
+    ) -> WeeklyToFiveHourRatio? {
+        let fiveHourEvents = payload.events.filter {
+            $0.accountKey == accountKey && $0.limitKind == .fiveHour && $0.deltaPercent < 20
+        }
+        let weeklyEvents = payload.events.filter {
+            $0.accountKey == accountKey && $0.limitKind == .weekly && $0.deltaPercent < 20
+        }
+        guard let firstFiveHour = fiveHourEvents.map(\.sampledAt).min(),
+              let firstWeekly = weeklyEvents.map(\.sampledAt).min()
+        else { return nil }
+
+        // 若某侧数据显著晚于另一侧才开始积累（超过 1 天），从较晚一侧前 5 小时起算，
+        // 既避免历史单侧数据拉偏比值，也保留周额度首个 1% 掉额对应的 5H 消耗。
+        let overlapCutoff: Date
+        if abs(firstFiveHour.timeIntervalSince(firstWeekly)) > 24 * 60 * 60 {
+            overlapCutoff = max(firstFiveHour, firstWeekly).addingTimeInterval(-5 * 60 * 60)
+        } else {
+            overlapCutoff = .distantPast
+        }
+
+        let fiveHourConsumed = fiveHourEvents
+            .filter { $0.sampledAt >= overlapCutoff }
+            .reduce(0) { $0 - $1.deltaPercent }
+        let weeklyConsumed = weeklyEvents
+            .filter { $0.sampledAt >= overlapCutoff }
+            .reduce(0) { $0 - $1.deltaPercent }
+
+        guard fiveHourConsumed > 0, weeklyConsumed >= minimumWeeklyConsumedPercent else {
+            return nil
+        }
+
+        let ratio = Double(fiveHourConsumed) / Double(weeklyConsumed)
+        guard ratio > 0.5, ratio < 100 else { return nil }
+
+        return WeeklyToFiveHourRatio(
+            ratio: ratio,
+            fiveHourConsumedPercent: fiveHourConsumed,
+            weeklyConsumedPercent: weeklyConsumed
+        )
     }
 
     /// 将持久化的变动事件与该系列最新采样投影为时间线。
