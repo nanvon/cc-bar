@@ -110,6 +110,7 @@
 		49C1B32000000000000FAABB /* PiJSONLScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B32000000000000FAAAA /* PiJSONLScanner.swift */; };
 		A6A1B90000000000000FAABB /* AntigravityScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6A1B90000000000000FAAAA /* AntigravityScanner.swift */; };
 		A6A1B90000000000000FCABB /* AntigravityBridgeUsage.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6A1B90000000000000FCAAA /* AntigravityBridgeUsage.swift */; };
+		A6A1B90000000000000FCADD /* MagpieUsageIndex.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6A1B90000000000000FCACC /* MagpieUsageIndex.swift */; };
 		49C1B90000000000000FAABB /* OpencodeScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B90000000000000FAAAA /* OpencodeScanner.swift */; };
 		49C1B155000000000001AABB /* UsageAggregator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B155000000000001AAAA /* UsageAggregator.swift */; };
 		49C1B156000000000001AABB /* UsageService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B156000000000001AAAA /* UsageService.swift */; };
@@ -279,6 +280,7 @@
 		49C1BE1C000000000001AAAA /* DshDiagnosticsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DshDiagnosticsTests.swift; sourceTree = "<group>"; };
 		A6A1B90000000000000FAAAA /* AntigravityScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AntigravityScanner.swift; sourceTree = "<group>"; };
 		A6A1B90000000000000FCAAA /* AntigravityBridgeUsage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AntigravityBridgeUsage.swift; sourceTree = "<group>"; };
+		A6A1B90000000000000FCACC /* MagpieUsageIndex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MagpieUsageIndex.swift; sourceTree = "<group>"; };
 		49C1B90000000000000FAAAA /* OpencodeScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpencodeScanner.swift; sourceTree = "<group>"; };
 		49C1B155000000000001AAAA /* UsageAggregator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageAggregator.swift; sourceTree = "<group>"; };
 		49C1B16A000000000001AAAA /* ModelProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelProvider.swift; sourceTree = "<group>"; };
@@ -551,6 +553,7 @@
 				49C1B32000000000000FAAAA /* PiJSONLScanner.swift */,
 				A6A1B90000000000000FAAAA /* AntigravityScanner.swift */,
 				A6A1B90000000000000FCAAA /* AntigravityBridgeUsage.swift */,
+				A6A1B90000000000000FCACC /* MagpieUsageIndex.swift */,
 				49C1B90000000000000FAAAA /* OpencodeScanner.swift */,
 				49C1BE06000000000001AAAA /* DshZstdFrames.swift */,
 				49C1BE07000000000001AAAA /* DshZstdDecoder.swift */,
@@ -859,6 +862,7 @@
 				49C1B32000000000000FAABB /* PiJSONLScanner.swift in Sources */,
 				A6A1B90000000000000FAABB /* AntigravityScanner.swift in Sources */,
 				A6A1B90000000000000FCABB /* AntigravityBridgeUsage.swift in Sources */,
+				A6A1B90000000000000FCADD /* MagpieUsageIndex.swift in Sources */,
 				49C1B90000000000000FAABB /* OpencodeScanner.swift in Sources */,
 				49C1BE09000000000001AAAA /* DshZstdFrames.swift in Sources */,
 				49C1BE0A000000000001AAAA /* DshZstdDecoder.swift in Sources */,

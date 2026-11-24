@@ -150,7 +150,8 @@ nonisolated enum ModelProvider: String, Sendable, CaseIterable {
     case workBuddy
     /// Cursor 渠道（`cursor/*`）与 Cursor 远端计量。
     case cursor
-    /// Antigravity 服务内的全部用量，包括其中调用的 Claude 模型。
+    /// Antigravity 服务内的全部用量，以及其他 Agent 经 Antigravity 渠道（`agy-cli/*` 等）的用量，
+    /// 包括其中调用的 Claude 模型。
     case antigravity
     case other
 
@@ -181,6 +182,8 @@ nonisolated enum ModelProvider: String, Sendable, CaseIterable {
             // Magpie 转发的 Codex 渠道（`magpie/codex/...`、`magpie-responses/codex/...`）。
             ("codex/", .openAI),
             ("anthropic/", .anthropic),
+            // Magpie 转发的 Claude 订阅渠道。
+            ("claude/", .anthropic),
             ("deepseek/", .deepseek),
             ("commandcode/", .commandCode),
             ("command-code/", .commandCode),
@@ -191,6 +194,11 @@ nonisolated enum ModelProvider: String, Sendable, CaseIterable {
         ]
         for (prefix, provider) in prefixes where m.hasPrefix(prefix) {
             return provider
+        }
+        // Antigravity 订阅渠道（`agy-cli/...` 等），包括经它调用的 Claude 模型。
+        if let slash = m.firstIndex(of: "/"),
+           CycleUsageAggregator.antigravityRouteSegments.contains(String(m[..<slash])) {
+            return .antigravity
         }
         // OpenCode 的渠道段都以 `opencode` 开头：`opencode-go/`、`opencode/`、`opencode-zen-free/`、
         // 以及 DSH 里自建的 `opencode2dsh/`。
@@ -207,13 +215,14 @@ nonisolated enum ModelProvider: String, Sendable, CaseIterable {
 
         switch app {
         case .codex: return .openAI
-        case .claude: return .anthropic
+        // 带渠道段却没有匹配到的（如 Claude 3p 渠道未知的 `3p/...`）不算 Anthropic。
+        case .claude: return m.contains("/") ? .other : .anthropic
         case .pi, .opencode, .dsh, .antigravity, .cursor: return .other
         }
     }
 
     /// 转发网关前缀，归类前去掉，只去一层。
-    private static let gatewayPrefixes = ["magpie/", "magpie-responses/", "magpie-dsbot/"]
+    private static let gatewayPrefixes = ["magpie/", "magpie-responses/", "magpie-anthropic/", "magpie-dsbot/"]
 
     /// 双语显示名。品牌名中英一致，「其他」单独翻译。
     @MainActor

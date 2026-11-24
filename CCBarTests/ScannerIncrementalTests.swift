@@ -667,6 +667,80 @@ final class ScannerIncrementalTests: XCTestCase {
         XCTAssertNotNil(filtered.newState[newer.path])
     }
 
+    // MARK: - Claude 3p 渠道（Magpie 请求记录）
+
+    private func claude3pLine(id: String, model: String, at date: Date) -> String {
+        let time = ISO8601DateFormatter().string(from: date)
+        return #"{"type":"assistant","entrypoint":"claude-desktop-3p","sessionId":"magpie-session","cwd":"/tmp/ccbar-fixture","timestamp":"\#(time)","message":{"id":"\#(id)","model":"\#(model)","stop_reason":"end_turn","content":[{"type":"text"}],"usage":{"input_tokens":10,"output_tokens":5,"speed":"standard"}}}"#
+    }
+
+    private func magpieLine(id: String, provider: String, model: String) -> String {
+        #"{"agent":"claude-desktop","provider":"\#(provider)","model":"\#(model)","status":200,"response_id":"\#(id)"}"#
+    }
+
+    /// 按记录还原渠道和实际模型（含改派）；Claude 订阅渠道保持裸名；旧消息没有记录时渠道记为未知。
+    func testClaude3pModelsResolveFromMagpieRecords() throws {
+        let projects = tempDir.appendingPathComponent("projects", isDirectory: true)
+        let container = projects.appendingPathComponent("magpie", isDirectory: true)
+        try FileManager.default.createDirectory(at: container, withIntermediateDirectories: true)
+        let usage = tempDir.appendingPathComponent("magpie-usage.jsonl")
+        let old = Date().addingTimeInterval(-3600)
+        try writeLines([
+            claude3pLine(id: "m1", model: "kimi-k3.1-pro-max", at: old),
+            claude3pLine(id: "m2", model: "claude-haiku-5-5", at: old),
+            claude3pLine(id: "m3", model: "claude-opus-5-5", at: old),
+            claude3pLine(id: "m4", model: "claude-sonnet-5-5", at: old),
+        ], to: container.appendingPathComponent("magpie-session.jsonl"))
+        try writeLines([
+            magpieLine(id: "m1", provider: "trae-cn", model: "kimi-k3.1-pro-max"),
+            magpieLine(id: "m2", provider: "agy-cli", model: "gemini-4-hydrogen"),
+            magpieLine(id: "m3", provider: "claude", model: "claude-opus-5-5"),
+        ], to: usage)
+
+        let result = ClaudeJSONLScanner.scan(
+            previous: [:], seenMessageIds: [], root: projects,
+            conversationIndex: ConversationTitleIndex.ClaudeIndex(titles: [:], projects: [:]),
+            magpieUsageURL: usage
+        )
+        XCTAssertEqual(Set(result.entries.map(\.model)), [
+            "magpie/trae-cn/kimi-k3.1-pro-max", "magpie/agy-cli/gemini-4-hydrogen",
+            "claude-opus-5-5", "3p/claude-sonnet-5-5",
+        ])
+        XCTAssertEqual(result.entries.filter {
+            CycleUsageAggregator.isSubscriptionUsage(app: .claude, model: $0.model)
+        }.map(\.model), ["claude-opus-5-5"])
+        XCTAssertFalse(result.hasDeferredMessages)
+    }
+
+    /// 记录晚于对话日志写入：刚产生的消息留到下一轮，记录到达后只入账一次。
+    func testClaude3pMessageWaitsForMagpieRecord() throws {
+        let projects = tempDir.appendingPathComponent("projects", isDirectory: true)
+        let container = projects.appendingPathComponent("magpie", isDirectory: true)
+        try FileManager.default.createDirectory(at: container, withIntermediateDirectories: true)
+        let usage = tempDir.appendingPathComponent("magpie-late.jsonl")
+        let now = Date()
+        try writeLines([
+            claude3pLine(id: "w1", model: "glm-5.3-flashx-max", at: now),
+            claude3pLine(id: "w2", model: "kimi-k3.1-pro-max", at: now),
+        ], to: container.appendingPathComponent("magpie-session.jsonl"))
+        try writeLines([magpieLine(id: "w2", provider: "trae-cn", model: "kimi-k3.1-pro-max")], to: usage)
+        let index = ConversationTitleIndex.ClaudeIndex(titles: [:], projects: [:])
+
+        let first = ClaudeJSONLScanner.scan(
+            previous: [:], seenMessageIds: [], root: projects, conversationIndex: index, magpieUsageURL: usage
+        )
+        XCTAssertEqual(first.entries.map(\.model), ["magpie/trae-cn/kimi-k3.1-pro-max"])
+        XCTAssertTrue(first.hasDeferredMessages)
+
+        try appendLines([magpieLine(id: "w1", provider: "trae-cn", model: "glm-5.3-flashx-max")], to: usage)
+        let second = ClaudeJSONLScanner.scan(
+            previous: first.newState, seenMessageIds: first.newSeenIds, root: projects,
+            conversationIndex: index, magpieUsageURL: usage
+        )
+        XCTAssertEqual(second.entries.map(\.model), ["magpie/trae-cn/glm-5.3-flashx-max"])
+        XCTAssertFalse(second.hasDeferredMessages)
+    }
+
     // MARK: - 首字延迟与输出速度
 
     private func writeLines(_ lines: [String], to url: URL) throws {

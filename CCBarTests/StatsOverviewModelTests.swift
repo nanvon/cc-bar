@@ -188,6 +188,14 @@ final class StatsOverviewModelTests: XCTestCase {
         XCTAssertEqual(ModelProvider.resolve(app: .dsh, model: "magpie-responses/codex/gpt-6.1-sol"), .openAI)
         XCTAssertEqual(ModelProvider.resolve(app: .dsh, model: "magpie-dsbot/trae-cn/glm-5.3-max"), .trae)
         XCTAssertEqual(ModelProvider.resolve(app: .dsh, model: "magpie/group/dsh"), .other)
+        XCTAssertEqual(ModelProvider.resolve(app: .pi, model: "magpie/agy-cli/gemini-4-hydrogen"), .antigravity)
+        XCTAssertEqual(ModelProvider.resolve(app: .dsh, model: "magpie-anthropic/agy-cli/gemini-4-hydrogen"), .antigravity)
+        XCTAssertEqual(ModelProvider.resolve(app: .claude, model: "magpie/agy-cli/claude-sonnet-5-5"), .antigravity)
+        XCTAssertEqual(ModelProvider.resolve(app: .claude, model: "magpie/trae-cn/kimi-k3.1-pro-max"), .trae)
+        XCTAssertEqual(ModelProvider.resolve(app: .claude, model: "magpie/workbuddy/deepseek-v4.1-flash"), .workBuddy)
+        XCTAssertEqual(ModelProvider.resolve(app: .claude, model: "magpie/typesafe/jev-latest"), .other)
+        XCTAssertEqual(ModelProvider.resolve(app: .claude, model: "3p/claude-sonnet-5-5"), .other)
+        XCTAssertEqual(ModelProvider.resolve(app: .claude, model: "claude-opus-5-5"), .anthropic)
         XCTAssertEqual(ModelProvider.resolve(app: .dsh, model: "trae-cn/glm-5.3-flashx-max"), .trae)
     }
 

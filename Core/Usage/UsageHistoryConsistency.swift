@@ -471,10 +471,11 @@ nonisolated struct UsageMessageLedgerPayload: Sendable, Codable, Equatable {
 /// v2（Pi / Antigravity）：新增输出速度，重建一次给现存日志补上耗时。
 /// v3（Pi）：计时插件的精确计时与请求总耗时分开累计，重建一次把已采集的总耗时标为近似值。
 /// v3（Claude）：跨轮扫描的消息补上计时，识别桌面端续接对话；重建一次补齐现存日志。
+/// v4（Claude）：Claude 3p 按 Magpie 请求记录还原渠道与实际模型；重建一次修正现存日志的归属。
 /// v3（Codex）：子智能体消息打断的请求重新计时，读取 `cache_write_input_tokens`；重建一次修正现存日志。
 nonisolated enum UsageStatsRules {
     static let versions: [UsageApp: Int] = [
-        .claude: 3,
+        .claude: 4,
         .codex: 3,
         .pi: 3,
         .opencode: 2,

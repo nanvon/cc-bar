@@ -34,6 +34,7 @@ enum ClaudeJSONLScanner {
             seenMessageIds: seenMessageIds,
             root: defaultRoot(),
             conversationIndex: ConversationTitleIndex.claudeIndex(),
+            magpieUsageURL: MagpieUsageIndex.defaultURL(),
             onProgress: onProgress
         )
     }
@@ -41,6 +42,7 @@ enum ClaudeJSONLScanner {
     /// 可注入日志根目录与标题索引，供脱敏 JSONL fixture 测试真实 byte-offset 扫描链路。
     /// - Parameter knownIDs: 消息账本里已计入的 message.id 摘要，与 `seenMessageIds` 一起去重。
     /// - Parameter knownOwner: 按摘要查之前扫描中计入它的对话 key，用于识别桌面端续接的对话。
+    /// - Parameter magpieUsageURL: Magpie 请求记录，用于还原 Claude 3p 请求的渠道和实际模型；nil 时不读取。
     /// - Parameter minimumMtime: 非 nil 时只扫修改时间不早于该时刻的文件（周期受限重建用）。
     /// - Parameter onProgress: 非 nil 时按约每 50 个文件回报一次扫描进度。
     nonisolated static func scan(
@@ -50,10 +52,12 @@ enum ClaudeJSONLScanner {
         knownOwner: (UInt64) -> String? = { _ in nil },
         root: URL,
         conversationIndex: ConversationTitleIndex.ClaudeIndex,
+        magpieUsageURL: URL? = nil,
         minimumMtime: Date? = nil,
         onProgress: ScanProgressCallback? = nil
     ) -> Result {
         let enumeration = JSONLDirectoryEnumerator.enumerate(at: root, minimumMtime: minimumMtime)
+        let magpie = MagpieUsageIndex.shared.snapshot(url: magpieUsageURL)
         // 续接 / 分叉对话会把原对话的消息（同一 message.id）复制进新文件。全局去重只计第一次
         // 读到的那条，所以按创建时间读文件，让消息归给原对话；增量扫描先读到原对话也是这个结果，
         // 两条路径的对话归属才一致。
@@ -249,6 +253,21 @@ enum ClaudeJSONLScanner {
                 hasDeferredMessages = true
             }
 
+            // Magpie 的请求记录可能晚于对话日志写入。等待记录的消息本轮不入账，读取位置退回其中最早一条的
+            // 第一行；后面已入账的消息下一轮由去重跳过。
+            let awaiting = candidates.values.filter {
+                $0.isClaude3p && isComplete($0) && magpie.routes[$0.messageId] == nil
+                    && magpie.isAwaitingRecord(messageTime: $0.timestamp)
+            }
+            if let first = awaiting.compactMap({ message in
+                messageStartOffsets[message.messageId].map { (id: message.messageId, offset: $0) }
+            }).min(by: { $0.offset < $1.offset }) {
+                for message in awaiting { candidates.removeValue(forKey: message.messageId) }
+                timingTracker.rewind(to: first.id)
+                newOffset = min(newOffset, first.offset)
+                hasDeferredMessages = true
+            }
+
             for (id, p) in candidates {
                 // 流式中间行可能暂时没有 speed / stop_reason。此时既不能入账，也不能把
                 // message.id 放进全局 seen；等待后续完整行追加后再由下一次增量扫描接收。
@@ -258,9 +277,10 @@ enum ClaudeJSONLScanner {
                 ledger["claude:\(p.sessionID)", default: []].append(digest)
                 owners[digest] = "claude:\(p.sessionID)"
                 let day = UsageDay.startOfDay(for: p.timestamp)
+                let model = modelIdentity(for: p, magpie: magpie)
                 let cost = Pricing.costBreakdown(
                     app: .claude,
-                    model: p.model,
+                    model: model.identity,
                     speed: p.speed,
                     input: p.inputTokens,
                     output: p.outputTokens,
@@ -272,7 +292,7 @@ enum ClaudeJSONLScanner {
                 entries.append(UsageEntry(
                     app: .claude,
                     conversationKey: "claude:\(p.sessionID)",
-                    model: Pricing.normalize(model: p.model),
+                    model: model.storage,
                     speed: p.speed,
                     day: day,
                     timestamp: p.timestamp,
@@ -419,6 +439,9 @@ enum ClaudeJSONLScanner {
         var cacheCreation5mTokens: Int
         var cacheCreation1hTokens: Int
         var stopReason: String?
+        /// 行里的 `entrypoint`；Claude 桌面端的第三方渠道模式为 `claude-desktop-3p`。
+        var entrypoint: String?
+        nonisolated var isClaude3p: Bool { entrypoint == "claude-desktop-3p" }
         /// advisor 在服务端另起的推理；顶层 usage 不含这部分，只出现在 `usage.iterations`。
         var advisorUsages: [AdvisorUsage] = []
     }
@@ -536,6 +559,13 @@ enum ClaudeJSONLScanner {
             return id
         }
 
+        /// 读取位置退回到指定消息的第一行时，把请求发出时间退回这条消息开始前的值。
+        mutating func rewind(to messageID: String) {
+            guard let draft = drafts[messageID] else { return }
+            openMessageID = nil
+            lastInputMs = draft.requestStartMs
+        }
+
         private static func isToolResult(_ root: [String: Any]) -> Bool {
             guard let message = root["message"] as? [String: Any],
                   let content = message["content"] as? [[String: Any]] else { return false }
@@ -602,6 +632,7 @@ enum ClaudeJSONLScanner {
             cacheCreation5mTokens: cacheCreation.fiveMinuteTokens,
             cacheCreation1hTokens: cacheCreation.oneHourTokens,
             stopReason: stopReason,
+            entrypoint: root["entrypoint"] as? String,
             advisorUsages: advisorUsages(in: usage)
         )
     }
@@ -678,6 +709,19 @@ enum ClaudeJSONLScanner {
     /// Claude 只有带 stop_reason 的最终 assistant 行才代表一次完成的模型调用。
     nonisolated static func isComplete(_ parsed: ParsedAssistant) -> Bool {
         parsed.stopReason != nil
+    }
+
+    /// 查价与存储用的模型标识。Magpie 记录里有这条消息时以它为准（包括被改派的请求）；
+    /// Claude 3p 没有对应记录时渠道未知，加 `3p/` 前缀，避免算成 Claude 订阅。
+    nonisolated static func modelIdentity(
+        for parsed: ParsedAssistant,
+        magpie: MagpieUsageIndex.Snapshot
+    ) -> (identity: String, storage: String) {
+        if let route = magpie.routes[parsed.messageId] {
+            return (route.identity, route.storageModel)
+        }
+        let storage = Pricing.normalize(model: parsed.model)
+        return parsed.isClaude3p ? ("3p/\(parsed.model)", "3p/\(storage)") : (parsed.model, storage)
     }
 
     private nonisolated static func parseUserTitle(_ root: [String: Any]) -> (sessionID: String, title: String)? {

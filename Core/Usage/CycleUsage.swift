@@ -277,7 +277,7 @@ final class CycleUsageAggregator {
     nonisolated static let otherAgentSourceApps: Set<UsageApp> = [.pi, .opencode, .dsh]
 
     /// 识别为 Antigravity 订阅渠道的路由段（小写）。
-    private nonisolated static let antigravityRouteSegments: Set<String> = [
+    nonisolated static let antigravityRouteSegments: Set<String> = [
         "antigravity", "antigravity-acp", "agy", "agy-cli", "google-antigravity"
     ]
 
