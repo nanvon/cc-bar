@@ -159,7 +159,7 @@ enum QuotaHistoryStore {
     }
 
     /// 按最近保留的官方百分比变动事件，估算 1 个周额度相当于多少个 5 小时额度。
-    /// 仅统计未跨窗的净消耗（过滤掉 `deltaPercent >= 20` 的重置恢复）；当周额度累计消耗
+    /// 仅统计未跨窗的真实消耗（`deltaPercent < 0`，过滤重置恢复与周期内小幅回升）；当周额度累计消耗
     /// 不足 `minimumWeeklyConsumedPercent` 时返回 nil，避免整数百分比取整放大早期误差。
     nonisolated static func weeklyToFiveHourRatio(
         payload: QuotaHistoryPayload,
@@ -167,10 +167,10 @@ enum QuotaHistoryStore {
         minimumWeeklyConsumedPercent: Int = 5
     ) -> WeeklyToFiveHourRatio? {
         let fiveHourEvents = payload.events.filter {
-            $0.accountKey == accountKey && $0.limitKind == .fiveHour && $0.deltaPercent < 20
+            $0.accountKey == accountKey && $0.limitKind == .fiveHour && $0.deltaPercent < 0
         }
         let weeklyEvents = payload.events.filter {
-            $0.accountKey == accountKey && $0.limitKind == .weekly && $0.deltaPercent < 20
+            $0.accountKey == accountKey && $0.limitKind == .weekly && $0.deltaPercent < 0
         }
         guard let firstFiveHour = fiveHourEvents.map(\.sampledAt).min(),
               let firstWeekly = weeklyEvents.map(\.sampledAt).min()

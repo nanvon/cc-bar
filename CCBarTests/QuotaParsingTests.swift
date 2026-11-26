@@ -259,6 +259,47 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertEqual(Set(payload.lastSamples.values.map(\.limitID)), ["gemini-5h", "gemini-weekly"])
     }
 
+    func testWeeklyToFiveHourRatioIgnoresSmallRecoveries() {
+        let base = Date(timeIntervalSince1970: 1_792_389_600)
+        let accountKey = "antigravity:primary:test"
+        func event(id: String, offset: TimeInterval, kind: QuotaLimitKind, before: Int, after: Int) -> QuotaChangeEvent {
+            QuotaChangeEvent(
+                id: id,
+                accountKey: accountKey,
+                app: .antigravity,
+                kind: .antigravityPrimary,
+                sampledAt: base.addingTimeInterval(offset),
+                limitID: kind == .fiveHour ? "gemini-5h" : "gemini-weekly",
+                limitKind: kind,
+                beforeRemainingPercent: before,
+                afterRemainingPercent: after,
+                deltaPercent: after - before,
+                resetsAt: nil
+            )
+        }
+
+        let payload = QuotaHistoryPayload(
+            dayStart: QuotaHistoryStore.todayStart(now: base),
+            events: [
+                // 早期单侧周消耗（超过 1 天前），用于触发对齐截断
+                event(id: "w0", offset: -48 * 3600, kind: .weekly, before: 80, after: 74),
+                // 5H 开始前的小幅回升不应抵消后续周消耗
+                event(id: "w1", offset: -180, kind: .weekly, before: 74, after: 77),
+                event(id: "f1", offset: 0, kind: .fiveHour, before: 100, after: 85),
+                event(id: "w2", offset: 120, kind: .weekly, before: 77, after: 74),
+                event(id: "w3", offset: 240, kind: .weekly, before: 74, after: 75),
+                event(id: "w4", offset: 360, kind: .weekly, before: 75, after: 71),
+                event(id: "f2", offset: 360, kind: .fiveHour, before: 85, after: 78),
+            ]
+        )
+
+        let ratio = QuotaHistoryStore.weeklyToFiveHourRatio(payload: payload, accountKey: accountKey)
+        XCTAssertNotNil(ratio)
+        XCTAssertEqual(ratio?.fiveHourConsumedPercent, 22)
+        XCTAssertEqual(ratio?.weeklyConsumedPercent, 7)
+        XCTAssertEqual(ratio?.ratio ?? 0, 22.0 / 7.0, accuracy: 0.001)
+    }
+
     /// 无前缀（缺 gemini-/3p-）的旧结构：靠组 displayName 区分 Gemini 与第三方。
     func testAntigravitySummaryGroupsFallbackToGroupNameWhenPrefixMissing() {
         let groups: [[String: Any]] = [
