@@ -1139,7 +1139,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.1.58;
+				MARKETING_VERSION = 1.1.59;
 				PRODUCT_BUNDLE_IDENTIFIER = com.nanvon.ccbar;
 				PRODUCT_NAME = CCBar;
 				REGISTER_APP_GROUPS = YES;
@@ -1173,7 +1173,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.1.58;
+				MARKETING_VERSION = 1.1.59;
 				PRODUCT_BUNDLE_IDENTIFIER = com.nanvon.ccbar;
 				PRODUCT_NAME = CCBar;
 				REGISTER_APP_GROUPS = YES;
