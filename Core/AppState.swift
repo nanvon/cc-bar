@@ -2235,7 +2235,9 @@ final class AppState {
         // 版本只决定是否提醒；token 轮换或切号期间取到的额度照常展示，与原有行为一致。
         let alertEntryVersion = primaryQuotaAlertVersion(for: .antigravity)
         // 上次实际见过的桶：daily 缺少其中任意一个才补查主域；没有历史时客户端用核心四组。
-        let knownLimitIDs = Set(antigravityQuota?.allLimits.map(\.id) ?? [])
+        let previousSnapshot = antigravityQuota
+        let previousPlanType = account.planType
+        let knownLimitIDs = Set(previousSnapshot?.allLimits.map(\.id) ?? [])
         let cachedSetup = antigravitySetup
         var result = await AntigravityQuotaClient.fetch(
             accessToken: activeToken, cachedSetup: cachedSetup, expectedLimitIDs: knownLimitIDs
@@ -2259,8 +2261,43 @@ final class AppState {
             }
         }
         guard antigravityAccount?.refreshKey == account.refreshKey, antigravityError == nil else { return }
+        if case .success(let fetched) = result {
+            let transient = QuotaAlertPolicy.isTransientAntigravityAnomaly(
+                snapshot: fetched.snapshot, planType: fetched.account.planType,
+                previousSnapshot: previousSnapshot, previousPlanType: previousPlanType,
+                knownLimitIDs: knownLimitIDs
+            )
+            let suddenDrops = QuotaAlertPolicy.suddenZeroDropLimitIDs(
+                in: fetched.snapshot, previous: previousSnapshot
+            )
+            if transient || !suddenDrops.isEmpty {
+                // 唤醒瞬间或抖动可能返回残缺/假 0% 数据，延迟 1.5s 再查一次确认。
+                try? await Task.sleep(for: .milliseconds(1500))
+                guard antigravityAccount?.refreshKey == account.refreshKey, antigravityError == nil else { return }
+                let retried = await AntigravityQuotaClient.fetch(
+                    accessToken: activeToken, cachedSetup: transient ? nil : cachedSetup,
+                    expectedLimitIDs: knownLimitIDs
+                )
+                guard antigravityAccount?.refreshKey == account.refreshKey, antigravityError == nil else { return }
+                if case .success = retried {
+                    result = retried
+                } else if case .failure(let error) = retried, error.httpStatusCode == 401 || error.isRateLimited {
+                    result = retried
+                }
+            }
+        }
         switch result {
         case .success(let fetched):
+            let stillTransient = QuotaAlertPolicy.isTransientAntigravityAnomaly(
+                snapshot: fetched.snapshot, planType: fetched.account.planType,
+                previousSnapshot: previousSnapshot, previousPlanType: previousPlanType,
+                knownLimitIDs: knownLimitIDs
+            )
+            if stillTransient, previousSnapshot != nil {
+                AppLog.warn(.quota, "antigravity transient anomaly persisted after retry; preserving previous snapshot")
+                markQuotaFailure(.antigravity, tr("Antigravity returned incomplete quota data", "Antigravity 返回了不完整的额度数据"))
+                return
+            }
             // 回填 plan；邮箱 jetski 本地解不出（非 JWT），额度链路成功后用 UserInfo
             // 单独回填一次，仅当仍未取得时再调用（避免每轮都打 UserInfo）。
             var email = fetched.account.email ?? account.email
@@ -2288,7 +2325,13 @@ final class AppState {
                 AppLog.warn(.quota, "antigravity buckets missing since last refresh: \(missingLimitIDs.sorted().joined(separator: ","))")
             }
             storeQuota(.antigravity, snapshot: snapshot, source: .api)
-            if alertCurrent { observePrimaryQuota(snapshot, settingsVersion: alertSettingsVersion) }
+            if alertCurrent, !stillTransient {
+                let suddenDrops = QuotaAlertPolicy.suddenZeroDropLimitIDs(in: snapshot, previous: previousSnapshot)
+                let alertSnapshot = QuotaAlertPolicy.filteringLimits(in: snapshot, excluding: suddenDrops)
+                if !alertSnapshot.allLimits.isEmpty {
+                    observePrimaryQuota(alertSnapshot, settingsVersion: alertSettingsVersion)
+                }
+            }
         case .failure(let err):
             markQuotaFailure(.antigravity, err.userMessage, error: err)
         }

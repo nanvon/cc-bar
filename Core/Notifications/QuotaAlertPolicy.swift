@@ -169,4 +169,51 @@ nonisolated enum QuotaAlertPolicy {
         }
         return resolved
     }
+
+    // MARK: - Antigravity 瞬态异常与骤降防护
+
+    /// 检测 Antigravity 本次响应是否为唤醒或服务端抖动导致的残缺结果。
+    static func isTransientAntigravityAnomaly(
+        snapshot: QuotaSnapshot,
+        planType: String?,
+        previousSnapshot: QuotaSnapshot?,
+        previousPlanType: String?,
+        knownLimitIDs: Set<String>
+    ) -> Bool {
+        let currentLimits = snapshot.allLimits
+        let missingKnown = !knownLimitIDs.subtracting(currentLimits.map(\.id)).isEmpty
+        let hasZeroRemaining = currentLimits.contains { $0.window.remainingPercent <= 0.01 }
+        let hasSuddenDrops = !suddenZeroDropLimitIDs(in: snapshot, previous: previousSnapshot).isEmpty
+        if previousPlanType != nil, planType == nil, hasZeroRemaining || missingKnown || hasSuddenDrops {
+            return true
+        }
+        if missingKnown, hasZeroRemaining {
+            return true
+        }
+        return false
+    }
+
+    /// 找出从高余量（≥50%）单次骤降到 0% 的窗口 ID，用于要求二次采样确认。
+    static func suddenZeroDropLimitIDs(in snapshot: QuotaSnapshot, previous: QuotaSnapshot?) -> Set<String> {
+        guard let previous else { return [] }
+        let previousByID = Dictionary(previous.allLimits.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return Set(snapshot.allLimits.compactMap { limit in
+            guard limit.window.remainingPercent <= 0.01,
+                  let old = previousByID[limit.id],
+                  old.window.remainingPercent >= 50
+            else { return nil }
+            return limit.id
+        })
+    }
+
+    /// 从快照中排除指定窗口 ID，避免尚未二次确认的骤降 0% 窗口立即触发通知。
+    static func filteringLimits(in snapshot: QuotaSnapshot, excluding excludedIDs: Set<String>) -> QuotaSnapshot {
+        guard !excludedIDs.isEmpty else { return snapshot }
+        var copy = snapshot
+        if let primary = copy.primaryLimit, excludedIDs.contains(primary.id) { copy.primaryLimit = nil }
+        if let secondary = copy.secondaryLimit, excludedIDs.contains(secondary.id) { copy.secondaryLimit = nil }
+        copy.auxiliaryLimits.removeAll { excludedIDs.contains($0.id) }
+        copy.modelLimits.removeAll { excludedIDs.contains($0.id) }
+        return copy
+    }
 }

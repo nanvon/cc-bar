@@ -503,7 +503,7 @@ private struct ServiceBlockView: View {
                         .lineLimit(2)
                 }
                 .foregroundStyle(.orange)
-                if app == .claude, let snapshot {
+                if let snapshot {
                     TimelineView(.periodic(from: .now, by: 60)) { context in
                         let age = PopoverRootView.relativeAge(from: snapshot.fetchedAt, now: context.date)
                         Text(tr("Quota last updated \(age) ago", "额度更新于 \(age) 前"))
@@ -683,8 +683,7 @@ private struct ServiceBlockView: View {
 
     @ViewBuilder
     private func compactLimitStatus(_ limit: QuotaLimit) -> some View {
-        if limit.kind == .modelWeekly,
-           limit.window.usedPercent == 0,
+        if limit.window.usedPercent == 0,
            limit.window.resetsAt == nil
         {
             Text(tr("Unused", "尚未使用"))

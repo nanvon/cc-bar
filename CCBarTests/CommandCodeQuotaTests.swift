@@ -197,7 +197,7 @@ final class CommandCodeQuotaTests: XCTestCase {
         XCTAssertEqual(snapshot.auxiliaryLimits.first?.displayName, "MONTHLY")
     }
 
-    func testClientParseUnstartedCycleEstimatesFiveHours() throws {
+    func testClientParseUnstartedCycleLeavesResetTimeNil() throws {
         let now = Date(timeIntervalSince1970: 1_750_000_000)
         let unstartedCredits: [String: Any] = [
             "fiveHour": [
@@ -221,9 +221,9 @@ final class CommandCodeQuotaTests: XCTestCase {
         let window = snapshot.primaryWindow
         XCTAssertNotNil(window)
         XCTAssertEqual(window?.usedPercent, 0)
-        // resetsAt 不应为 1970，而应预估为当前时间 + 5 小时（18000 秒）
-        XCTAssertEqual(window?.resetsAt, now.addingTimeInterval(18_000))
-        XCTAssertEqual(snapshot.secondaryLimit?.window.resetsAt, now.addingTimeInterval(604_800))
+        // 未开始周期不本地捏造重置时间，保留 nil 以便 UI 统一显示「尚未使用」。
+        XCTAssertNil(window?.resetsAt)
+        XCTAssertNil(snapshot.secondaryLimit?.window.resetsAt)
     }
 }
 

@@ -584,6 +584,71 @@ final class QuotaAlertTests: XCTestCase {
         XCTAssertEqual(h.client.messages.count, 1)
         XCTAssertGreaterThan(h.client.removals, 0)
     }
+
+    func testAntigravityTransientAnomalyAndSuddenZeroDropGuard() {
+        let previous = QuotaSnapshot(
+            app: .antigravity,
+            primaryLimit: QuotaLimit(id: "gemini-5h", kind: .fiveHour, displayName: "Gemini 5H",
+                                   window: QuotaWindow(usedPercent: 0), isActive: nil),
+            secondaryLimit: QuotaLimit(id: "gemini-weekly", kind: .weekly, displayName: "Gemini WK",
+                                     window: QuotaWindow(usedPercent: 20), isActive: nil),
+            planType: "Pro",
+            fetchedAt: start
+        )
+        let missingPlanZero = QuotaSnapshot(
+            app: .antigravity,
+            primaryLimit: QuotaLimit(id: "gemini-5h", kind: .fiveHour, displayName: "Gemini 5H",
+                                   window: QuotaWindow(usedPercent: 100), isActive: nil),
+            secondaryLimit: QuotaLimit(id: "gemini-weekly", kind: .weekly, displayName: "Gemini WK",
+                                     window: QuotaWindow(usedPercent: 20), isActive: nil),
+            planType: nil,
+            fetchedAt: start.addingTimeInterval(60)
+        )
+        XCTAssertTrue(QuotaAlertPolicy.isTransientAntigravityAnomaly(
+            snapshot: missingPlanZero, planType: nil,
+            previousSnapshot: previous, previousPlanType: "Pro",
+            knownLimitIDs: ["gemini-5h", "gemini-weekly"]
+        ))
+
+        let missingBucketZero = QuotaSnapshot(
+            app: .antigravity,
+            primaryLimit: QuotaLimit(id: "gemini-5h", kind: .fiveHour, displayName: "Gemini 5H",
+                                   window: QuotaWindow(usedPercent: 100), isActive: nil),
+            secondaryLimit: nil,
+            planType: "Pro",
+            fetchedAt: start.addingTimeInterval(60)
+        )
+        XCTAssertTrue(QuotaAlertPolicy.isTransientAntigravityAnomaly(
+            snapshot: missingBucketZero, planType: "Pro",
+            previousSnapshot: previous, previousPlanType: "Pro",
+            knownLimitIDs: ["gemini-5h", "gemini-weekly"]
+        ))
+
+        let normalLow = QuotaSnapshot(
+            app: .antigravity,
+            primaryLimit: QuotaLimit(id: "gemini-5h", kind: .fiveHour, displayName: "Gemini 5H",
+                                   window: QuotaWindow(usedPercent: 100), isActive: nil),
+            secondaryLimit: QuotaLimit(id: "gemini-weekly", kind: .weekly, displayName: "Gemini WK",
+                                     window: QuotaWindow(usedPercent: 20), isActive: nil),
+            planType: "Pro",
+            fetchedAt: start.addingTimeInterval(60)
+        )
+        XCTAssertFalse(QuotaAlertPolicy.isTransientAntigravityAnomaly(
+            snapshot: normalLow, planType: "Pro",
+            previousSnapshot: previous, previousPlanType: "Pro",
+            knownLimitIDs: ["gemini-5h", "gemini-weekly"]
+        ))
+
+        let sudden = QuotaAlertPolicy.suddenZeroDropLimitIDs(in: normalLow, previous: previous)
+        XCTAssertEqual(sudden, ["gemini-5h"])
+
+        let filtered = QuotaAlertPolicy.filteringLimits(in: normalLow, excluding: sudden)
+        XCTAssertNil(filtered.primaryLimit)
+        XCTAssertEqual(filtered.secondaryLimit?.id, "gemini-weekly")
+
+        // 第二次刷新若仍为 0%，由于前一次已非高余量（<50%），不再被过滤，允许正常提醒。
+        XCTAssertTrue(QuotaAlertPolicy.suddenZeroDropLimitIDs(in: normalLow, previous: normalLow).isEmpty)
+    }
 }
 
 @MainActor

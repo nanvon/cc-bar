@@ -253,12 +253,7 @@ enum CommandCodeQuotaClient {
         guard let cap = parseNumber(dict["cap"]), cap > 0 else { return nil }
         let used = parseNumber(dict["used"]) ?? 0
         let usedPercent = min(100, max(0, (used / cap) * 100))
-        var resetsAt = parseDate(dict["resetAt"])
-
-        // 若周期未开始（used == 0 且无有效未来重置时间），按窗口长度预估重置时间（如 5 小时），与 Codex/Claude 对齐
-        if usedPercent == 0, resetsAt == nil || (resetsAt != nil && resetsAt! <= fetchedAt) {
-            resetsAt = fetchedAt.addingTimeInterval(Double(windowSeconds))
-        }
+        let resetsAt = parseDate(dict["resetAt"])
 
         return QuotaLimit(
             id: id,
