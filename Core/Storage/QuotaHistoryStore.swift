@@ -151,6 +151,8 @@ enum QuotaHistoryStore {
     /// 必须视为窗口已滚动（跨周 / 制式换档）。与 `QuotaCycleStore`
     /// 的 `windowAlignmentTolerance` 语义一致。
     nonisolated private static let windowAlignmentTolerance: TimeInterval = 30 * 60
+    /// 5 小时额度窗口长度，用于由 `resets_at` 反推窗口起点。
+    nonisolated private static let fiveHourWindowSeconds: TimeInterval = 5 * 60 * 60
     /// 周额度窗口长度，用于由 `resets_at` 反推周期起点。
     nonisolated private static let weeklyWindowSeconds: TimeInterval = 7 * 24 * 60 * 60
 
@@ -269,6 +271,10 @@ enum QuotaHistoryStore {
                 entries: timelineEntries(
                     events: todayEvents,
                     latestSample: sample,
+                    accountKey: accountKey,
+                    limitKind: limitKind,
+                    periodStart: start,
+                    includeFirstWindowStart: false,
                     includesSample: { $0.sampledAt >= start && $0.sampledAt < end }
                 )
             )]
@@ -316,6 +322,10 @@ enum QuotaHistoryStore {
                     entries: timelineEntries(
                         events: currentEvents,
                         latestSample: sample,
+                        accountKey: accountKey,
+                        limitKind: limitKind,
+                        periodStart: currentStart,
+                        includeFirstWindowStart: true,
                         includesSample: {
                             belongsToWindow(
                                 sampledAt: $0.sampledAt,
@@ -331,7 +341,15 @@ enum QuotaHistoryStore {
                     kind: .previousCycle,
                     start: previousStart,
                     end: previousEnd,
-                    entries: timelineEntries(events: previousEvents, latestSample: nil, includesSample: { _ in false })
+                    entries: timelineEntries(
+                        events: previousEvents,
+                        latestSample: nil,
+                        accountKey: accountKey,
+                        limitKind: limitKind,
+                        periodStart: previousStart,
+                        includeFirstWindowStart: true,
+                        includesSample: { _ in false }
+                    )
                 ),
             ]
 
@@ -343,6 +361,10 @@ enum QuotaHistoryStore {
     nonisolated private static func timelineEntries(
         events: [QuotaChangeEvent],
         latestSample: QuotaHistorySample?,
+        accountKey: String,
+        limitKind: QuotaLimitKind,
+        periodStart: Date,
+        includeFirstWindowStart: Bool,
         includesSample: (QuotaHistorySample) -> Bool
     ) -> [QuotaTimelineEntry] {
         var entries = events.map {
@@ -369,7 +391,59 @@ enum QuotaHistoryStore {
                 resetsAt: latestSample.resetsAt
             ))
         }
-        return assignWindowIndexes(entries.sorted { $0.sampledAt < $1.sampledAt })
+        let assigned = assignWindowIndexes(entries.sorted { $0.sampledAt < $1.sampledAt })
+        return insertingWindowStartSamples(
+            in: assigned,
+            accountKey: accountKey,
+            limitKind: limitKind,
+            periodStart: periodStart,
+            includeFirstWindow: includeFirstWindowStart
+        )
+    }
+
+    /// 新额度窗口若直接以 `100% -> 剩余值` 的扣减事件开篇，在窗口起点补一个无差值的 `100%`
+    /// 采样点，让折线从重置虚线处起笔而非悬空在首次扣减点。5H 日视图仅针对日内跨窗重置
+    /// （`windowIndex > 0`），周周期则覆盖周期起点。
+    nonisolated private static func insertingWindowStartSamples(
+        in entries: [QuotaTimelineEntry],
+        accountKey: String,
+        limitKind: QuotaLimitKind,
+        periodStart: Date,
+        includeFirstWindow: Bool
+    ) -> [QuotaTimelineEntry] {
+        guard let windowSeconds = defaultWindowSeconds(for: limitKind) else { return entries }
+        var result: [QuotaTimelineEntry] = []
+        result.reserveCapacity(entries.count + 4)
+        var seenWindows = Set<Int>()
+
+        for entry in entries {
+            if seenWindows.insert(entry.windowIndex).inserted,
+               (entry.windowIndex > 0 || includeFirstWindow),
+               entry.source == .change,
+               let delta = entry.deltaPercent,
+               delta < 0,
+               entry.remainingPercent - delta == 100,
+               let resetsAt = entry.resetsAt
+            {
+                let rawStart = resetsAt.addingTimeInterval(-windowSeconds)
+                let anchor = max(periodStart, rawStart)
+                if anchor < entry.sampledAt,
+                   abs(anchor.timeIntervalSince(rawStart)) <= windowAlignmentTolerance
+                {
+                    result.append(QuotaTimelineEntry(
+                        id: "reset|\(accountKey)|\(limitKind.rawValue)|\(Int(resetsAt.timeIntervalSinceReferenceDate))|\(entry.windowIndex)",
+                        source: .sample,
+                        sampledAt: anchor,
+                        remainingPercent: 100,
+                        deltaPercent: nil,
+                        resetsAt: resetsAt,
+                        windowIndex: entry.windowIndex
+                    ))
+                }
+            }
+            result.append(entry)
+        }
+        return result
     }
 
     /// 周期归属：`resets_at` 存在时按窗口对齐判定，跨周期的采样绝不混进相邻周期；
@@ -601,36 +675,121 @@ enum QuotaHistoryStore {
             )
         }
 
-        guard baseline.remainingPercent != remaining else { return next }
-
         // 跨窗闸：基线窗口与本次采样窗口不同窗（resets_at 偏移超出抖动容差）时，
-        // 视为窗口已滚动（跨周重置）或旧窗口残留值窜入，不产变动事件，仅把本次
-        // 采样写为新基线；旧窗口事件保持独立历史，互不差分。
-        guard isSameWindow(baseline.resetsAt, limit.window.resetsAt) else { return next }
+        // 绝不把旧窗口余量直接拿来和本次采样做差；仅在连续在线的正向跨窗重置且首采
+        // 已不足 100% 时，补记新窗口从 100% 起算的起步扣减，否则仅更新新基线。
+        if !isSameWindow(baseline.resetsAt, limit.window.resetsAt) {
+            if remaining < 100,
+               continuousForwardWindowStart(
+                   previousSampledAt: previous.sampledAt,
+                   previousResetsAt: previous.resetsAt,
+                   newSampledAt: sampledAt,
+                   newResetsAt: limit.window.resetsAt,
+                   windowSeconds: windowDuration(for: limit)
+               ) != nil
+            {
+                next.events.append(makeChangeEvent(
+                    accountKey: accountKey,
+                    app: app,
+                    kind: kind,
+                    limitID: limit.id,
+                    limitKind: limit.kind,
+                    sampledAt: sampledAt,
+                    before: 100,
+                    after: remaining,
+                    resetsAt: limit.window.resetsAt
+                ))
+            }
+            return next
+        }
+
+        guard baseline.remainingPercent != remaining else { return next }
 
         // 到期后暂缺重置时间的满额恢复也保留原始记录；投影时按上一窗口的到期时间
         // 将其识别为新段的重置采样，避免后续刷新覆盖 lastSamples 后丢失这个点。
-        let delta = remaining - baseline.remainingPercent
-        next.events.append(QuotaChangeEvent(
+        next.events.append(makeChangeEvent(
+            accountKey: accountKey,
+            app: app,
+            kind: kind,
+            limitID: limit.id,
+            limitKind: limit.kind,
+            sampledAt: sampledAt,
+            before: baseline.remainingPercent,
+            after: remaining,
+            resetsAt: limit.window.resetsAt
+        ))
+        return next
+    }
+
+    nonisolated private static func defaultWindowSeconds(for kind: QuotaLimitKind) -> TimeInterval? {
+        switch kind {
+        case .fiveHour: return fiveHourWindowSeconds
+        case .weekly: return weeklyWindowSeconds
+        case .modelWeekly, .unknown: return nil
+        }
+    }
+
+    nonisolated private static func windowDuration(for limit: QuotaLimit) -> TimeInterval? {
+        if let seconds = limit.window.windowSeconds, seconds > 0 {
+            return TimeInterval(seconds)
+        }
+        return defaultWindowSeconds(for: limit.kind)
+    }
+
+    /// 判定前后两次观察是否构成「连续跟踪下的正向跨窗重置」，用于区分真正刚重置完
+    /// 就有消耗的场景与长时间离线后中途接入的场景。
+    nonisolated private static func continuousForwardWindowStart(
+        previousSampledAt: Date,
+        previousResetsAt: Date?,
+        newSampledAt: Date,
+        newResetsAt: Date?,
+        windowSeconds: TimeInterval?
+    ) -> Date? {
+        guard let previousResetsAt,
+              let newResetsAt,
+              let windowSeconds,
+              windowSeconds > 0,
+              newResetsAt.timeIntervalSince(previousResetsAt) > windowAlignmentTolerance
+        else { return nil }
+
+        let pollGap = newSampledAt.timeIntervalSince(previousSampledAt)
+        guard pollGap >= 0, pollGap <= windowAlignmentTolerance else { return nil }
+
+        let windowStart = newResetsAt.addingTimeInterval(-windowSeconds)
+        guard windowStart <= newSampledAt else { return nil }
+        return windowStart
+    }
+
+    nonisolated private static func makeChangeEvent(
+        accountKey: String,
+        app: QuotaApp,
+        kind: QuotaHistoryAccountKind,
+        limitID: String,
+        limitKind: QuotaLimitKind,
+        sampledAt: Date,
+        before: Int,
+        after: Int,
+        resetsAt: Date?
+    ) -> QuotaChangeEvent {
+        QuotaChangeEvent(
             id: eventId(
                 accountKey: accountKey,
-                limitID: limit.id,
+                limitID: limitID,
                 sampledAt: sampledAt,
-                before: baseline.remainingPercent,
-                after: remaining
+                before: before,
+                after: after
             ),
             accountKey: accountKey,
             app: app,
             kind: kind,
             sampledAt: sampledAt,
-            limitID: limit.id,
-            limitKind: limit.kind,
-            beforeRemainingPercent: baseline.remainingPercent,
-            afterRemainingPercent: remaining,
-            deltaPercent: delta,
-            resetsAt: limit.window.resetsAt
-        ))
-        return next
+            limitID: limitID,
+            limitKind: limitKind,
+            beforeRemainingPercent: before,
+            afterRemainingPercent: after,
+            deltaPercent: after - before,
+            resetsAt: resetsAt
+        )
     }
 
     /// 同窗判定：两端 resets_at 都给定时差在 `windowAlignmentTolerance`（半小时）内；
@@ -698,16 +857,43 @@ enum QuotaHistoryStore {
                 } else {
                     // 跨窗：判据与同窗相反。`before` 恰好衔接上一窗口链尾，说明这条 delta
                     // 是拿旧窗口的剩余值跨窗求差得来的（周期滚动时额度跳回满额），属虚假变动，删除。
-                    // 不衔接则说明新窗口已由 recordingSeries 的跨窗闸建立了自己的基线，
-                    // 这是新链的链首，必须保留——额度周期滚动（5H 一天约 5 个窗口、周窗每 7 天
-                    // 一轮）是常态，若在此删掉，keptBySeries 会永远停在旧窗口链尾，新周期的
-                    // 每个事件都会被逐个删光，时间线的「当前周期」只剩一个采样点。
+                    // 不衔接，或新链从 100% 起步扣减（旧链恰好也停在 100% 时）则说明这是新链的链首，
+                    // 必须保留——额度周期滚动（5H 一天约 5 个窗口、周窗每 7 天一轮）是常态，
+                    // 若在此删掉，keptBySeries 会永远停在旧窗口链尾，新周期的每个事件都会被逐个删光。
                     keep = prev.afterRemainingPercent != event.beforeRemainingPercent
+                        || (event.beforeRemainingPercent == 100 && event.deltaPercent < 0)
                 }
             } else {
                 keep = true
             }
             if keep {
+                if let prev = keptBySeries[series],
+                   !isSameWindow(prev.resetsAt, event.resetsAt),
+                   event.beforeRemainingPercent < 100,
+                   let windowStart = continuousForwardWindowStart(
+                       previousSampledAt: prev.sampledAt,
+                       previousResetsAt: prev.resetsAt,
+                       newSampledAt: event.sampledAt,
+                       newResetsAt: event.resetsAt,
+                       windowSeconds: defaultWindowSeconds(for: event.limitKind)
+                   )
+                {
+                    let backfillAt = min(
+                        max(windowStart, prev.sampledAt.addingTimeInterval(1)),
+                        event.sampledAt
+                    )
+                    cleaned.append(makeChangeEvent(
+                        accountKey: event.accountKey,
+                        app: event.app,
+                        kind: event.kind,
+                        limitID: event.limitID,
+                        limitKind: event.limitKind,
+                        sampledAt: backfillAt,
+                        before: 100,
+                        after: event.beforeRemainingPercent,
+                        resetsAt: event.resetsAt
+                    ))
+                }
                 cleaned.append(event)
                 keptBySeries[series] = event
             }

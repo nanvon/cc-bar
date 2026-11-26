@@ -1621,6 +1621,145 @@ final class QuotaParsingTests: XCTestCase {
         XCTAssertEqual(cleaned2.events.first?.afterRemainingPercent, 42)
     }
 
+    func testHistoryRecordsInitialDropAndTimelineStartWhenContinuousCrossWindowSampleAlreadyConsumed() throws {
+        let dayStart = QuotaHistoryStore.todayStart(now: Date(timeIntervalSince1970: 1_788_000_000))
+        let oldFiveHourEnd = dayStart.addingTimeInterval(18 * 3_600 + 56 * 60)
+        let oldWeeklyEnd = dayStart.addingTimeInterval(5 * 86_400)
+        let newStart = dayStart.addingTimeInterval(15 * 3_600 + 2 * 60)
+        let newFiveHourEnd = newStart.addingTimeInterval(5 * 3_600)
+        let newWeeklyEnd = newStart.addingTimeInterval(7 * 86_400)
+        let key = "antigravity:primary:test"
+
+        func agySnapshot(fiveHourUsed: Double, fiveHourEnd: Date, weeklyUsed: Double, weeklyEnd: Date) -> QuotaSnapshot {
+            QuotaSnapshot(
+                app: .antigravity,
+                primaryLimit: QuotaLimit(
+                    id: "gemini-5h",
+                    kind: .fiveHour,
+                    displayName: "Gemini 5H",
+                    window: QuotaWindow(usedPercent: fiveHourUsed, resetsAt: fiveHourEnd, windowSeconds: 18_000),
+                    isActive: true
+                ),
+                secondaryLimit: QuotaLimit(
+                    id: "gemini-weekly",
+                    kind: .weekly,
+                    displayName: "Gemini Weekly",
+                    window: QuotaWindow(usedPercent: weeklyUsed, resetsAt: weeklyEnd, windowSeconds: 604_800),
+                    isActive: false
+                ),
+                planType: "Google AI Pro",
+                fetchedAt: newStart
+            )
+        }
+
+        var payload = QuotaHistoryPayload(dayStart: dayStart)
+        // 旧窗口最后两次采样（包含 15:07 服务端尚未切窗的滞后响应）
+        payload = QuotaHistoryStore.record(
+            payload: payload, accountKey: key, app: .antigravity, kind: .antigravityPrimary,
+            snapshot: agySnapshot(fiveHourUsed: 25, fiveHourEnd: oldFiveHourEnd, weeklyUsed: 41, weeklyEnd: oldWeeklyEnd),
+            sampledAt: newStart.addingTimeInterval(26)
+        )
+        payload = QuotaHistoryStore.record(
+            payload: payload, accountKey: key, app: .antigravity, kind: .antigravityPrimary,
+            snapshot: agySnapshot(fiveHourUsed: 27, fiveHourEnd: oldFiveHourEnd, weeklyUsed: 42, weeklyEnd: oldWeeklyEnd),
+            sampledAt: newStart.addingTimeInterval(4 * 60 + 27)
+        )
+        // 15:13 首次切到新窗口时已消耗至 97% / 98%
+        payload = QuotaHistoryStore.record(
+            payload: payload, accountKey: key, app: .antigravity, kind: .antigravityPrimary,
+            snapshot: agySnapshot(fiveHourUsed: 3, fiveHourEnd: newFiveHourEnd, weeklyUsed: 2, weeklyEnd: newWeeklyEnd),
+            sampledAt: newStart.addingTimeInterval(10 * 60 + 27)
+        )
+        // 15:17 周额度小幅回升到 99%
+        payload = QuotaHistoryStore.record(
+            payload: payload, accountKey: key, app: .antigravity, kind: .antigravityPrimary,
+            snapshot: agySnapshot(fiveHourUsed: 3, fiveHourEnd: newFiveHourEnd, weeklyUsed: 1, weeklyEnd: newWeeklyEnd),
+            sampledAt: newStart.addingTimeInterval(14 * 60 + 27)
+        )
+
+        let fiveHourEvents = payload.events.filter { $0.limitKind == .fiveHour }
+        let weeklyEvents = payload.events.filter { $0.limitKind == .weekly }
+        XCTAssertEqual(fiveHourEvents.last?.beforeRemainingPercent, 100)
+        XCTAssertEqual(fiveHourEvents.last?.afterRemainingPercent, 97)
+        XCTAssertEqual(fiveHourEvents.last?.deltaPercent, -3)
+        XCTAssertEqual(weeklyEvents.map(\.deltaPercent), [-1, -2, 1])
+
+        let fiveHourPeriod = try XCTUnwrap(QuotaHistoryStore.timelinePeriods(
+            payload: payload, accountKey: key, limitKind: .fiveHour,
+            now: newStart.addingTimeInterval(15 * 60)
+        ).first)
+        XCTAssertEqual(fiveHourPeriod.totalDelta, -5)
+        let newFiveHourEntries = fiveHourPeriod.entries.filter { $0.windowIndex == 1 }
+        XCTAssertEqual(newFiveHourEntries.map(\.remainingPercent), [100, 97, 97])
+        XCTAssertEqual(newFiveHourEntries.first?.sampledAt, newStart)
+        XCTAssertEqual(newFiveHourEntries.first?.source, .sample)
+
+        let weeklyPeriods = QuotaHistoryStore.timelinePeriods(
+            payload: payload, accountKey: key, limitKind: .weekly,
+            now: newStart.addingTimeInterval(15 * 60)
+        )
+        let currentWeekly = try XCTUnwrap(weeklyPeriods.first { $0.kind == .currentCycle })
+        XCTAssertEqual(currentWeekly.totalDelta, -1)
+        XCTAssertEqual(currentWeekly.entries.map(\.remainingPercent), [100, 98, 99])
+        XCTAssertEqual(currentWeekly.entries.first?.sampledAt, newStart)
+        XCTAssertNil(currentWeekly.entries.first?.deltaPercent)
+    }
+
+    func testCleanupInconsistentChainsBackfillsContinuousCrossWindowInitialDropAndKeepsStartFromHundred() {
+        let start = Date(timeIntervalSince1970: 1_788_000_000)
+        let oldEnd = start.addingTimeInterval(3 * 86_400)
+        let newStart = start.addingTimeInterval(10 * 60)
+        let newEnd = newStart.addingTimeInterval(7 * 86_400)
+        let laterEnd = newEnd.addingTimeInterval(7 * 86_400)
+
+        func event(_ at: Date, before: Int, after: Int, resetsAt: Date) -> QuotaChangeEvent {
+            QuotaChangeEvent(
+                id: "\(Int(at.timeIntervalSince1970))|\(before)|\(after)",
+                accountKey: "antigravity:primary:test",
+                app: .antigravity,
+                kind: .antigravityPrimary,
+                sampledAt: at,
+                limitID: "gemini-weekly",
+                limitKind: .weekly,
+                beforeRemainingPercent: before,
+                afterRemainingPercent: after,
+                deltaPercent: after - before,
+                resetsAt: resetsAt
+            )
+        }
+
+        // 1) 连续在线跨窗后缺失 100 -> 98，首条事件直接是 98 -> 99：应补回 100 -> 98 且幂等
+        var payload = QuotaHistoryPayload(dayStart: QuotaHistoryStore.todayStart(now: start))
+        payload.events = [
+            event(start.addingTimeInterval(14 * 60), before: 59, after: 58, resetsAt: oldEnd),
+            event(start.addingTimeInterval(24 * 60), before: 98, after: 99, resetsAt: newEnd),
+        ]
+        let cleaned = QuotaHistoryStore.cleanupInconsistentChains(payload)
+        XCTAssertEqual(cleaned.events.map(\.beforeRemainingPercent), [59, 100, 98])
+        XCTAssertEqual(cleaned.events.map(\.afterRemainingPercent), [58, 98, 99])
+        XCTAssertEqual(cleaned.events.map(\.deltaPercent), [-1, -2, 1])
+        XCTAssertEqual(cleaned, QuotaHistoryStore.cleanupInconsistentChains(cleaned))
+
+        // 2) 旧窗收尾恰好回到 100%，新窗首条就是 100 -> 97：不能被误判成跨窗假差值而整段删光
+        var fromHundred = QuotaHistoryPayload(dayStart: QuotaHistoryStore.todayStart(now: start))
+        fromHundred.events = [
+            event(start, before: 99, after: 100, resetsAt: oldEnd),
+            event(newStart.addingTimeInterval(5 * 60), before: 100, after: 97, resetsAt: newEnd),
+            event(newStart.addingTimeInterval(10 * 60), before: 97, after: 96, resetsAt: newEnd),
+        ]
+        let cleanedFromHundred = QuotaHistoryStore.cleanupInconsistentChains(fromHundred)
+        XCTAssertEqual(cleanedFromHundred.events.map(\.deltaPercent), [1, -3, -1])
+
+        // 3) 相邻事件跨度超过容差（如离线数天）：不回补 100 -> 90
+        var gapped = QuotaHistoryPayload(dayStart: QuotaHistoryStore.todayStart(now: start))
+        gapped.events = [
+            event(start, before: 60, after: 55, resetsAt: newEnd),
+            event(newEnd.addingTimeInterval(2 * 3_600), before: 90, after: 85, resetsAt: laterEnd),
+        ]
+        let cleanedGapped = QuotaHistoryStore.cleanupInconsistentChains(gapped)
+        XCTAssertEqual(cleanedGapped.events.map(\.deltaPercent), [-5, -5])
+    }
+
     func testClaudePrimaryAccountKeyNormalizesAndHashesEmail() {
         let first = QuotaHistoryAccountKey.claudePrimary(email: " User@Example.COM ")
         let same = QuotaHistoryAccountKey.claudePrimary(email: "user@example.com")
