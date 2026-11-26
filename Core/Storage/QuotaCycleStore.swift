@@ -265,22 +265,37 @@ enum QuotaCycleStore {
         _ payload: QuotaCyclePayload,
         to accountKey: String
     ) -> QuotaCyclePayload {
-        let legacyKey = "claude:primary"
-        guard accountKey != legacyKey else { return payload }
+        migratingClaudeAccountKey(payload, from: "claude:primary", to: accountKey, cleanupOverlap: false)
+    }
+
+    /// 将同一 Claude 账号在旧键（`claude:primary` 或回退期的 `claude:primary:uuid:...`）
+    /// 下的周期与账号段合并到目标键。保留原 cycle / segment ID，避免既有 rollup 断链；
+    /// 从 `uuid:` 键合并回邮箱键时同步整理跨键交接处的重叠周期片段。
+    nonisolated static func migratingClaudeAccountKey(
+        _ payload: QuotaCyclePayload,
+        from sourceKey: String,
+        to targetKey: String,
+        cleanupOverlap: Bool = true
+    ) -> QuotaCyclePayload {
+        guard sourceKey != targetKey else { return payload }
         var next = payload
+        var changed = false
         for index in next.records.indices
             where next.records[index].app == .claude
-                && next.records[index].accountKey == legacyKey
+                && next.records[index].accountKey == sourceKey
         {
-            next.records[index].accountKey = accountKey
+            next.records[index].accountKey = targetKey
+            changed = true
         }
         for index in next.accountSegments.indices
             where next.accountSegments[index].app == .claude
-                && next.accountSegments[index].accountKey == legacyKey
+                && next.accountSegments[index].accountKey == sourceKey
         {
-            next.accountSegments[index].accountKey = accountKey
+            next.accountSegments[index].accountKey = targetKey
+            changed = true
         }
-        return next
+        guard changed else { return payload }
+        return cleanupOverlap ? cleaningUpLegacyPayload(next) : next
     }
 
     /// 历史数据可能因 reset_at 漂移产生同一周期的重复记录：

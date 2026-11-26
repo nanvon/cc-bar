@@ -427,26 +427,48 @@ enum QuotaHistoryStore {
         _ payload: QuotaHistoryPayload,
         to accountKey: String
     ) -> QuotaHistoryPayload {
-        let legacyKey = "claude:primary"
-        guard accountKey != legacyKey else { return payload }
+        migratingClaudeAccountKey(payload, from: "claude:primary", to: accountKey)
+    }
+
+    /// 将同一 Claude 账号在旧键（`claude:primary` 或回退期的 `claude:primary:uuid:...`）
+    /// 下积累的事件与最新样本合并到目标键；若两边都有同一窗口的 `lastSamples`，
+    /// 保留 `sampledAt` 较新的一条。
+    nonisolated static func migratingClaudeAccountKey(
+        _ payload: QuotaHistoryPayload,
+        from sourceKey: String,
+        to targetKey: String
+    ) -> QuotaHistoryPayload {
+        guard sourceKey != targetKey else { return payload }
         var next = payload
-        // seriesKey = "\(accountKey)|\(kind)"；仅迁移恰好是旧常量键 "claude:primary" 的条目，
-        // 与下方 events 的迁移条件一致；已哈希账号键（"claude:primary:hash"）与
-        // 其他账号的系列（如 "codex:primary:*"）一律保留，不能误迁。
+        var changed = false
         next.lastSamples = next.lastSamples.reduce(into: [:]) { result, entry in
-            guard entry.value.accountKey == legacyKey else {
-                result[entry.key] = entry.value
+            guard entry.value.accountKey == sourceKey else {
+                let key = entry.key
+                if let existing = result[key], existing.sampledAt >= entry.value.sampledAt {
+                    return
+                }
+                result[key] = entry.value
                 return
             }
+            changed = true
             var sample = entry.value
-            sample.accountKey = accountKey
-            result[seriesKey(accountKey: accountKey, limitKind: sample.limitKind)] = sample
+            sample.accountKey = targetKey
+            let destKey = seriesKey(accountKey: targetKey, limitKind: sample.limitKind)
+            if let existing = result[destKey], existing.sampledAt >= sample.sampledAt {
+                return
+            }
+            result[destKey] = sample
         }
-        // 事件只有 v2 常量键 "claude:primary" 需要迁移；v3 起事件会落已哈希键，不能误迁。
-        for index in next.events.indices where next.events[index].accountKey == legacyKey {
-            next.events[index].accountKey = accountKey
+        var eventsMigrated = false
+        for index in next.events.indices where next.events[index].accountKey == sourceKey {
+            next.events[index].accountKey = targetKey
+            eventsMigrated = true
+            changed = true
         }
-        return next
+        if eventsMigrated {
+            next.events.sort { $0.sampledAt < $1.sampledAt }
+        }
+        return changed ? next : payload
     }
 
     /// 同时记录快照中的标准 5 小时 / 每周主次窗口，每个窗口独立成系列

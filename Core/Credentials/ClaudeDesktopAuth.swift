@@ -135,10 +135,17 @@ nonisolated enum ClaudeDesktopAuth {
             return nil
         }
 
+        // 若本机 ~/.claude.json 里的账号 UUID 与 Desktop 选中账号一致，回填邮箱，
+        // 避免从 CLI 凭据回退到 Desktop 时 accountKey 从邮箱哈希退化成 uuid 哈希。
+        let profile = ClaudeAuth.loadProfileFromConfig()
+        let matchedEmail = profile.accountUuid?.lowercased() == best.accountUuid.lowercased()
+            ? profile.email
+            : nil
+
         AppLog.info(.credentials, "discovered Claude account from Claude Desktop (no CLI credentials present)")
         return ClaudeAccount(
             source: .desktop,
-            email: nil,
+            email: matchedEmail,
             accountUuid: best.accountUuid,
             organizationUuid: best.organizationUuid,
             subscriptionType: best.subscriptionType,

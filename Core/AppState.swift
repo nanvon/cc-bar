@@ -1725,7 +1725,7 @@ final class AppState {
             resetClaudeQuotaState()
         }
         self.claudeAccount = next
-        migrateLegacyClaudeAccountData(to: accountKey)
+        migrateLegacyClaudeAccountData(to: accountKey, accountUuid: next.accountUuid)
         self.claudeError = nil
     }
 
@@ -1750,20 +1750,37 @@ final class AppState {
         return false
     }
 
-    private func migrateLegacyClaudeAccountData(to accountKey: String) {
-        let nextHistory = QuotaHistoryStore.migratingLegacyClaudeAccountKey(
-            quotaHistory,
-            to: accountKey
-        )
+    private func migrateLegacyClaudeAccountData(to accountKey: String, accountUuid: String? = nil) {
+        var sourceKeys = ["claude:primary"]
+        if let accountUuid, !accountUuid.isEmpty {
+            let uuidKey = QuotaHistoryAccountKey.claudePrimary(email: nil, accountUuid: accountUuid)
+            if uuidKey != accountKey {
+                sourceKeys.append(uuidKey)
+            }
+        }
+
+        var nextHistory = quotaHistory
+        for sourceKey in sourceKeys {
+            nextHistory = QuotaHistoryStore.migratingClaudeAccountKey(
+                nextHistory,
+                from: sourceKey,
+                to: accountKey
+            )
+        }
         if nextHistory != quotaHistory {
             quotaHistory = nextHistory
             dirtyQuotaFiles.insert(.history)
         }
 
-        let nextCycles = QuotaCycleStore.migratingLegacyClaudeAccountKey(
-            quotaCycles,
-            to: accountKey
-        )
+        var nextCycles = quotaCycles
+        for sourceKey in sourceKeys {
+            nextCycles = QuotaCycleStore.migratingClaudeAccountKey(
+                nextCycles,
+                from: sourceKey,
+                to: accountKey,
+                cleanupOverlap: sourceKey != "claude:primary"
+            )
+        }
         if nextCycles != quotaCycles {
             quotaCycles = nextCycles
             dirtyQuotaFiles.insert(.cycles)
