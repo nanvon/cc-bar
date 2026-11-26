@@ -159,21 +159,22 @@ enum QuotaHistoryStore {
     }
 
     /// 按最近保留的官方百分比变动事件，估算 1 个周额度相当于多少个 5 小时额度。
-    /// 仅统计未跨窗的真实消耗（`deltaPercent < 0`，过滤重置恢复与周期内小幅回升）；当周额度累计消耗
-    /// 不足 `minimumWeeklyConsumedPercent` 时返回 nil，避免整数百分比取整放大早期误差。
+    /// 按同窗且未重置的连续段累加净消耗（`max(0, segmentConsumed - delta)`）：既抵消
+    /// Antigravity 等服务在周期内的小幅回升，又在跨窗重置、满额重置或同窗 extraReset 时
+    /// 自动分段而不跨段抵消；当周额度累计消耗不足 `minimumWeeklyConsumedPercent` 时返回 nil。
     nonisolated static func weeklyToFiveHourRatio(
         payload: QuotaHistoryPayload,
         accountKey: String,
         minimumWeeklyConsumedPercent: Int = 5
     ) -> WeeklyToFiveHourRatio? {
-        let fiveHourEvents = payload.events.filter {
-            $0.accountKey == accountKey && $0.limitKind == .fiveHour && $0.deltaPercent < 0
-        }
-        let weeklyEvents = payload.events.filter {
-            $0.accountKey == accountKey && $0.limitKind == .weekly && $0.deltaPercent < 0
-        }
-        guard let firstFiveHour = fiveHourEvents.map(\.sampledAt).min(),
-              let firstWeekly = weeklyEvents.map(\.sampledAt).min()
+        let fiveHourEvents = payload.events
+            .filter { $0.accountKey == accountKey && $0.limitKind == .fiveHour }
+            .sorted { $0.sampledAt < $1.sampledAt }
+        let weeklyEvents = payload.events
+            .filter { $0.accountKey == accountKey && $0.limitKind == .weekly }
+            .sorted { $0.sampledAt < $1.sampledAt }
+        guard let firstFiveHour = fiveHourEvents.first(where: { $0.deltaPercent < 0 })?.sampledAt,
+              let firstWeekly = weeklyEvents.first(where: { $0.deltaPercent < 0 })?.sampledAt
         else { return nil }
 
         // 若某侧数据显著晚于另一侧才开始积累（超过 1 天），从较晚一侧前 5 小时起算，
@@ -185,12 +186,12 @@ enum QuotaHistoryStore {
             overlapCutoff = .distantPast
         }
 
-        let fiveHourConsumed = fiveHourEvents
-            .filter { $0.sampledAt >= overlapCutoff }
-            .reduce(0) { $0 - $1.deltaPercent }
-        let weeklyConsumed = weeklyEvents
-            .filter { $0.sampledAt >= overlapCutoff }
-            .reduce(0) { $0 - $1.deltaPercent }
+        let fiveHourConsumed = netConsumedPercent(
+            events: fiveHourEvents.filter { $0.sampledAt >= overlapCutoff }
+        )
+        let weeklyConsumed = netConsumedPercent(
+            events: weeklyEvents.filter { $0.sampledAt >= overlapCutoff }
+        )
 
         guard fiveHourConsumed > 0, weeklyConsumed >= minimumWeeklyConsumedPercent else {
             return nil
@@ -204,6 +205,40 @@ enum QuotaHistoryStore {
             fiveHourConsumedPercent: fiveHourConsumed,
             weeklyConsumedPercent: weeklyConsumed
         )
+    }
+
+    nonisolated private static func netConsumedPercent(events: [QuotaChangeEvent]) -> Int {
+        var total = 0
+        var segmentConsumed = 0
+        var previous: QuotaChangeEvent?
+
+        for event in events {
+            let startsNewSegment: Bool
+            if let previous {
+                startsNewSegment = !isSameWindow(previous.resetsAt, event.resetsAt)
+                    || isAfterUnresolvedReset(
+                        previousEnd: previous.resetsAt,
+                        resetsAt: event.resetsAt,
+                        sampledAt: event.sampledAt
+                    )
+                    || event.deltaPercent >= 20
+                    || (event.afterRemainingPercent == 100 && event.deltaPercent >= 5)
+            } else {
+                startsNewSegment = false
+            }
+
+            if startsNewSegment {
+                total += segmentConsumed
+                segmentConsumed = 0
+            }
+
+            if !startsNewSegment || event.deltaPercent < 0 {
+                segmentConsumed = max(0, segmentConsumed - event.deltaPercent)
+            }
+            previous = event
+        }
+
+        return total + segmentConsumed
     }
 
     /// 将持久化的变动事件与该系列最新采样投影为时间线。

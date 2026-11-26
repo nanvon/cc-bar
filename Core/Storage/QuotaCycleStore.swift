@@ -848,6 +848,98 @@ enum QuotaCycleStore {
         ))
     }
 
+    /// 基于近 15 天内被 5H 监控覆盖的周周期，以周期内各额度段的精确浮点净消耗估算
+    /// 1 个周额度相当于多少个 5 小时额度。周期内允许小幅回升（如 Antigravity 滑动回补），
+    /// 只取净消耗而非反复计扣，并排除 5H 尚未接入前就已开始消耗的过渡周周期。
+    nonisolated static func weeklyToFiveHourRatio(
+        payload: QuotaCyclePayload,
+        accountKey: String,
+        now: Date = Date(),
+        minimumWeeklyConsumedPercent: Double = 5
+    ) -> WeeklyToFiveHourRatio? {
+        let fiveHourCycles = payload.records
+            .filter { $0.accountKey == accountKey && $0.limitKind == .fiveHour }
+            .sorted { $0.startAt < $1.startAt }
+        let weeklyCycles = payload.records
+            .filter { $0.accountKey == accountKey && $0.limitKind == .weekly }
+            .sorted { $0.startAt < $1.startAt }
+        guard let earliestFiveHourSampleAt = fiveHourCycles.map({ $0.firstSampleAt ?? $0.startAt }).min(),
+              !weeklyCycles.isEmpty
+        else { return nil }
+
+        let fiveHourWindowSeconds: TimeInterval = 5 * 60 * 60
+        let recentCutoff = now.addingTimeInterval(-15 * 24 * 60 * 60)
+
+        let coveredWeeklies = weeklyCycles.filter { weekly in
+            let lastSeenAt = weekly.lastSampleAt ?? weekly.endAt
+            guard lastSeenAt >= recentCutoff else { return false }
+            let initialBaseline = weekly.allowanceSegments
+                .first(where: { $0.startReason == .initial })?
+                .baselineUsedPercent ?? 0
+            // 早期周期以 0% 基线起算且起点早于 5H 首次采样超过 1 个 5H 窗口，
+            // 说明前半段缺少 5H 追踪（如升级前已有周耗），跳过以免单侧数据拉低比值。
+            return initialBaseline > 0
+                || weekly.startAt >= earliestFiveHourSampleAt.addingTimeInterval(-fiveHourWindowSeconds)
+        }
+        guard !coveredWeeklies.isEmpty else { return nil }
+
+        var totalFiveHour = 0.0
+        var totalWeekly = 0.0
+        var claimedFiveHourIDs = Set<String>()
+
+        for weekly in coveredWeeklies {
+            let matchingFiveHours = fiveHourCycles.filter { fiveHour in
+                guard !claimedFiveHourIDs.contains(fiveHour.id) else { return false }
+                let midpoint = fiveHour.startAt.addingTimeInterval(
+                    fiveHour.endAt.timeIntervalSince(fiveHour.startAt) / 2
+                )
+                return midpoint >= weekly.startAt && midpoint < weekly.endAt
+            }
+            guard !matchingFiveHours.isEmpty else { continue }
+            for fiveHour in matchingFiveHours {
+                claimedFiveHourIDs.insert(fiveHour.id)
+                totalFiveHour += netConsumedPercent(of: fiveHour)
+            }
+            totalWeekly += netConsumedPercent(of: weekly)
+        }
+
+        guard totalFiveHour > 0, totalWeekly >= minimumWeeklyConsumedPercent else {
+            return nil
+        }
+
+        let ratio = totalFiveHour / totalWeekly
+        guard ratio > 0.5, ratio < 100 else { return nil }
+
+        return WeeklyToFiveHourRatio(
+            ratio: ratio,
+            fiveHourConsumedPercent: Int(totalFiveHour.rounded()),
+            weeklyConsumedPercent: Int(totalWeekly.rounded())
+        )
+    }
+
+    /// 单个周期的净消耗百分比：初始段（若旧迁移残留多条 initial 只取最大值）与后续
+    /// extraReset 段各自以 `endUsed - baselineUsedPercent` 计算，末段取 `latestUsedPercent`
+    /// 以抵消周期内回升，已结束的前序段取被重置前达到的 `maximumUsedPercent`。
+    nonisolated private static func netConsumedPercent(of record: QuotaCycleRecord) -> Double {
+        guard !record.allowanceSegments.isEmpty else {
+            return max(0, record.latestUsedPercent)
+        }
+        var initialMax = 0.0
+        var extraResetTotal = 0.0
+        let lastIndex = record.allowanceSegments.index(before: record.allowanceSegments.endIndex)
+        for (index, segment) in record.allowanceSegments.enumerated() {
+            let endUsed = index == lastIndex ? segment.latestUsedPercent : segment.maximumUsedPercent
+            let consumed = max(0, endUsed - segment.baselineUsedPercent)
+            switch segment.startReason {
+            case .initial:
+                initialMax = max(initialMax, consumed)
+            case .extraReset:
+                extraResetTotal += consumed
+            }
+        }
+        return initialMax + extraResetTotal
+    }
+
     nonisolated static func fileURL() -> URL {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.homeDirectoryForCurrentUser

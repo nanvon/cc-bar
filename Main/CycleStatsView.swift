@@ -252,7 +252,10 @@ struct QuotaCycleCardsSection: View {
 
     private func weeklyToFiveHourRatio(app: UsageApp) -> WeeklyToFiveHourRatio? {
         guard let accountKey = accountKey(for: app) else { return nil }
-        return QuotaHistoryStore.weeklyToFiveHourRatio(
+        return QuotaCycleStore.weeklyToFiveHourRatio(
+            payload: appState.quotaCycles,
+            accountKey: accountKey
+        ) ?? QuotaHistoryStore.weeklyToFiveHourRatio(
             payload: appState.quotaHistory,
             accountKey: accountKey
         )
