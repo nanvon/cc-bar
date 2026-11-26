@@ -252,6 +252,27 @@ struct ResetTimeText: View {
     }
 }
 
+/// 额度窗口重置状态展示：区分「尚未使用」（0% 且无重置时间）、「未知」（已使用但无重置时间）与正常倒计时，
+/// 无窗口数据或不适用时回落为 `—`。`font` / `foregroundStyle` 等由调用方在外层指定。
+struct QuotaWindowStatusText: View {
+    let window: QuotaWindow?
+    var isApplicable: Bool = true
+
+    var body: some View {
+        if isApplicable, let window {
+            if window.usedPercent == 0, window.resetsAt == nil {
+                Text(tr("Unused", "尚未使用"))
+            } else if let resetsAt = window.resetsAt {
+                ResetTimeText(resetsAt: resetsAt)
+            } else {
+                Text(tr("Unknown", "未知"))
+            }
+        } else {
+            ResetTimeText(resetsAt: window?.resetsAt)
+        }
+    }
+}
+
 // MARK: - Panel background / stroke (浅深色对照)
 //
 // 见 docs/设计风格.md §12.3。

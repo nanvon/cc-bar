@@ -615,10 +615,13 @@ private struct ServiceBlockView: View {
 
                 VStack(spacing: 1) {
                     HStack(spacing: 0) {
-                        ResetTimeText(resetsAt: snapshot?.primaryLimit?.window.resetsAt)
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
+                        QuotaWindowStatusText(
+                            window: snapshot?.primaryLimit?.window,
+                            isApplicable: !isUnlimited
+                        )
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
 
                         Spacer(minLength: 8)
 
@@ -634,19 +637,23 @@ private struct ServiceBlockView: View {
                         }
                     }
 
-                    HStack(spacing: 0) {
-                        BilingualInline(english: "reset", chinese: "重置")
-                            .font(.system(size: 9.5))
-                            .foregroundStyle(.tertiary)
+                    if !isPrimaryUnused || showsCost {
+                        HStack(spacing: 0) {
+                            if !isPrimaryUnused {
+                                BilingualInline(english: "reset", chinese: "重置")
+                                    .font(.system(size: 9.5))
+                                    .foregroundStyle(.tertiary)
+                            }
 
-                        // Spacer 必须在 showsCost 之外：showsCost 为 false 时这行只剩
-                        // 一个子视图，HStack 会把它居中，"重置"会跑到行中间。
-                        Spacer(minLength: 0)
+                            // Spacer 必须在 showsCost 之外：showsCost 为 false 时这行只剩
+                            // 一个子视图，HStack 会把它居中，"重置"会跑到行中间。
+                            Spacer(minLength: 0)
 
-                        if showsCost {
-                            BilingualInline(english: "cost", chinese: "费用")
-                                .font(.system(size: 9.5))
-                                .foregroundStyle(.tertiary)
+                            if showsCost {
+                                BilingualInline(english: "cost", chinese: "费用")
+                                    .font(.system(size: 9.5))
+                                    .foregroundStyle(.tertiary)
+                            }
                         }
                     }
                 }
@@ -683,24 +690,10 @@ private struct ServiceBlockView: View {
 
     @ViewBuilder
     private func compactLimitStatus(_ limit: QuotaLimit) -> some View {
-        if limit.window.usedPercent == 0,
-           limit.window.resetsAt == nil
-        {
-            Text(tr("Unused", "尚未使用"))
-                .font(.system(size: 10.5))
-                .foregroundStyle(.tertiary)
-                .lineLimit(1)
-        } else if let resetsAt = limit.window.resetsAt {
-            ResetTimeText(resetsAt: resetsAt)
-                .font(.system(size: 10.5))
-                .foregroundStyle(.tertiary)
-                .lineLimit(1)
-        } else {
-            Text(tr("Unknown", "未知"))
-                .font(.system(size: 10.5))
-                .foregroundStyle(.tertiary)
-                .lineLimit(1)
-        }
+        QuotaWindowStatusText(window: limit.window)
+            .font(.system(size: 10.5))
+            .foregroundStyle(.tertiary)
+            .lineLimit(1)
     }
 
     private func compactLimitLabel(_ limit: QuotaLimit) -> String {
@@ -778,6 +771,11 @@ private struct ServiceBlockView: View {
 
     private var isUnlimited: Bool {
         snapshot?.isUnlimited == true
+    }
+
+    private var isPrimaryUnused: Bool {
+        guard !isUnlimited, let window = snapshot?.primaryWindow else { return false }
+        return window.usedPercent == 0 && window.resetsAt == nil
     }
 
     private var primaryValueText: String {

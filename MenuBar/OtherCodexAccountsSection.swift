@@ -132,9 +132,10 @@ private struct ImportedCodexRow: View {
                 .foregroundStyle(rowColor(window: window))
                 .frame(width: 30, alignment: .trailing)
 
-            ResetTimeText(resetsAt: window?.resetsAt)
+            QuotaWindowStatusText(window: window)
                 .font(.system(size: 10.5))
                 .foregroundStyle(.tertiary)
+                .lineLimit(1)
                 .frame(width: 70, alignment: .trailing)
         }
     }
