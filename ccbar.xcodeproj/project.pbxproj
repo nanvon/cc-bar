@@ -145,6 +145,14 @@
 		49C1B193000000000001AABB /* OtherCodexAccountsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B193000000000001AAAA /* OtherCodexAccountsSection.swift */; };
 		49C1B194000000000001AABB /* ImportedCodexAccountsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B194000000000001AAAA /* ImportedCodexAccountsView.swift */; };
 		49C1B195000000000001AABB /* CodexResetCreditsDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B195000000000001AAAA /* CodexResetCreditsDetailView.swift */; };
+		49C2E101000000000001AABB /* SettingsModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C2E101000000000001AAAA /* SettingsModels.swift */; };
+		49C2E102000000000001AABB /* SettingsComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C2E102000000000001AAAA /* SettingsComponents.swift */; };
+		49C2E103000000000001AABB /* SettingsServicesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C2E103000000000001AAAA /* SettingsServicesView.swift */; };
+		49C2E104000000000001AABB /* SettingsDisplayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C2E104000000000001AAAA /* SettingsDisplayView.swift */; };
+		49C2E105000000000001AABB /* SettingsAlertsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C2E105000000000001AAAA /* SettingsAlertsView.swift */; };
+		49C2E106000000000001AABB /* SettingsStatisticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C2E106000000000001AAAA /* SettingsStatisticsView.swift */; };
+		49C2E107000000000001AABB /* SettingsNetworkView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C2E107000000000001AAAA /* SettingsNetworkView.swift */; };
+		49C2E108000000000001AABB /* SettingsGeneralView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C2E108000000000001AAAA /* SettingsGeneralView.swift */; };
 		49C1B196000000000001AABB /* ImportedUsageBackfill.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B196000000000001AAAA /* ImportedUsageBackfill.swift */; };
 		49C1B300000000000001AABB /* QuotaParsingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C1B300000000000001AAAA /* QuotaParsingTests.swift */; };
 		49C2B108000000000001AAAA /* PricingRulesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49C2B107000000000001AAAA /* PricingRulesTests.swift */; };
@@ -315,6 +323,14 @@
 		49C1B193000000000001AAAA /* OtherCodexAccountsSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OtherCodexAccountsSection.swift; sourceTree = "<group>"; };
 		49C1B194000000000001AAAA /* ImportedCodexAccountsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportedCodexAccountsView.swift; sourceTree = "<group>"; };
 		49C1B195000000000001AAAA /* CodexResetCreditsDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexResetCreditsDetailView.swift; sourceTree = "<group>"; };
+		49C2E101000000000001AAAA /* SettingsModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsModels.swift; sourceTree = "<group>"; };
+		49C2E102000000000001AAAA /* SettingsComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsComponents.swift; sourceTree = "<group>"; };
+		49C2E103000000000001AAAA /* SettingsServicesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsServicesView.swift; sourceTree = "<group>"; };
+		49C2E104000000000001AAAA /* SettingsDisplayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsDisplayView.swift; sourceTree = "<group>"; };
+		49C2E105000000000001AAAA /* SettingsAlertsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsAlertsView.swift; sourceTree = "<group>"; };
+		49C2E106000000000001AAAA /* SettingsStatisticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsStatisticsView.swift; sourceTree = "<group>"; };
+		49C2E107000000000001AAAA /* SettingsNetworkView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsNetworkView.swift; sourceTree = "<group>"; };
+		49C2E108000000000001AAAA /* SettingsGeneralView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsGeneralView.swift; sourceTree = "<group>"; };
 		49C1B196000000000001AAAA /* ImportedUsageBackfill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportedUsageBackfill.swift; sourceTree = "<group>"; };
 		49C1B300000000000001AAAA /* QuotaParsingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaParsingTests.swift; sourceTree = "<group>"; };
 		49C2B107000000000001AAAA /* PricingRulesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PricingRulesTests.swift; sourceTree = "<group>"; };
@@ -432,6 +448,14 @@
 			isa = PBXGroup;
 			children = (
 				4931AC542FC02A4200EE598C /* SettingsRootView.swift */,
+				49C2E101000000000001AAAA /* SettingsModels.swift */,
+				49C2E102000000000001AAAA /* SettingsComponents.swift */,
+				49C2E103000000000001AAAA /* SettingsServicesView.swift */,
+				49C2E104000000000001AAAA /* SettingsDisplayView.swift */,
+				49C2E105000000000001AAAA /* SettingsAlertsView.swift */,
+				49C2E106000000000001AAAA /* SettingsStatisticsView.swift */,
+				49C2E107000000000001AAAA /* SettingsNetworkView.swift */,
+				49C2E108000000000001AAAA /* SettingsGeneralView.swift */,
 				49C1CC04000000000001AAAA /* CommandCodeCredentialSheet.swift */,
 				49C1CC08000000000001AAAA /* OpenCodeGoCredentialSheet.swift */,
 				49C1B194000000000001AAAA /* ImportedCodexAccountsView.swift */,
@@ -907,6 +931,14 @@
 				49C1B193000000000001AABB /* OtherCodexAccountsSection.swift in Sources */,
 				49C1B194000000000001AABB /* ImportedCodexAccountsView.swift in Sources */,
 				49C1B195000000000001AABB /* CodexResetCreditsDetailView.swift in Sources */,
+				49C2E101000000000001AABB /* SettingsModels.swift in Sources */,
+				49C2E102000000000001AABB /* SettingsComponents.swift in Sources */,
+				49C2E103000000000001AABB /* SettingsServicesView.swift in Sources */,
+				49C2E104000000000001AABB /* SettingsDisplayView.swift in Sources */,
+				49C2E105000000000001AABB /* SettingsAlertsView.swift in Sources */,
+				49C2E106000000000001AABB /* SettingsStatisticsView.swift in Sources */,
+				49C2E107000000000001AABB /* SettingsNetworkView.swift in Sources */,
+				49C2E108000000000001AABB /* SettingsGeneralView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
