@@ -86,6 +86,7 @@ struct SettingsNetworkView: View {
                     .frame(width: SettingsLayout.menuPickerWidth)
                 }
             }
+            .id("network-polling")
 
             // 全局网络代理
             SettingsCard(
@@ -121,6 +122,7 @@ struct SettingsNetworkView: View {
                         .id(resolution)
                 }
             }
+            .id("network-proxy")
 
             // Claude 专用代理
             SettingsCard(

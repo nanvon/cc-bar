@@ -35,6 +35,7 @@ struct SettingsDisplayView: View {
                     .fixedSize()
                 }
             }
+            .id("display-menubar")
 
             // 弹出面板
             SettingsCard(
@@ -99,6 +100,7 @@ struct SettingsDisplayView: View {
                     .disabled(settings.privacyMode)
                 }
             }
+            .id("display-popover")
 
             // 桌面悬浮窗
             SettingsCard(
@@ -132,6 +134,7 @@ struct SettingsDisplayView: View {
                     }
                 }
             }
+            .id("display-floating")
 
             // 时间与隐私
             SettingsCard(
@@ -168,6 +171,7 @@ struct SettingsDisplayView: View {
                         .tint(.green)
                 }
             }
+            .id("display-privacy")
         }
     }
 }

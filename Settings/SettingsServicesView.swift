@@ -41,6 +41,7 @@ struct SettingsServicesView: View {
                     serviceRows(inUse, floatingHUDGloballyEnabled: settings.floatingEnabled)
                 }
             }
+            .id("services-detected")
 
             // 未检测服务分组（可折叠）
             if !others.isEmpty {

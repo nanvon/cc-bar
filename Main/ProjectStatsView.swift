@@ -193,6 +193,8 @@ struct ProjectStatsView: View {
     private func projectList(rows: [ProjectUsageRow], output: ProjectPageCache.Output) -> some View {
         VStack(spacing: 0) {
             filterRow(projectCount: output.overview.projects.count)
+            Divider()
+                .padding(.top, 8)
 
             if isOrganizing {
                 organizingState
@@ -436,13 +438,13 @@ private struct ProjectListRow: View {
             }
             HStack(spacing: 6) {
                 PrivacySensitiveText(text: subtitle, sensitive: row.status.isPathBased)
-                    .font(.system(size: 10.5))
+                    .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
                     .truncationMode(.head)
                 Spacer(minLength: 6)
                 Text("\(metric == .tokens ? StatsFormatter.cost(row.totals.costUSD) : "\(StatsFormatter.compactToken(row.totals.totalTokens)) Tokens") · \(StatsRelativeDay.text(row.lastAt))")
-                    .font(.system(size: 10.5))
+                    .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
             }
@@ -541,23 +543,23 @@ private struct UnattributedListRow: View {
                 CompositionSwatch(role: .unattributed, size: 10)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(tr("Unattributed", "未归属"))
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.system(size: 12.5, weight: .semibold))
                         .foregroundStyle(.secondary)
                     Text(tr(
                         "Cursor remote usage, backfilled and early history have no project",
                         "Cursor 远端用量、补录和早期历史没有项目信息"
                     ))
-                    .font(.system(size: 10))
+                    .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
                 }
                 Spacer(minLength: 6)
                 VStack(alignment: .trailing, spacing: 2) {
                     Text(StatsFormatter.cost(totals.costUSD))
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.system(size: 12.5, weight: .semibold))
                         .monospacedDigit()
                     Text("\(StatsFormatter.compactToken(totals.totalTokens)) Tokens")
-                        .font(.system(size: 10.5))
+                        .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                 }
@@ -585,7 +587,7 @@ private struct ProjectDetailView: View {
     /// 卡片高度只由固定行数决定、不随项目内容变化，切换项目时各卡片不跳：
     /// 用量图那一排固定 250（设计稿）；工具与模型最多 5 行；分支预留 5 行、高消耗对话预留 3 行，
     /// 内容少时卡片下方留白。「仓库与 worktree」在最下方按内容显示，只影响页面长度。
-    private static let chartRowHeight: CGFloat = 250
+    private static let chartRowHeight: CGFloat = 264
     private static let modelSlots = 5
     private static let branchSlots = 5
     private static let topConversationSlots = 3
@@ -596,10 +598,10 @@ private struct ProjectDetailView: View {
                 // 沿用概览的 880pt 会让默认窗口退成单列，用两页共用的阈值。
                 let isWide = proxy.size.width >= StatsSplitMetrics.wideDetailWidth
                 let width = max(0, proxy.size.width - 40)
-                VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 12) {
                     header
-                    kpis
                     allTimeLine
+                    kpis
                     StatsSplitRow(
                         isWide: isWide,
                         width: width,
@@ -719,8 +721,8 @@ private struct ProjectDetailView: View {
     private var allTimeLine: some View {
         let first = detail.firstUsedDay.map { StatsFormatter.day($0) } ?? "—"
         return Text(tr(
-            "Above: \(rangeLabel). All time: \(StatsFormatter.compactToken(detail.allTimeTotals.totalTokens)) tokens · \(StatsFormatter.cost(detail.allTimeTotals.costUSD)) · first used \(first)",
-            "以上为\(rangeLabel)。全部时间：\(StatsFormatter.compactToken(detail.allTimeTotals.totalTokens)) Tokens · \(StatsFormatter.cost(detail.allTimeTotals.costUSD)) · 首次使用 \(first)"
+            "Current range: \(rangeLabel) · All time: \(StatsFormatter.compactToken(detail.allTimeTotals.totalTokens)) tokens · \(StatsFormatter.cost(detail.allTimeTotals.costUSD)) · first used \(first)",
+            "当前范围：\(rangeLabel) · 全部时间：\(StatsFormatter.compactToken(detail.allTimeTotals.totalTokens)) Tokens · \(StatsFormatter.cost(detail.allTimeTotals.costUSD)) · 首次使用 \(first)"
         ))
         .font(.system(size: 11))
         .foregroundStyle(.secondary)
@@ -745,51 +747,56 @@ private struct ProjectDetailView: View {
                     HStack(spacing: 4) {
                         ServiceTile(app: app, size: 12)
                         Text("\(app.displayName) \(StatsFormatter.percent(share(detail.totalsByApp[app] ?? .zero)))")
-                            .font(.system(size: 10.5))
+                            .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                             .monospacedDigit()
                     }
                 }
             }
-            Divider()
-            VStack(spacing: 6) {
+            VStack(spacing: 0) {
+                HStack(spacing: 8) {
+                    tableHeader(tr("Model", "模型"), alignment: .leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    tableHeader("Tokens", alignment: .trailing)
+                        .frame(width: 80, alignment: .trailing)
+                    tableHeader(tr("Cost", "费用"), alignment: .trailing)
+                        .frame(width: 82, alignment: .trailing)
+                }
+                .padding(.bottom, 5)
                 ForEach(models) { model in
-                    HStack(spacing: 6) {
-                        ForEach(
-                            UsageApp.displayOrdered(model.apps, preferred: SettingsStore.shared.visibleUsageApps),
-                            id: \.self
-                        ) { app in
-                            ServiceTile(app: app, size: 12)
+                    Divider()
+                    HStack(spacing: 8) {
+                        HStack(spacing: 6) {
+                            ForEach(
+                                UsageApp.displayOrdered(model.apps, preferred: SettingsStore.shared.visibleUsageApps),
+                                id: \.self
+                            ) { app in
+                                ServiceTile(app: app, size: 12)
+                            }
+                            Text(model.model)
+                                .font(.system(size: 12, design: .monospaced))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
                         }
-                        Text(model.model)
-                            .font(.system(size: 11.5, design: .monospaced))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            .layoutPriority(1)
-                        Spacer(minLength: 6)
-                        Text(metric == .tokens ? StatsFormatter.cost(model.totals.costUSD) : StatsFormatter.compactToken(model.totals.totalTokens))
-                            .font(.system(size: 10.5))
-                            .foregroundStyle(.secondary)
-                            .monospacedDigit()
-                        Text(metric == .tokens ? StatsFormatter.compactToken(model.totals.totalTokens) : StatsFormatter.cost(model.totals.costUSD))
-                            .font(.system(size: 11.5, weight: .semibold))
-                            .monospacedDigit()
-                            .frame(width: 76, alignment: .trailing)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        cell(StatsFormatter.compactToken(model.totals.totalTokens), width: 80, emphasized: metric == .tokens)
+                        cell(StatsFormatter.cost(model.totals.costUSD), width: 82, emphasized: metric == .cost)
                     }
+                    .padding(.vertical, 5)
                 }
                 if !restModels.isEmpty {
                     let restTotals = restModels.reduce(into: UsageTotals.zero) { $0.add($1.totals) }
-                    HStack {
+                    Divider()
+                    HStack(spacing: 8) {
                         Text(tr("\(restModels.count) other models", "其余 \(restModels.count) 个模型"))
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Text(metric == .tokens ? StatsFormatter.compactToken(restTotals.totalTokens) : StatsFormatter.cost(restTotals.costUSD))
                             .font(.system(size: 11.5))
                             .foregroundStyle(.secondary)
-                            .monospacedDigit()
-                            .frame(width: 76, alignment: .trailing)
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        cell(StatsFormatter.compactToken(restTotals.totalTokens), width: 80)
+                        cell(StatsFormatter.cost(restTotals.costUSD), width: 82)
                     }
+                    .padding(.vertical, 5)
                 }
             }
         }
@@ -801,32 +808,32 @@ private struct ProjectDetailView: View {
         let rows = Array(detail.branches.prefix(limit))
         let rest = detail.branches.dropFirst(limit)
         return VStack(spacing: 0) {
-            HStack {
+            HStack(spacing: 8) {
                 tableHeader(tr("Branch", "分支"), alignment: .leading).frame(maxWidth: .infinity, alignment: .leading)
-                tableHeader(tr("Chats", "对话数"), alignment: .trailing).frame(width: 52, alignment: .trailing)
-                tableHeader("Tokens", alignment: .trailing).frame(width: 74, alignment: .trailing)
-                tableHeader(tr("Cost", "费用"), alignment: .trailing).frame(width: 76, alignment: .trailing)
+                tableHeader(tr("Chats", "对话数"), alignment: .trailing).frame(width: 54, alignment: .trailing)
+                tableHeader("Tokens", alignment: .trailing).frame(width: 80, alignment: .trailing)
+                tableHeader(tr("Cost", "费用"), alignment: .trailing).frame(width: 82, alignment: .trailing)
             }
             .padding(.bottom, 6)
             ForEach(rows) { branch in
                 Divider()
-                HStack {
+                HStack(spacing: 8) {
                     PrivacySensitiveText(text: branch.branch ?? tr("(no branch info)", "（无分支信息）"), kind: .branch, sensitive: branch.branch != nil)
-                        .font(.system(size: 11.5, design: branch.branch == nil ? .default : .monospaced))
+                        .font(.system(size: 12, design: branch.branch == nil ? .default : .monospaced))
                         .foregroundStyle(branch.branch == nil ? Color.secondary : Color.primary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                    cell(StatsFormatter.token(branch.conversationCount), width: 52)
-                    cell(StatsFormatter.compactToken(branch.totals.totalTokens), width: 74)
-                    cell(StatsFormatter.cost(branch.totals.costUSD), width: 76, emphasized: true)
+                    cell(StatsFormatter.token(branch.conversationCount), width: 54)
+                    cell(StatsFormatter.compactToken(branch.totals.totalTokens), width: 80)
+                    cell(StatsFormatter.cost(branch.totals.costUSD), width: 82, emphasized: true)
                 }
                 .padding(.vertical, 5)
             }
             if !rest.isEmpty {
                 Divider()
                 Text(tr("\(rest.count) more branches", "另有 \(rest.count) 个分支"))
-                    .font(.system(size: 10.5))
+                    .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.top, 5)
@@ -883,7 +890,7 @@ private struct ProjectDetailView: View {
                     if index > 0 { Divider() }
                     VStack(spacing: 2) {
                         Text(" ").font(.system(size: 12.5, weight: .medium))
-                        Text(" ").font(.system(size: 10.5))
+                        Text(" ").font(.system(size: 11))
                     }
                     .padding(.vertical, 6)
                 }
@@ -907,18 +914,18 @@ private struct ProjectDetailView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: 6) {
                             PrivacySensitiveText(text: item.path)
-                                .font(.system(size: 11, design: .monospaced))
+                                .font(.system(size: 11.5, design: .monospaced))
                                 .lineLimit(1)
                                 .truncationMode(.middle)
                             if item.isMain { ProjectBadge(text: tr("Main repository", "主仓库")) }
                         }
                         PrivacySensitiveText(text: item.branch ?? tr("(branch unknown)", "（分支未知）"), kind: .branch, sensitive: item.branch != nil)
-                            .font(.system(size: 10.5, design: .monospaced))
+                            .font(.system(size: 11, design: .monospaced))
                             .foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 8)
-                    cell(StatsFormatter.compactToken(item.totals.totalTokens), width: 74)
-                    cell(StatsFormatter.cost(item.totals.costUSD), width: 76, emphasized: true)
+                    cell(StatsFormatter.compactToken(item.totals.totalTokens), width: 80)
+                    cell(StatsFormatter.cost(item.totals.costUSD), width: 82, emphasized: true)
                 }
                 .padding(.vertical, 6)
             }
@@ -927,15 +934,16 @@ private struct ProjectDetailView: View {
 
     private func tableHeader(_ text: String, alignment: Alignment) -> some View {
         Text(text)
-            .font(.system(size: 10.5, weight: .semibold))
+            .font(.system(size: 11, weight: .semibold))
             .foregroundStyle(.tertiary)
     }
 
     private func cell(_ text: String, width: CGFloat, emphasized: Bool = false) -> some View {
         Text(text)
-            .font(.system(size: 11.5, weight: emphasized ? .semibold : .regular))
+            .font(.system(size: 12, weight: emphasized ? .semibold : .regular))
             .foregroundStyle(emphasized ? Color.primary : Color.secondary)
             .monospacedDigit()
+            .lineLimit(1)
             .frame(width: width, alignment: .trailing)
     }
 }
@@ -950,7 +958,7 @@ private struct UnattributedDetailView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 12) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(tr("Unattributed", "未归属"))
                         .font(.system(size: 18, weight: .semibold))
@@ -1138,7 +1146,7 @@ private struct DetailSection<Content: View>: View {
     @ViewBuilder var content: () -> Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
                 Text(title).font(.system(size: 12.5, weight: .semibold))
                 Spacer()
@@ -1146,9 +1154,9 @@ private struct DetailSection<Content: View>: View {
             }
             content()
         }
-        .padding(14)
+        .padding(16)
         .frame(maxWidth: .infinity, maxHeight: fillHeight ? .infinity : nil, alignment: .topLeading)
-        .ccPanel(cornerRadius: 10)
+        .ccPanel(cornerRadius: 12)
     }
 }
 

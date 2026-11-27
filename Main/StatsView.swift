@@ -551,8 +551,9 @@ struct StatsView: View {
         let model = overviewModel
         let scope = StatsOverviewScope(range: range, granularity: granularity, serviceFilter: serviceFilter)
         let contentWidth = max(0, canvasWidth - 40)
+        let compositionWidth = isWide ? ((contentWidth - 12) * (5.0 / 9.0)).rounded(.down) : contentWidth
         return VStack(alignment: .leading, spacing: 12) {
-            OverviewKPIRow(model: model, serviceFilter: serviceFilter)
+            OverviewKPIRow(model: model, serviceFilter: serviceFilter, availableWidth: contentWidth)
                 .onHeightChange { overviewTopHeight = $0 }
 
             StatsSplitRow(
@@ -575,6 +576,7 @@ struct StatsView: View {
                 OverviewCompositionPanel(
                     model: model,
                     scope: scope,
+                    availableWidth: compositionWidth,
                     dimension: $session.compositionDimension,
                     onSelectService: { app in serviceFilter = filter(for: app) },
                     navigate: navigate
@@ -800,7 +802,7 @@ struct StatsView: View {
             Spacer()
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 14)
+        .padding(.vertical, 16)
         .frame(maxHeight: .infinity, alignment: .top)
         .background(.regularMaterial)
     }
@@ -830,36 +832,17 @@ struct StatsView: View {
         active: Bool,
         action: @escaping () -> Void
     ) -> some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                if let icon {
-                    Image(systemName: icon)
-                        .font(.system(size: 12))
-                        .frame(width: 14, height: 14)
-                        .foregroundStyle(active ? Color.white : Color.secondary)
-                } else if let app {
-                    ServiceTile(app: app, size: 14)
-                } else {
-                    Color.clear.frame(width: 14, height: 14)
-                }
-
-                Text(tr(english, chinese))
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(active ? Color.white : Color.primary)
-
-                Spacer()
+        MainWindowSidebarItem(title: tr(english, chinese), active: active, action: action) {
+            if let icon {
+                Image(systemName: icon)
+                    .font(.system(size: 12))
+                    .foregroundStyle(active ? Color.white : Color.secondary)
+            } else if let app {
+                ServiceTile(app: app, size: 14)
+            } else {
+                Color.clear
             }
-            .padding(.vertical, 5)
-            .padding(.horizontal, 8)
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(active ? Color.accentColor : Color.clear)
-            )
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .focusEffectDisabled()
-        .pointingHandCursor()
     }
 
     // MARK: Top bar (segmented + custom)
@@ -926,8 +909,7 @@ struct StatsView: View {
                     Image(systemName: "arrow.clockwise")
                 }
             }
-            .buttonStyle(.borderless)
-            .frame(width: 26, height: 22)
+            .buttonStyle(PopoverIconButtonStyle())
             .help(tr("Refresh local usage", "刷新本机用量"))
         }
     }
@@ -1426,9 +1408,30 @@ private struct StatsScanningIndicator: View {
 private struct OverviewKPIRow: View {
     let model: StatsOverviewModel
     let serviceFilter: StatsServiceFilter
+    let availableWidth: CGFloat
+
+    private var displayedApps: [UsageApp] {
+        guard let selected = serviceFilter.usageApp else { return model.visibleApps }
+        return model.visibleApps.filter { $0 == selected }
+    }
+
+    private var columnCount: Int {
+        let count = 2 + displayedApps.count
+        guard count > 1 else { return 1 }
+        let minCardWidth: CGFloat = 120
+        let spacing: CGFloat = 12
+        let maxCols = max(1, Int((availableWidth + spacing) / (minCardWidth + spacing)))
+        if maxCols >= count { return count }
+        // 窄窗口卡片较多时折行并均分每行数量（如 9 卡拆成 5+4），避免最后一行空太多。
+        let rows = Int(ceil(Double(count) / Double(maxCols)))
+        return Int(ceil(Double(count) / Double(rows)))
+    }
 
     var body: some View {
-        HStack(spacing: 12) {
+        LazyVGrid(
+            columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: columnCount),
+            spacing: 12
+        ) {
             KPICard(
                 english: "Total tokens",
                 chinese: "总 Tokens",
@@ -1450,28 +1453,25 @@ private struct OverviewKPIRow: View {
                 app: nil,
                 dimmed: false
             )
-            ForEach(model.visibleApps, id: \.self) { app in
+            ForEach(displayedApps, id: \.self) { app in
                 serviceCard(for: app)
             }
         }
     }
 
     private func serviceCard(for app: UsageApp) -> some View {
-        let isDimmed = serviceFilter.usageApp != nil && serviceFilter.usageApp != app
         let totals = model.totals(app)
         return KPICard(
             english: app.displayName,
             chinese: app.displayName,
-            value: isDimmed
-                ? "—"
-                : StatsFormatter.tierCost(
-                    totals.costUSD,
-                    hasUnpricedUsage: totals.hasUnpricedUsage,
-                    costIncomplete: totals.costIncomplete
-                ),
-            delta: isDimmed ? nil : costDelta(current: totals, previous: model.previousTotals(app)),
+            value: StatsFormatter.tierCost(
+                totals.costUSD,
+                hasUnpricedUsage: totals.hasUnpricedUsage,
+                costIncomplete: totals.costIncomplete
+            ),
+            delta: costDelta(current: totals, previous: model.previousTotals(app)),
             app: app,
-            dimmed: isDimmed
+            dimmed: false
         )
     }
 
@@ -1548,10 +1548,13 @@ private struct OverviewTokenBreakdownPanel: View {
             Text(StatsFormatter.compactToken(tokens))
                 .font(.system(size: 12.5, weight: .semibold))
                 .monospacedDigit()
+                .lineLimit(1)
+                .frame(minWidth: 72, alignment: .trailing)
             Text(StatsFormatter.sharePercent(denominator > 0 ? Double(tokens) / Double(denominator) : 0))
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
+                .lineLimit(1)
                 .frame(width: 48, alignment: .trailing)
         }
         .padding(.vertical, 7)
@@ -1786,12 +1789,19 @@ extension CompositionDimension {
 private struct OverviewCompositionPanel: View {
     let model: StatsOverviewModel
     let scope: StatsOverviewScope
+    let availableWidth: CGFloat
     @Binding var dimension: CompositionDimension
     let onSelectService: (UsageApp) -> Void
     let navigate: (StatsNavigationRequest.Target) -> Void
 
     @State private var expandedProvider: ModelProvider?
     @State private var expandedModel: String?
+
+    /// 刚过 `880pt` 并排断点时左栏约 460~539pt，收窄主数列并隐藏次要的输出速度列，留足左侧名称空间。
+    private var isCompactWidth: Bool { availableWidth < 540 }
+    private var tokenColumnWidth: CGFloat { isCompactWidth ? 74 : 86 }
+    private var costColumnWidth: CGFloat { isCompactWidth ? 76 : 86 }
+    private var showsSpeedColumn: Bool { !isCompactWidth }
 
     var body: some View {
         let rows = model.composition[dimension] ?? []
@@ -1879,10 +1889,12 @@ private struct OverviewCompositionPanel: View {
             Color.clear.frame(width: 8, height: 1)
             Text(dimension.label)
             Spacer(minLength: 8)
-            Text("Tokens").frame(width: 86, alignment: .trailing)
-            Text(tr("Cost", "费用")).frame(width: 86, alignment: .trailing)
+            Text("Tokens").frame(width: tokenColumnWidth, alignment: .trailing)
+            Text(tr("Cost", "费用")).frame(width: costColumnWidth, alignment: .trailing)
             Text(tr("Share", "占比")).frame(width: 46, alignment: .trailing)
-            Text(tr("Output speed", "输出速度")).frame(width: Self.speedColumnWidth, alignment: .trailing)
+            if showsSpeedColumn {
+                Text(tr("Output speed", "输出速度")).frame(width: Self.speedColumnWidth, alignment: .trailing)
+            }
             Text(tr("Cache hit", "缓存命中率")).frame(width: 64, alignment: .trailing)
             Color.clear.frame(width: 10, height: 1)
         }
@@ -1961,7 +1973,9 @@ private struct OverviewCompositionPanel: View {
             Text("\(StatsFormatter.compactToken(row.totals.totalTokens))")
                 .font(.system(size: 13, weight: .semibold))
                 .monospacedDigit()
-                .frame(width: 86, alignment: .trailing)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+                .frame(width: tokenColumnWidth, alignment: .trailing)
             Text(StatsFormatter.tierCost(
                 row.totals.costUSD,
                 hasUnpricedUsage: row.totals.hasUnpricedUsage,
@@ -1969,20 +1983,24 @@ private struct OverviewCompositionPanel: View {
             ))
             .font(.system(size: 13, weight: .semibold))
             .monospacedDigit()
-            .frame(width: 86, alignment: .trailing)
+            .lineLimit(1)
+            .minimumScaleFactor(0.85)
+            .frame(width: costColumnWidth, alignment: .trailing)
             Text(StatsFormatter.percent(model.share(of: row.totals)))
-                .font(.system(size: 11))
+                .font(.system(size: 11.5))
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
                 .frame(width: 46, alignment: .trailing)
-            Text(StatsFormatter.outputSpeed(row.totals.timing))
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .monospacedDigit()
-                .frame(width: Self.speedColumnWidth, alignment: .trailing)
-                .help(StatsFormatter.outputSpeedHelp(row.totals.timing))
+            if showsSpeedColumn {
+                Text(StatsFormatter.outputSpeed(row.totals.timing))
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .frame(width: Self.speedColumnWidth, alignment: .trailing)
+                    .help(StatsFormatter.outputSpeedHelp(row.totals.timing))
+            }
             Text(hitRateText(row.totals.cacheHitRate))
-                .font(.system(size: 11))
+                .font(.system(size: 11.5))
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
                 .frame(width: 64, alignment: .trailing)
@@ -2015,25 +2033,29 @@ private struct OverviewCompositionPanel: View {
             // 数值列与父行的 Tokens / 费用 / 输出速度列对齐（同样 8pt 间距），占比、命中率、箭头位留空。
             HStack(spacing: 8) {
                 Text(StatsFormatter.compactToken(row.totals.totalTokens))
-                    .font(.system(size: 10.5))
+                    .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
-                    .frame(width: 86, alignment: .trailing)
+                    .lineLimit(1)
+                    .frame(width: tokenColumnWidth, alignment: .trailing)
                 Text(StatsFormatter.tierCost(
                     row.totals.costUSD,
                     hasUnpricedUsage: row.totals.hasUnpricedUsage,
                     costIncomplete: row.totals.costIncomplete
                 ))
-                .font(.system(size: 11.5, weight: .semibold))
+                .font(.system(size: 12, weight: .semibold))
                 .monospacedDigit()
-                .frame(width: 86, alignment: .trailing)
+                .lineLimit(1)
+                .frame(width: costColumnWidth, alignment: .trailing)
                 Color.clear.frame(width: 46, height: 1)
-                Text(StatsFormatter.outputSpeed(row.totals.timing))
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-                    .frame(width: Self.speedColumnWidth, alignment: .trailing)
-                    .help(StatsFormatter.outputSpeedHelp(row.totals.timing))
+                if showsSpeedColumn {
+                    Text(StatsFormatter.outputSpeed(row.totals.timing))
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                        .frame(width: Self.speedColumnWidth, alignment: .trailing)
+                        .help(StatsFormatter.outputSpeedHelp(row.totals.timing))
+                }
                 Color.clear.frame(width: 64, height: 1)
                 Color.clear.frame(width: 10, height: 1)
             }
@@ -2186,7 +2208,7 @@ struct TopConversationRowView: View {
                         .font(.system(size: 12.5, weight: .medium))
                         .lineLimit(1)
                     Text(metaLine)
-                        .font(.system(size: 10.5))
+                        .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -2207,7 +2229,7 @@ struct TopConversationRowView: View {
                         .font(.system(size: 12.5, weight: .semibold))
                         .monospacedDigit()
                     Text("\(metric == .tokens ? costText : tokensText) · \(StatsFormatter.percent(share))")
-                        .font(.system(size: 10.5))
+                        .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                 }
@@ -2566,37 +2588,6 @@ struct StatsRangePicker: View {
     }
 }
 
-/// 列表栏顶部过滤行的搜索框：外观与 `SegmentedBar` 容器同一套（高 24、圆角 7、同底色）。
-struct StatsSearchField: View {
-    let prompt: String
-    @Binding var text: String
-
-    @Environment(\.colorScheme) private var colorScheme
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 11))
-                .foregroundStyle(.tertiary)
-            Group {
-                if PrivacyDisplay.isEnabled {
-                    SecureField(prompt, text: $text)
-                } else {
-                    TextField(prompt, text: $text)
-                }
-            }
-            .textFieldStyle(.plain)
-            .font(.system(size: 11.5))
-        }
-        .padding(.horizontal, 8)
-        .frame(height: 24)
-        .background(
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(colorScheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.06))
-        )
-    }
-}
-
 /// 过滤行里的无边框下拉菜单（排序等）：11.5pt 文案 + 8pt 下拉箭头，高 24。
 struct StatsFilterMenu<Item: Hashable>: View {
     let items: [Item]
@@ -2621,9 +2612,7 @@ struct StatsFilterMenu<Item: Hashable>: View {
                     .font(.system(size: 8, weight: .semibold))
                     .foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 6)
-            .frame(height: 24)
-            .contentShape(Rectangle())
+            .statsFilterMenuChrome()
         }
         .menuStyle(.button)
         .buttonStyle(.plain)
@@ -2945,6 +2934,8 @@ private struct QuotaTimelineAccountPanel: View {
                     .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4.5 }
                 Text(section.title)
                     .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
                 if let kind = activeWindow?.kind {
                     Text(limitKindLabel(kind))
                         .font(.system(size: 9, weight: .semibold))
@@ -2952,9 +2943,10 @@ private struct QuotaTimelineAccountPanel: View {
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
                         .background(Color.secondary.opacity(0.1), in: Capsule())
+                        .fixedSize()
                 }
             }
-            Spacer()
+            Spacer(minLength: 8)
             if let window = activeWindow {
                 timelineMetric(
                     label: tr("Remaining", "剩余"),
@@ -2985,10 +2977,13 @@ private struct QuotaTimelineAccountPanel: View {
             Text(label)
                 .font(.system(size: 9.5))
                 .foregroundStyle(.tertiary)
+                .lineLimit(1)
             Text(value)
                 .font(.system(size: 11.5, weight: .medium, design: .monospaced))
                 .foregroundStyle(color)
+                .lineLimit(1)
         }
+        .fixedSize()
     }
 
     private func currentText(_ window: QuotaTimelineWindow) -> String {
@@ -3362,29 +3357,27 @@ private struct QuotaTimelineTable: View {
     }
 
     private var headerRow: some View {
-        HStack {
-            tableHeader("Time", "时间", width: 82, alignment: .leading)
-            tableHeader("Change", "变动值", width: 82, alignment: .trailing)
-            tableHeader("After", "变动后剩余", width: 104, alignment: .trailing)
-            tableHeader("Reset", "重置时间", width: 96, alignment: .trailing)
-            Spacer(minLength: 0)
+        HStack(spacing: 12) {
+            tableHeader("Time", "时间", width: nil, alignment: .leading)
+            tableHeader("Change", "变动值", width: 72, alignment: .trailing)
+            tableHeader("After", "变动后剩余", width: 88, alignment: .trailing)
+            tableHeader("Reset", "重置时间", width: nil, alignment: .trailing)
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, 12)
         .padding(.vertical, 7)
         .background(Color.secondary.opacity(0.06))
     }
 
     private func row(_ entry: QuotaTimelineEntry) -> some View {
-        HStack {
-            tableText(StatsFormatter.timelineTime(entry.sampledAt, spansDays: spansDays), width: 82, alignment: .leading)
-            tableText(entry.deltaPercent.map { StatsFormatter.quotaDelta($0) } ?? "—", width: 82, alignment: .trailing)
+        HStack(spacing: 12) {
+            tableText(StatsFormatter.timelineTime(entry.sampledAt, spansDays: spansDays), width: nil, alignment: .leading)
+            tableText(entry.deltaPercent.map { StatsFormatter.quotaDelta($0) } ?? "—", width: 72, alignment: .trailing)
                 .foregroundStyle(deltaColor(entry.deltaPercent))
-            tableText("\(entry.remainingPercent)%", width: 104, alignment: .trailing)
+            tableText("\(entry.remainingPercent)%", width: 88, alignment: .trailing)
                 .foregroundStyle(statusColor(remainingPercent: Double(entry.remainingPercent), tint: .secondary))
-            tableText(StatsFormatter.resetTime(entry.resetsAt, spansDays: spansDays), width: 96, alignment: .trailing)
-            Spacer(minLength: 0)
+            tableText(StatsFormatter.resetTime(entry.resetsAt, spansDays: spansDays), width: nil, alignment: .trailing)
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, 12)
         .padding(.vertical, 7)
     }
 
@@ -3396,19 +3389,23 @@ private struct QuotaTimelineTable: View {
     private func tableHeader(
         _ english: String,
         _ chinese: String,
-        width: CGFloat,
+        width: CGFloat?,
         alignment: Alignment
     ) -> some View {
         Text(tr(english, chinese))
             .font(.system(size: 10.5, weight: .semibold))
             .foregroundStyle(.tertiary)
+            .lineLimit(1)
+            .frame(maxWidth: width == nil ? .infinity : nil, alignment: alignment)
             .frame(width: width, alignment: alignment)
     }
 
-    private func tableText(_ text: String, width: CGFloat, alignment: Alignment) -> some View {
+    private func tableText(_ text: String, width: CGFloat?, alignment: Alignment) -> some View {
         Text(text)
             .font(.system(size: 11.5, design: .monospaced))
             .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .frame(maxWidth: width == nil ? .infinity : nil, alignment: alignment)
             .frame(width: width, alignment: alignment)
     }
 }

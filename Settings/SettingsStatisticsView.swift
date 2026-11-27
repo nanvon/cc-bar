@@ -56,6 +56,7 @@ struct SettingsStatisticsView: View {
                     .fixedSize()
                 }
             }
+            .id("stats-metrics")
 
             // 跨 Agent 归属
             SettingsCard(
@@ -91,6 +92,7 @@ struct SettingsStatisticsView: View {
                         .tint(.green)
                 }
             }
+            .id("stats-attribution")
 
             // 速度估算
             SettingsCard(
@@ -111,6 +113,7 @@ struct SettingsStatisticsView: View {
                         .tint(.green)
                 }
             }
+            .id("stats-speed")
 
             // 价格与历史重算
             SettingsCard(
@@ -206,6 +209,7 @@ struct SettingsStatisticsView: View {
                     }
                 }
             }
+            .id("stats-maintenance")
         }
     }
 

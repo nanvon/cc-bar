@@ -662,6 +662,133 @@ struct PopoverIconButtonStyle: ButtonStyle {
     }
 }
 
+private struct StatsFilterMenuChrome: ViewModifier {
+    @State private var isHovered = false
+
+    func body(content: Content) -> some View {
+        content
+            .padding(.horizontal, 6)
+            .frame(height: 24)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(isHovered ? Color.primary.opacity(0.06) : Color.clear)
+            )
+            .contentShape(Rectangle())
+            .onHover { isHovered = $0 }
+    }
+}
+
+extension View {
+    /// 统计页过滤行下拉菜单统一样式：高 24pt、悬停浅底。
+    func statsFilterMenuChrome() -> some View { modifier(StatsFilterMenuChrome()) }
+}
+
+// MARK: - Main window shared sidebar & search
+
+/// 主窗口（用量统计 / 设置）共用的侧栏导航行：统一内边距、hover 浅底、选中态与无焦点环。
+struct MainWindowSidebarItem<Leading: View, Trailing: View>: View {
+    let title: String
+    let active: Bool
+    let action: () -> Void
+    @ViewBuilder var leading: () -> Leading
+    @ViewBuilder var trailing: () -> Trailing
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                leading()
+                    .frame(width: 14, height: 14)
+
+                Text(title)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(active ? Color.white : Color.primary)
+                    .lineLimit(1)
+
+                Spacer(minLength: 4)
+
+                trailing()
+            }
+            .padding(.vertical, 6)
+            .padding(.horizontal, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(active
+                          ? Color.accentColor
+                          : (isHovered ? Color.primary.opacity(0.06) : Color.clear))
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusEffectDisabled()
+        .onHover { isHovered = $0 }
+        .pointingHandCursor()
+        .accessibilityAddTraits(active ? [.isSelected] : [])
+    }
+}
+
+extension MainWindowSidebarItem where Trailing == EmptyView {
+    init(
+        title: String,
+        active: Bool,
+        action: @escaping () -> Void,
+        @ViewBuilder leading: @escaping () -> Leading
+    ) {
+        self.init(title: title, active: active, action: action, leading: leading, trailing: { EmptyView() })
+    }
+}
+
+/// 主窗口共用的紧凑搜索框：统一 7pt 圆角、浅深色底、细描边与清除按钮。
+struct StatsSearchField: View {
+    let prompt: String
+    @Binding var text: String
+    var height: CGFloat = 24
+    var masksInPrivacyMode: Bool = true
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 11))
+                .foregroundStyle(.tertiary)
+            Group {
+                if masksInPrivacyMode && PrivacyDisplay.isEnabled {
+                    SecureField(prompt, text: $text)
+                } else {
+                    TextField(prompt, text: $text)
+                }
+            }
+            .textFieldStyle(.plain)
+            .font(.system(size: 11.5))
+
+            if !text.isEmpty {
+                Button {
+                    text = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .focusEffectDisabled()
+                .pointingHandCursor()
+            }
+        }
+        .padding(.horizontal, 8)
+        .frame(height: height)
+        .background(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(colorScheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.06))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5)
+        )
+    }
+}
+
 // MARK: - Stats selectable list（对话 / 项目列表）
 //
 // 统计页对话、项目两个主从列表共用：自绘选中态，不使用系统 List 的强调色整行高亮。

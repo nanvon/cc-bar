@@ -2,7 +2,7 @@ import Charts
 import SwiftUI
 
 /// 额度页「额度用满预估」：Codex / Claude / Antigravity（Gemini 共享池）× 5 小时 / 周的周期卡，
-/// 宽画布一行最多四张。
+/// 每服务将「5 小时 + 周」成对排布，宽画布一行最多两组（四张），窄画布每行一组。
 /// 区块自带标题与一句口径说明，便于单独截图分享；卡内不写解释。
 /// 进度条显示服务端返回的额度已用比例，条色与「N%」统一按剩余额度着色。
 struct QuotaCycleCardsSection: View {
@@ -45,27 +45,20 @@ struct QuotaCycleCardsSection: View {
 
             LazyVGrid(
                 columns: Array(
-                    repeating: GridItem(.flexible(), spacing: 12, alignment: .top),
-                    count: isWide ? min(4, max(1, cards.count)) : min(2, max(1, cards.count))
+                    repeating: GridItem(.flexible(), spacing: 16, alignment: .top),
+                    count: isWide ? min(2, max(1, apps.count)) : 1
                 ),
                 alignment: .leading,
                 spacing: 12
             ) {
-                ForEach(cards, id: \.self) { card in
-                    currentCycleCard(app: card.app, kind: card.kind)
+                ForEach(apps, id: \.self) { app in
+                    HStack(spacing: 8) {
+                        currentCycleCard(app: app, kind: .fiveHour)
+                        currentCycleCard(app: app, kind: .weekly)
+                    }
                 }
             }
         }
-    }
-
-    private struct CardKey: Hashable {
-        let app: UsageApp
-        let kind: QuotaLimitKind
-    }
-
-    /// 按传入的 `apps` 顺序展开：每服务 5 小时 → 周。
-    private var cards: [CardKey] {
-        apps.flatMap { app in [CardKey(app: app, kind: .fiveHour), CardKey(app: app, kind: .weekly)] }
     }
 
     private func currentCycleCard(app: UsageApp, kind: QuotaLimitKind) -> some View {
@@ -77,8 +70,8 @@ struct QuotaCycleCardsSection: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .frame(height: 132)
-        .ccPanel(cornerRadius: 10)
+        .frame(height: 140)
+        .ccPanel(cornerRadius: 12)
     }
 
     /// 卡主体：标签行 → 用满预估主数字 + 说明 → 额度进度条 → 已用行。
@@ -139,26 +132,27 @@ struct QuotaCycleCardsSection: View {
                 }
             }
 
-            Spacer(minLength: 14)
+            Spacer(minLength: 10)
 
             VStack(alignment: .leading, spacing: 8) {
                 ProgressBar(value: usedPercent / 100, tint: color, height: 6)
 
                 HStack(alignment: .firstTextBaseline) {
                     // 只算当前额度段：Claude 周内重置不换周期，重置前的用量不再计入，与进度条对应。
-                    Text("\(tr("Used", "已用")) \(StatsFormatter.compactToken(summary.currentAllowanceTotals.totalTokens)) · \(StatsFormatter.tierCostWhole(summary.currentAllowanceTotals.costUSD, hasUnpricedUsage: summary.currentAllowanceTotals.hasUnpricedUsage))")
+                    Text("\(StatsFormatter.compactToken(summary.currentAllowanceTotals.totalTokens)) Tokens · \(StatsFormatter.tierCostWhole(summary.currentAllowanceTotals.costUSD, hasUnpricedUsage: summary.currentAllowanceTotals.hasUnpricedUsage))")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
                     Spacer(minLength: 6)
-                    // 剩余状态由数字和进度条颜色表达：≥20% 石墨灰、<20% 橙、=0 红（统一走 statusColor）。
-                    Text(String(format: "%.0f%%", usedPercent))
+                    // 显式标出「已用」，避免与下方时间线的「剩余 %」方向混淆；颜色仍按剩余状态表达。
+                    Text(tr(String(format: "%.0f%% used", usedPercent), String(format: "已用 %.0f%%", usedPercent)))
                         .font(.system(size: 11, weight: .semibold))
                         .monospacedDigit()
                         .foregroundStyle(color)
                         .lineLimit(1)
+                        .fixedSize()
                         .help(tr("Quota usage percentage reported officially.", "官方返回的额度已用比例。"))
                 }
             }
@@ -546,13 +540,16 @@ private struct QuotaCycleHistoryPanel: View {
 
     // MARK: 明细
 
-    /// 最近 4 个周期，新的在上：周期 | 用满预估 | 实际。
+    /// 最近 4 个周期，新的在上：周期（左对齐） | 用满预估（右对齐） | 实际（右对齐）。
     private var recentTable: some View {
-        Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 6) {
+        Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 6) {
             GridRow {
                 headerCell(tr("Cycle", "周期"))
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 headerCell(tr("Full-use estimate", "用满预估"))
+                    .gridColumnAlignment(.trailing)
                 headerCell(tr("Actual", "实际"))
+                    .gridColumnAlignment(.trailing)
             }
 
             Divider()
@@ -561,6 +558,7 @@ private struct QuotaCycleHistoryPanel: View {
                 let low = isLowObservation(summary)
                 GridRow {
                     valueCell(CycleHistoryFormat.period(summary.cycle, kind: kind), weight: .regular, style: .secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     valueCell(
                         CycleHistoryFormat.estimateLine(summary),
                         weight: low ? .regular : .semibold,

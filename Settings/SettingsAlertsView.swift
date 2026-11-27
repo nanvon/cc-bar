@@ -104,6 +104,7 @@ struct SettingsAlertsView: View {
                 .padding(.horizontal, SettingsLayout.cardHorizontalPadding)
                 .opacity(settings.quotaAlertsEnabled ? 1 : 0.48)
             }
+            .id("alerts-main")
 
             // 监听的额度窗口
             SettingsCard(
@@ -189,6 +190,7 @@ struct SettingsAlertsView: View {
                     .disabled(!settings.quotaAlertsEnabled)
                 }
             }
+            .id("alerts-windows")
             .opacity(settings.quotaAlertsEnabled ? 1 : 0.6)
         }
         .task { _ = await service.refreshPermission() }

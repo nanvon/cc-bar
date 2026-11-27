@@ -12,9 +12,15 @@ struct SettingsRootView: View {
         nonmutating set { appState.mainWindowSession.settingsCategory = newValue }
     }
 
+    private struct ScrollSectionTarget: Equatable {
+        let id = UUID()
+        let section: String
+    }
+
     @State private var searchQuery = ""
     @State private var highlightedSection: String?
     @State private var highlightClearTask: Task<Void, Never>?
+    @State private var pendingScrollTarget: ScrollSectionTarget?
 
     @State private var launchAtLoginMessage: String?
     @State private var launchAtLoginMessageIsError = false
@@ -136,74 +142,31 @@ struct SettingsRootView: View {
     }
 
     private var sidebarSearchField: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 11))
-                .foregroundStyle(.tertiary)
-
-            TextField(tr("Search settings", "搜索设置…"), text: $searchQuery)
-                .textFieldStyle(.plain)
-                .font(.system(size: 12))
-
-            if !searchQuery.isEmpty {
-                Button {
-                    searchQuery = ""
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.tertiary)
-                }
-                .buttonStyle(.plain)
-                .focusEffectDisabled()
-                .pointingHandCursor()
-            }
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .background(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(Color.primary.opacity(0.05))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5)
+        StatsSearchField(
+            prompt: tr("Search settings", "搜索设置…"),
+            text: $searchQuery,
+            height: 26,
+            masksInPrivacyMode: false
         )
     }
 
     private func sidebarItem(category: SettingsCategory, settings: SettingsStore) -> some View {
         let active = !isSearching && selectedCategory == category
 
-        return Button {
-            searchQuery = ""
-            selectedCategory = category
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: category.icon)
-                    .font(.system(size: 12))
-                    .frame(width: 14, height: 14)
-                    .foregroundStyle(active ? Color.white : Color.secondary)
-
-                Text(tr(category.englishTitle, category.chineseTitle))
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(active ? Color.white : Color.primary)
-                    .lineLimit(1)
-
-                Spacer(minLength: 4)
-
-                sidebarIndicator(for: category, settings: settings, active: active)
+        return MainWindowSidebarItem(
+            title: tr(category.englishTitle, category.chineseTitle),
+            active: active,
+            action: {
+                searchQuery = ""
+                selectedCategory = category
             }
-            .padding(.vertical, 6)
-            .padding(.horizontal, 8)
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(active ? Color.accentColor : Color.clear)
-            )
-            .contentShape(Rectangle())
+        ) {
+            Image(systemName: category.icon)
+                .font(.system(size: 12))
+                .foregroundStyle(active ? Color.white : Color.secondary)
+        } trailing: {
+            sidebarIndicator(for: category, settings: settings, active: active)
         }
-        .buttonStyle(.plain)
-        .focusEffectDisabled()
-        .pointingHandCursor()
-        .accessibilityAddTraits(active ? [.isSelected] : [])
     }
 
     @ViewBuilder
@@ -273,20 +236,34 @@ struct SettingsRootView: View {
     // MARK: - Content Area
 
     private func contentArea(settings: SettingsStore) -> some View {
-        ScrollView {
-            Group {
-                if isSearching {
-                    searchResultsView
-                } else {
-                    categoryView(settings: settings)
+        ScrollViewReader { proxy in
+            ScrollView {
+                Group {
+                    if isSearching {
+                        searchResultsView
+                    } else {
+                        categoryView(settings: settings)
+                    }
+                }
+                .frame(maxWidth: SettingsLayout.contentMaxWidth, alignment: .topLeading)
+                .padding(.horizontal, 36)
+                .padding(.vertical, 28)
+                .frame(maxWidth: .infinity, alignment: .top)
+            }
+            .id(isSearching ? "search" : selectedCategory.rawValue)
+            .onChange(of: pendingScrollTarget) { _, target in
+                guard let target else { return }
+                // 等新分类 ScrollView 与各卡片 .id 完成挂载后再滚动，避免跨页跳转失效。
+                DispatchQueue.main.async {
+                    withAnimation(.easeInOut(duration: 0.22)) {
+                        proxy.scrollTo(target.section, anchor: .center)
+                    }
+                    if pendingScrollTarget?.id == target.id {
+                        pendingScrollTarget = nil
+                    }
                 }
             }
-            .frame(maxWidth: SettingsLayout.contentMaxWidth, alignment: .topLeading)
-            .padding(.horizontal, 36)
-            .padding(.vertical, 28)
-            .frame(maxWidth: .infinity, alignment: .top)
         }
-        .id(isSearching ? "search" : selectedCategory.rawValue)
     }
 
     @ViewBuilder
@@ -384,43 +361,10 @@ struct SettingsRootView: View {
                 VStack(spacing: 0) {
                     ForEach(Array(matches.enumerated()), id: \.element.id) { index, item in
                         if index > 0 { SettingsDivider() }
-                        Button {
+                        SettingsSearchResultRow(item: item) {
                             searchQuery = ""
                             jump(to: item.category, section: item.sectionID)
-                        } label: {
-                            HStack(spacing: 10) {
-                                Image(systemName: item.category.icon)
-                                    .font(.system(size: 12.5))
-                                    .foregroundStyle(.secondary)
-                                    .frame(width: 16, height: 16)
-
-                                VStack(alignment: .leading, spacing: 2.5) {
-                                    Text(item.localizedTitle)
-                                        .font(.system(size: 13))
-                                        .foregroundStyle(.primary)
-                                    Text(item.localizedSummary)
-                                        .font(.system(size: 11))
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
-                                }
-
-                                Spacer()
-
-                                Text(tr(item.category.englishTitle, item.category.chineseTitle))
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(.tertiary)
-
-                                Image(systemName: "chevron.right")
-                                    .font(.system(size: 10, weight: .semibold))
-                                    .foregroundStyle(.tertiary)
-                            }
-                            .padding(.horizontal, SettingsLayout.cardHorizontalPadding)
-                            .padding(.vertical, 12)
-                            .contentShape(Rectangle())
                         }
-                        .buttonStyle(.plain)
-                        .focusEffectDisabled()
-                        .pointingHandCursor()
                     }
                 }
                 .ccPanel(cornerRadius: 12)
@@ -432,6 +376,7 @@ struct SettingsRootView: View {
     private func jump(to category: SettingsCategory, section: String) {
         selectedCategory = category
         highlightedSection = section
+        pendingScrollTarget = ScrollSectionTarget(section: section)
         highlightClearTask?.cancel()
         highlightClearTask = Task {
             try? await Task.sleep(for: .seconds(1.8))
@@ -478,5 +423,51 @@ struct SettingsRootView: View {
             }
             isExportingDiagnostics = false
         }
+    }
+}
+
+private struct SettingsSearchResultRow: View {
+    let item: SettingsSearchItem
+    let action: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: item.category.icon)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 16, height: 16)
+
+                VStack(alignment: .leading, spacing: 2.5) {
+                    Text(item.localizedTitle)
+                        .font(.system(size: 13))
+                        .foregroundStyle(.primary)
+                    Text(item.localizedSummary)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer()
+
+                Text(tr(item.category.englishTitle, item.category.chineseTitle))
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, SettingsLayout.cardHorizontalPadding)
+            .padding(.vertical, 12)
+            .background(isHovered ? Color.primary.opacity(0.04) : Color.clear)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusEffectDisabled()
+        .onHover { isHovered = $0 }
+        .pointingHandCursor()
     }
 }
