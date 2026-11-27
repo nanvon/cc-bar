@@ -709,8 +709,8 @@ extension QuotaError {
             // Claude 桌面版里的 Claude Code 不会续期这份凭据,所以不写「打开 Claude Code」。
             if desktopAccessDenied {
                 return tr(
-                    "Sign-in expired — allow reading Claude Desktop in Settings → Services & Accounts",
-                    "登录已过期,请到「设置 → 服务与账号」授权读取 Claude 桌面版"
+                    "Sign-in expired — allow reading Claude Desktop in Settings → Agents & Accounts",
+                    "登录已过期,请到「设置 → Agent 与账号」授权读取 Claude 桌面版"
                 )
             }
             return tr(

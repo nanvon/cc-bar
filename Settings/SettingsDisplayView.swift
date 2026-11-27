@@ -22,7 +22,7 @@ struct SettingsDisplayView: View {
                 SettingsRow(
                     label: "Quota period",
                     chinese: "额度周期",
-                    desc: "Choose which quota window appears alongside service icons in the menu bar.",
+                    desc: "Choose which quota window appears alongside agent icons in the menu bar.",
                     chineseDesc: "选择菜单栏图标旁展示的额度窗口"
                 ) {
                     Picker("", selection: $settings.menuBarWindow) {
@@ -45,8 +45,8 @@ struct SettingsDisplayView: View {
                 SettingsRow(
                     label: "Official status dot",
                     chinese: "官方状态圆点",
-                    desc: "Show live operational status indicators next to service names.",
-                    chineseDesc: "在服务名称旁显示官方运行状态圆点"
+                    desc: "Show live operational status indicators next to agent names.",
+                    chineseDesc: "在 Agent 名称旁显示官方运行状态圆点"
                 ) {
                     Toggle("", isOn: $settings.showServiceStatus)
                         .labelsHidden()
@@ -110,10 +110,10 @@ struct SettingsDisplayView: View {
                     label: "Show floating window",
                     chinese: "显示桌面悬浮窗",
                     desc: "Keep an always-on-top mini quota bar visible on your desktop.",
-                    chineseDesc: "在桌面置顶显示精简额度条，具体显示哪些服务可在「服务与账号」中勾选"
+                    chineseDesc: "在桌面置顶显示精简额度条，具体显示哪些 Agent 可在「Agent 与账号」中勾选"
                 ) {
                     HStack(spacing: 10) {
-                        Button(tr("Services", "管理服务")) {
+                        Button(tr("Manage Agents", "管理 Agent")) {
                             onNavigateToServices()
                         }
                         .buttonStyle(.bordered)

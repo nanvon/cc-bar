@@ -31,7 +31,7 @@ final class MainWindowSessionState {
     var granularity: StatsGranularity = .day
     var timelineWindow: QuotaLimitKind = .fiveHour
     var historyWindow: QuotaLimitKind = .fiveHour
-    var compositionDimension: CompositionDimension = .service
+    var compositionDimension: CompositionDimension = .provider
     var conversationSort: ConversationQuerySort = .recent
     var conversationProjectKey: String?
     var projectSort: ProjectListSort
@@ -2754,8 +2754,8 @@ final class AppState {
     /// 不能说成"未找到登录信息"。
     private var cursorKeychainAccessMessage: String {
         tr(
-            "Not allowed to read Cursor's sign-in — authorize in Settings → Services & Accounts",
-            "未授权读取 Cursor 登录，请到「设置 → 服务与账号」授权"
+            "Not allowed to read Cursor's sign-in — authorize in Settings → Agents & Accounts",
+            "未授权读取 Cursor 登录，请到「设置 → Agent 与账号」授权"
         )
     }
 

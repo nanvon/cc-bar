@@ -155,7 +155,7 @@ private struct DetectAccountsStep: View {
         VStack(alignment: .leading, spacing: 0) {
             Text(anyDetected
                  ? tr("We found these accounts", "检测到以下账号")
-                 : tr("No services found yet. They'll be detected after you sign in.", "暂未检测到服务，登录后会自动识别"))
+                 : tr("No agents found yet. They'll be detected after you sign in.", "暂未检测到 Agent，登录后会自动识别"))
                 .font(.system(size: 18, weight: .bold))
                 .kerning(-0.3)
 
@@ -214,7 +214,7 @@ private struct DetectAccountsStep: View {
                     app: .commandCode,
                     title: "Command Code",
                     subtitle: "Command Code",
-                    plan: appState.commandCodeQuota?.planType ?? appState.commandCodeAccount?.planType,
+                    plan: nil,
                     email: appState.commandCodeAccount?.login ?? appState.commandCodeAccount?.email,
                     source: commandCodeSource,
                     tint: QuotaApp.commandCode.tintColor,
@@ -349,8 +349,8 @@ private struct CredentialInfoCard: View {
                 Text(tr("Your credentials", "关于凭据"))
                     .font(.system(size: 11.5, weight: .medium))
                 Text(tr(
-                    "CCBar checks quota through official APIs. Claude uses a proxy or a direct connection set in Settings → Data & Refresh. For some services, expired logins are renewed automatically and the local credential file is updated.",
-                    "CCBar 通过官方接口查询额度。Claude 需要在「设置 → 数据与刷新」配置代理或设为直连。部分服务登录过期时会自动续期，并更新本机的凭据文件。"
+                    "CCBar checks quota through official APIs. Claude uses a proxy or a direct connection set in Settings → Refresh & Network. For some agents, expired logins are renewed automatically and the local credential file is updated.",
+                    "CCBar 通过官方接口查询额度。Claude 需要在「设置 → 刷新与网络」配置代理或设为直连。部分 Agent 登录过期时会自动续期，并更新本机的凭据文件。"
                 ))
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
@@ -387,7 +387,7 @@ private struct ConfigureStep: View {
             VStack(spacing: 14) {
                 ConfigureRow(title: "Show in menu bar",
                              chineseTitle: "菜单栏",
-                             subtitle: "Show enabled providers next to the menu bar icon.",
+                             subtitle: "Show enabled agents next to the menu bar icon.",
                              chineseSubtitle: "在菜单栏图标旁显示百分比") {
                     VStack(alignment: .trailing, spacing: 8) {
                         HStack(spacing: 12) {

@@ -132,17 +132,20 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
     }
 }
 
-/// 模型提供商分组键：这次调用走的是谁的渠道或额度，不是模型厂商。
+/// 用量构成「渠道」分组键：这次调用走的是谁的渠道或额度，不是单纯的底层模型厂商。
 ///
-/// 从 `UsageBucket.model` 字符串推导：Antigravity / Cursor 服务整体归本渠道；其余去掉
-/// Magpie 网关段后按渠道前缀匹配，无前缀时按 app / 模型名关键词兜底。
+/// 从 `UsageBucket.model` 字符串推导：Antigravity 应用及经它（`agy-cli/*` 等）转发的用量
+/// 整体归 `Google`；Cursor 应用整体归 `Cursor`；其余去掉 Magpie 网关段后按渠道前缀匹配，
+/// 无前缀时按 app / 模型名关键词兜底。
 /// 纯展示层用途，不参与定价与存储；价格仍由 `Pricing` 按模型名单独解析。
 nonisolated enum ModelProvider: String, Sendable, CaseIterable {
     case openAI
     case anthropic
+    /// Google 官方渠道（含 Antigravity App / IDE / CLI 与 `agy-cli/*`、`google/*`、`gemini-*`）。
+    case google
     case deepseek
-    /// OpenCode 的各个渠道（`opencode-go/` 套餐、`opencode/` Zen、`opencode-zen-free/` 等）。
-    case opencode
+    /// OpenCode 渠道（`opencode/*`、`opencode-go/*`、`opencode-zen/*`、`opencode-zen-free/*`、`opencode2dsh/*`）。
+    case openCode
     case commandCode
     /// Trae 渠道（`trae/*`、`trae-cn/*`）。渠道自有模型仍按官方型号查价，这里只作分组展示。
     case trae
@@ -150,21 +153,18 @@ nonisolated enum ModelProvider: String, Sendable, CaseIterable {
     case workBuddy
     /// Cursor 渠道（`cursor/*`）与 Cursor 远端计量。
     case cursor
-    /// Antigravity 服务内的全部用量，以及其他 Agent 经 Antigravity 渠道（`agy-cli/*` 等）的用量，
-    /// 包括其中调用的 Claude 模型。
-    case antigravity
     case other
 
-    /// 推导提供商。
+    /// 推导渠道。
     ///
-    /// 顺序：按服务整体归属（Antigravity、Cursor）→ 去掉 Magpie 网关段 → 前缀匹配
-    /// → 模型名关键词匹配 → 按 app 兜底 → 其他。
+    /// 顺序：按 Agent 整体归属（Antigravity → Google、Cursor → Cursor）→ 去掉 Magpie 网关段
+    /// → 前缀匹配 → 模型名关键词匹配 → 按 app 兜底 → 其他。
     /// - 前缀（Pi / OpenCode 日志保留 `provider/model` 形态）
     /// - 关键词（裸模型，以及未能验证渠道的旧 Codex / Claude 历史）
     /// - app 兜底：codex → OpenAI、claude → Anthropic（两者日志模型几乎固定厂商）
     static func resolve(app: UsageApp, model: String) -> ModelProvider {
         switch app {
-        case .antigravity: return .antigravity
+        case .antigravity: return .google
         case .cursor: return .cursor
         case .codex, .claude, .pi, .opencode, .dsh: break
         }
@@ -184,6 +184,7 @@ nonisolated enum ModelProvider: String, Sendable, CaseIterable {
             ("anthropic/", .anthropic),
             // Magpie 转发的 Claude 订阅渠道。
             ("claude/", .anthropic),
+            ("google/", .google),
             ("deepseek/", .deepseek),
             ("commandcode/", .commandCode),
             ("command-code/", .commandCode),
@@ -195,15 +196,15 @@ nonisolated enum ModelProvider: String, Sendable, CaseIterable {
         for (prefix, provider) in prefixes where m.hasPrefix(prefix) {
             return provider
         }
-        // Antigravity 订阅渠道（`agy-cli/...` 等），包括经它调用的 Claude 模型。
+        // Antigravity（Google Cloud Code）渠道（`agy-cli/...` 等），包括经它调用的 Claude 模型。
         if let slash = m.firstIndex(of: "/"),
            CycleUsageAggregator.antigravityRouteSegments.contains(String(m[..<slash])) {
-            return .antigravity
+            return .google
         }
-        // OpenCode 的渠道段都以 `opencode` 开头：`opencode-go/`、`opencode/`、`opencode-zen-free/`、
-        // 以及 DSH 里自建的 `opencode2dsh/`。
+        // 所有 `opencode*` 渠道段（`opencode/`、`opencode-go/`、`opencode-zen/`、
+        // `opencode-zen-free/` 以及 `opencode2dsh/`）统一归为 OpenCode。
         if let slash = m.firstIndex(of: "/"), m[..<slash].hasPrefix("opencode") {
-            return .opencode
+            return .openCode
         }
 
         if m.hasPrefix("claude-") { return .anthropic }
@@ -211,6 +212,7 @@ nonisolated enum ModelProvider: String, Sendable, CaseIterable {
             || m.hasPrefix("o4") || m.hasPrefix("chatgpt-") || m.hasPrefix("codex-") {
             return .openAI
         }
+        if m.hasPrefix("gemini-") { return .google }
         if m.hasPrefix("deepseek-") { return .deepseek }
 
         switch app {
@@ -230,13 +232,13 @@ nonisolated enum ModelProvider: String, Sendable, CaseIterable {
         switch self {
         case .openAI: return tr("OpenAI", "OpenAI")
         case .anthropic: return tr("Anthropic", "Anthropic")
+        case .google: return tr("Google", "Google")
         case .deepseek: return tr("DeepSeek", "DeepSeek")
-        case .opencode: return tr("OpenCode", "OpenCode")
+        case .openCode: return tr("OpenCode", "OpenCode")
         case .commandCode: return tr("Command Code", "Command Code")
         case .trae: return tr("Trae", "Trae")
         case .workBuddy: return tr("WorkBuddy", "WorkBuddy")
         case .cursor: return tr("Cursor", "Cursor")
-        case .antigravity: return tr("Antigravity", "Antigravity")
         case .other: return tr("Other", "其他")
         }
     }

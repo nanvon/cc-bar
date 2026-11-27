@@ -162,8 +162,8 @@ struct SettingsStatisticsView: View {
                 SettingsRow(
                     label: "Recalculate usage",
                     chinese: "重新计算用量",
-                    desc: "Recompute usage for enabled services using the latest prices and rules. Usage from deleted logs is preserved.",
-                    chineseDesc: "按最新价格和统计规则重算已启用服务的用量，保留已删除日志的历史用量",
+                    desc: "Recompute usage for enabled agents using the latest prices and rules. Usage from deleted logs is preserved.",
+                    chineseDesc: "按最新价格和统计规则重算已启用 Agent 的用量，保留已删除日志的历史用量",
                     detail: recalculateOutcomeDetail
                 ) {
                     HStack(spacing: 8) {
@@ -264,13 +264,13 @@ struct SettingsStatisticsView: View {
             )
         case .restrictedRecoveryRequiresEnabledApps:
             return tr(
-                "Existing data kept. To verify history, enable the services with saved usage and try again.",
-                "现有数据保留。请启用有历史用量的服务，再重新校验"
+                "Existing data kept. To verify history, enable the agents with saved usage and try again.",
+                "现有数据保留。请启用有历史用量的 Agent，再重新校验"
             )
         case .sourcesChanged:
             return tr(
-                "Services changed during recalculation. Existing data kept. Recalculate again to apply the new selection.",
-                "重算期间服务开关发生变化，现有数据保留。请重新计算"
+                "Enabled agents changed during recalculation. Existing data kept. Recalculate again to apply the new selection.",
+                "重算期间 Agent 开关发生变化，现有数据保留。请重新计算"
             )
         case .replaced, .recoveredFromRestrictedHistory, .none:
             return nil

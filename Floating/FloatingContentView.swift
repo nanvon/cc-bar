@@ -26,7 +26,7 @@ struct FloatingContentView: View {
                 )
             }
             if providers.isEmpty {
-                Text(tr("No services", "未启用任何服务"))
+                Text(tr("No agents", "未启用任何 Agent"))
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }

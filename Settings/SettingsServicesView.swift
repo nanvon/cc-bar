@@ -27,10 +27,10 @@ struct SettingsServicesView: View {
                     .monospacedDigit()
             }
 
-            // 已检测服务分组
+            // 已检测 Agent 分组
             ServiceListCard(
                 title: tr("Detected on this Mac", "正在使用"),
-                subtitle: tr("Drag rows to reorder Menu Bar and Popover display", "拖动服务行可调整菜单栏与弹出面板顺序"),
+                subtitle: tr("Drag rows to reorder Menu Bar and Popover display", "拖动行可调整菜单栏与弹出面板顺序"),
                 count: inUse.count,
                 isHighlighted: highlightedSection == "services-detected",
                 showColumnHeader: !inUse.isEmpty
@@ -97,7 +97,7 @@ struct SettingsServicesView: View {
             Image(systemName: "magnifyingglass.circle")
                 .font(.system(size: 24))
                 .foregroundStyle(.tertiary)
-            Text(tr("No services detected on this Mac yet", "暂未在这台 Mac 上检测到服务"))
+            Text(tr("No agents detected on this Mac yet", "暂未在这台 Mac 上检测到 Agent"))
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(.secondary)
             Text(tr("Sign in to Codex, Claude Code, Cursor or Antigravity, or start a session in Pi / OpenCode / DSH.",
@@ -228,7 +228,7 @@ struct SettingsServicesView: View {
         case .cursor:
             return (appState.cursorAccount?.email, appState.cursorQuota?.planType, appState.cursorAccount != nil)
         case .commandCode:
-            return (appState.commandCodeAccount?.email, appState.commandCodeQuota?.planType, appState.commandCodeAccount != nil)
+            return (appState.commandCodeAccount?.email, nil, appState.commandCodeAccount != nil)
         case .opencodeGo:
             return (nil, nil, appState.opencodeGoAccount != nil)
         }
@@ -740,8 +740,8 @@ private struct ServiceRowView: View {
                 .tint(.green)
                 .fixedSize()
                 .help(tr(
-                    "Turning off stops updates and hides this service's data. Saved usage is kept.",
-                    "关闭后停止更新并隐藏该服务的数据，已保存的用量会保留"
+                    "Turning off stops updates and hides this agent's data. Saved usage is kept.",
+                    "关闭后停止更新并隐藏该 Agent 的数据，已保存的用量会保留"
                 ))
                 .frame(width: ServiceRowMetrics.toggle, alignment: .center)
         }

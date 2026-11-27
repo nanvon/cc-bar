@@ -747,7 +747,7 @@ struct StatsView: View {
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 16) {
-            sidebarGroup(title: "Service", chinese: "服务") {
+            sidebarGroup(title: "Agent", chinese: "Agent") {
                 ForEach(visibleServiceFilters, id: \.self) { item in
                     sidebarItem(
                         english: item.englishLabel,
@@ -932,10 +932,10 @@ struct StatsView: View {
         }
     }
 
-    /// 标题旁的口径说明：`全部服务 · 2026-08-30 至 09-28`。
+    /// 标题旁的口径说明：`全部 Agent · 2026-08-30 至 09-28`。
     private var overviewScopeCaption: String {
         let service = serviceFilter == .all
-            ? tr("All services", "全部服务")
+            ? tr("All Agents", "全部 Agent")
             : tr(serviceFilter.englishLabel, serviceFilter.chineseLabel)
         let period: String
         if range == .all {
@@ -1328,8 +1328,8 @@ private struct StatsUsageErrorBanner: View {
         if notice?.isRestricted == true {
             if notice?.recoveryRequiresEnabledApps == true {
                 return tr(
-                    "Existing data kept. Enable the services with saved usage to verify history and resume collection.",
-                    "现有数据保留。请启用有历史用量的服务，校验后恢复采集。"
+                    "Existing data kept. Enable the agents with saved usage to verify history and resume collection.",
+                    "现有数据保留。请启用有历史用量的 Agent，校验后恢复采集。"
                 )
             }
             return notice?.verificationRejected == true
@@ -1339,8 +1339,8 @@ private struct StatsUsageErrorBanner: View {
                      "现有数据保留。历史校验通过前，暂停统计新用量。")
         }
         if notice?.isDshFrozen == true {
-            return tr("DSH session details are unavailable, so DSH usage is paused. Existing data kept; other services are not affected.",
-                      "DSH 会话明细不可用，已暂停统计 DSH。现有数据保留，其他服务不受影响。")
+            return tr("DSH session details are unavailable, so DSH usage is paused. Existing data kept; other agents are not affected.",
+                      "DSH 会话明细不可用，已暂停统计 DSH。现有数据保留，其他 Agent 不受影响。")
         }
         // 已知是哪些日志读不出来时说清来源、数量和修复方式；其他错误仍用通用说明。
         if hasError, let issue = logReadIssue {
@@ -1773,10 +1773,10 @@ extension CompositionDimension {
     @MainActor
     var label: String {
         switch self {
-        case .service: return tr("Service", "服务")
-        case .provider: return tr("Provider", "提供商")
+        case .provider: return tr("Channel", "渠道")
         case .model: return tr("Model", "模型")
         case .project: return tr("Project", "项目")
+        case .service: return tr("Agent", "Agent")
         }
     }
 }
@@ -1893,7 +1893,7 @@ private struct OverviewCompositionPanel: View {
 
     private var emptyMessage: String {
         if dimension == .service, model.visibleApps.isEmpty {
-            return tr("No services turned on · turn one on in Settings → Services & Accounts", "没有开启的服务 · 到「设置 → 服务与账号」开启")
+            return tr("No agents turned on · turn one on in Settings → Agents & Accounts", "没有开启的 Agent · 到「设置 → Agent 与账号」开启")
         }
         return tr("No data", "无数据")
     }

@@ -176,10 +176,10 @@ struct PopoverRootView: View {
 
         if providers.isEmpty && !hasImported {
             VStack(spacing: 6) {
-                Text(tr("No services turned on", "未开启任何服务"))
+                Text(tr("No agents turned on", "未开启任何 Agent"))
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.secondary)
-                Text(tr("Turn one on in Settings → Services & Accounts", "到「设置 → 服务与账号」开启"))
+                Text(tr("Turn one on in Settings → Agents & Accounts", "到「设置 → Agent 与账号」开启"))
                     .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
             }
@@ -234,7 +234,7 @@ struct PopoverRootView: View {
             fallback = "Cursor"
         case .commandCode:
             email = appState.commandCodeAccount?.email ?? appState.commandCodeAccount?.login
-            plan = appState.commandCodeAccount?.planType ?? appState.quotaSnapshot(for: .commandCode)?.planType
+            plan = nil
             fallback = "Command Code"
         case .opencodeGo:
             // Go 没有可读的账号信息，副标题只显示 vendor。

@@ -50,7 +50,7 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
 
     var englishTitle: String {
         switch self {
-        case .services: return "Services & Accounts"
+        case .services: return "Agents & Accounts"
         case .display: return "Display & Privacy"
         case .alerts: return "Quota Alerts"
         case .statistics: return "Statistics & Metering"
@@ -61,7 +61,7 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
 
     var chineseTitle: String {
         switch self {
-        case .services: return "服务与账号"
+        case .services: return "Agent 与账号"
         case .display: return "显示与隐私"
         case .alerts: return "额度提醒"
         case .statistics: return "统计与计量"
@@ -72,7 +72,7 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
 
     var englishSubtitle: String {
         switch self {
-        case .services: return "Manage detected AI services, display order, visibility and accounts."
+        case .services: return "Manage detected AI agents, display order, visibility and accounts."
         case .display: return "Customize Menu Bar, Popover, Floating HUD, reset time format and privacy."
         case .alerts: return "Get notified when remaining subscription quota drops below your threshold."
         case .statistics: return "Configure ranking metrics, units, cross-agent attribution and price history."
@@ -83,7 +83,7 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
 
     var chineseSubtitle: String {
         switch self {
-        case .services: return "管理已检测的 AI 服务、显示顺序、展示位置与扩展账号。"
+        case .services: return "管理已检测的 Agent、显示顺序、展示位置与扩展账号。"
         case .display: return "自定义菜单栏、弹出面板、桌面悬浮窗、重置时间与截图隐私。"
         case .alerts: return "在订阅剩余额度低于阈值时发送系统通知提醒。"
         case .statistics: return "设置统计口径、单位格式、跨 Agent 归属以及价格目录重算。"
@@ -142,11 +142,11 @@ enum SettingsSearchCatalog {
             id: "services.manage",
             category: .services,
             sectionID: "services-detected",
-            englishTitle: "Services & Accounts",
-            chineseTitle: "服务开关与排序",
+            englishTitle: "Agents & Accounts",
+            chineseTitle: "Agent 开关与排序",
             englishSummary: "Codex, Claude Code, Antigravity, Cursor, Command Code, OpenCode Go, Pi, OpenCode, DSH",
-            chineseSummary: "管理 Codex、Claude、Antigravity、Cursor、Pi 等服务开关与拖动排序",
-            keywords: ["codex", "claude", "antigravity", "cursor", "command code", "opencode", "pi", "dsh", "account", "账号", "排序", "凭据", "auth"]
+            chineseSummary: "管理 Codex、Claude、Antigravity、Cursor、Pi 等 Agent 开关与拖动排序",
+            keywords: ["agent", "agents", "codex", "claude", "antigravity", "cursor", "command code", "opencode", "pi", "dsh", "account", "账号", "排序", "凭据", "auth"]
         ),
         SettingsSearchItem(
             id: "services.imported",
@@ -186,7 +186,7 @@ enum SettingsSearchCatalog {
             englishTitle: "Floating HUD",
             chineseTitle: "桌面悬浮窗",
             englishSummary: "Show or hide the always-on-top desktop quota strip",
-            chineseSummary: "开启或关闭桌面悬浮窗，并管理悬浮窗展示服务",
+            chineseSummary: "开启或关闭桌面悬浮窗，并管理悬浮窗展示的 Agent",
             keywords: ["floating", "hud", "悬浮窗", "桌面"]
         ),
         SettingsSearchItem(

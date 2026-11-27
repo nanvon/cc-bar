@@ -310,12 +310,12 @@ final class StatsOverviewCache {
 
 // MARK: - Composition（用量构成）
 
-/// 「用量构成」面板的维度，默认「服务」。
+/// 「用量构成」面板的维度，默认「渠道」。
 enum CompositionDimension: CaseIterable, Hashable {
-    case service
     case provider
     case model
     case project
+    case service
 }
 
 /// 行首色块的配色角色；具体颜色在视图层按深浅色解析。

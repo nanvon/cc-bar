@@ -202,8 +202,8 @@ struct QuotaCycleCardsSection: View {
                     "额度刷新成功后会建立该重置周期。"
                  )
                  : tr(
-                    "Connect this service and refresh quota to start recording cycles.",
-                    "连接该服务并刷新额度后开始记录周期。"
+                    "Connect this agent and refresh quota to start recording cycles.",
+                    "连接该 Agent 并刷新额度后开始记录周期。"
                  ))
                 .font(.system(size: 10.5))
                 .foregroundStyle(.secondary)
