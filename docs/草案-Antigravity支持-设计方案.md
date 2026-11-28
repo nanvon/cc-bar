@@ -2,6 +2,8 @@
 
 > 状态：**已落地**。`Core/Credentials/AntigravityCredentials.swift`（jetski 优先 + `oauth_creds.json` 兜底、双 client 刷新、secret 从本机官方组件提取）与 `Core/Quota/AntigravityQuotaClient.swift`（`loadCodeAssist` + `retrieveUserQuotaSummary` + `fetchAvailableModels` + `retrieveUserQuota` 四段富化）已实现，Popover、菜单栏、悬浮窗、设置账号行与 Onboarding 均已接入，Provider 默认开启。行为已同步到产品需求 §1/§3/§5、技术实现 §5.5/§6.1、设计风格 §4.2 与界面布局。2026-10-19 起读取本机 `~/.gemini/antigravity*/conversations/*.db` 对话库进入主窗口用量统计，实现见技术实现 §7.4c。本文保留为设计与调研的追溯材料。
 
+> 2026-11-28 更新：**防风控收敛为「官方 `agy` CLI 低频查额度 + 本机对话库只读统计」**。鉴于第三方工具提取 OAuth secret 续期与伪装客户端直连 Google Cloud Code `v1internal` 接口存在触发 `403 PERMISSION_DENIED` / 停用服务风险，已彻底移除 HTTPS 直连、`fetchPlan` / `fetchAccountEmail` 自发请求、`client_secret` 提取与 OAuth 续期逻辑（不再保留云端兜底）。现行方案：额度仅调用官方 `agy -p "/usage" --output-format json`（定时刷新最短 30 分钟，失败冷却 15/30/60 分钟，不安装 `agy` 时明确提示）；Antigravity App、IDE 与 `agy` CLI 的本地 SQLite 对话库只读扫描保持不变、零网络请求。详情以 `docs/产品需求.md`、`docs/技术实现.md` 与 `docs/界面布局.md` 为准。
+
 > 2026-10-19 更新：优先读取官方 `agy -p "/quota" --output-format json`，旧云端链路仅作兜底。有 `gemini-argon-wtu-weekly` 时，主条显示 Gemini 4 Argon 周额度，其后依次为 Gemini 5H / WK、Claude 5H / WK，共五行。CLI 设置超时、输出大小限制与失败冷却，失败保留已有 CLI 快照；完整行为以产品需求 §3 / §5、技术实现 §6.1 和界面布局为准。下文保留最初云端方案。
 
 > 验证：用户已在 dev 中验收刷新与五行展示。Debug 编译及 `QuotaParsingTests` 126 项全部通过，包含新增 8 项回归用例；未运行全量测试或 Release 构建。首轮测试宿主因开发证书不受信任启动失败，改用独立临时构建目录及命令级 ad-hoc 签名后通过，工程签名配置未改动。

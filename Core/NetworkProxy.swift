@@ -280,4 +280,34 @@ nonisolated enum NetworkProxy {
         configuration.proxyConfigurations = [proxy]
         return URLSession(configuration: configuration)
     }
+
+    // MARK: 子进程
+
+    /// `agy` 子进程的环境变量。代理不可用时返回 nil，调用方跳过 CLI。
+    /// agy 用 Go 标准库读取代理变量，`HTTPS_PROXY` 支持 `socks5://`，SOCKS5 也照常交给它。
+    static func subprocessEnvironment(base: [String: String]) -> [String: String]? {
+        switch resolve() {
+        case .system:
+            return base
+        case .direct:
+            var environment = base
+            for key in ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "https_proxy", "http_proxy", "all_proxy"] {
+                environment.removeValue(forKey: key)
+            }
+            return environment
+        case .unavailable:
+            return nil
+        case .proxy(let endpoint):
+            var environment = base
+            let scheme = endpoint.type == .http ? "http" : "socks5"
+            let url = "\(scheme)://\(endpoint.address)"
+            for key in ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"] {
+                environment[key] = url
+            }
+            for key in ["ALL_PROXY", "all_proxy"] {
+                environment.removeValue(forKey: key)
+            }
+            return environment
+        }
+    }
 }

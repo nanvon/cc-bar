@@ -269,12 +269,12 @@ final class QuotaRefreshGateTests: XCTestCase {
     }
 
     func testAntigravityUsesLongerMinSuccessInterval() {
-        XCTAssertEqual(QuotaRefreshPolicy.minSuccessInterval(for: .antigravity), 120)
+        XCTAssertEqual(QuotaRefreshPolicy.minSuccessInterval(for: .antigravity), 1800)
         for app in QuotaApp.allCases where app != .antigravity {
             XCTAssertEqual(QuotaRefreshPolicy.minSuccessInterval(for: app), 60, "\(app)")
         }
         var state = QuotaRefreshState()
-        state.lastSuccessAt = now.addingTimeInterval(-90)
+        state.lastSuccessAt = now.addingTimeInterval(-900)
         XCTAssertEqual(decide(state, interval: QuotaRefreshPolicy.minSuccessInterval(for: .antigravity)), .skip)
         XCTAssertEqual(decide(state, interval: QuotaRefreshPolicy.minSuccessInterval(for: .codex)), .start)
     }

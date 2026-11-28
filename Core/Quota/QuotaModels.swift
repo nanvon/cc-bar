@@ -522,9 +522,10 @@ nonisolated enum QuotaError: Error, CustomStringConvertible {
     /// `desktopAccessDenied`:改用 Claude Desktop 登录只差钥匙串授权(用户拒绝过),
     /// 此时提示去设置里授权。
     case credentialsExpired(desktopAccessDenied: Bool)
-    /// Antigravity 的 refresh_token 已被 Google 拒绝（`invalid_grant`）或缺失，
-    /// cc-bar 无法续期；需要用户在 Antigravity 中重新登录，凭据变化后自动解除。
+    /// Antigravity 的登录态已失效或缺失，需要用户在终端运行 agy 重新登录。
     case antigravitySignedOut
+    /// 本机未安装官方 `agy` CLI（仅安装桌面端 / IDE 时只支持本地用量统计）。
+    case antigravityCLIMissing
 
     var description: String {
         switch self {
@@ -538,7 +539,9 @@ nonisolated enum QuotaError: Error, CustomStringConvertible {
             return "claude credentials expired; waiting for Claude Code to refresh"
                 + (desktopAccessDenied ? " (Claude Desktop keychain access denied)" : "")
         case .antigravitySignedOut:
-            return "antigravity sign-in revoked; waiting for a new Antigravity login"
+            return "antigravity sign-in revoked or missing; waiting for agy login"
+        case .antigravityCLIMissing:
+            return "agy CLI executable not found"
         }
     }
 
@@ -718,7 +721,9 @@ extension QuotaError {
                 "登录已过期,请在终端运行一次 claude"
             )
         case .antigravitySignedOut:
-            return tr("Sign in to Antigravity again, then refresh", "请在 Antigravity 中重新登录,然后刷新")
+            return tr("Sign in to agy again, then refresh", "请在终端运行 agy 重新登录后刷新")
+        case .antigravityCLIMissing:
+            return tr("Install the official agy CLI to check quota", "未检测到官方 agy CLI，安装后可查看额度")
         case .network(let kind):
             return kind.userMessage(using: proxy)
         case .http(let code, _):

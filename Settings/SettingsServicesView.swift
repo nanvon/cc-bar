@@ -405,12 +405,19 @@ struct SettingsServicesView: View {
             title: provider.title,
             badge: badge,
             subtitle: subtitle,
+            footnote: app == .antigravity
+                ? tr(
+                    "Quota uses official agy CLI (≥30m); chats read locally. Without agy, local usage only.",
+                    "额度仅通过官方 agy CLI 低频查询（最短 30 分钟），本地对话只读；未装 agy 只计用量。"
+                )
+                : nil,
             errorDetail: error,
             isDetected: isDetected,
             connectAction: connectAction,
             sourceLines: sourceLines,
             actions: actions,
             isEnabled: serviceEnabledBinding(for: app, settings: settings),
+            toggleHelp: toggleHelp(for: app),
             showInMenuBar: provider.supportsMenuBar ? menuBarBinding(for: app, settings: settings) : nil,
             showInFloatingHUD: provider.supportsFloatingHUD ? floatingBinding(for: app, settings: settings) : nil
         )
@@ -461,14 +468,31 @@ struct SettingsServicesView: View {
             title: title,
             badge: records != .missing ? tr("Usage only", "仅用量") : nil,
             subtitle: subtitle,
+            footnote: nil,
             errorDetail: nil,
             isDetected: records != .missing,
             connectAction: nil,
             sourceLines: [source],
             actions: [],
             isEnabled: usageStatsBinding(for: app, settings: settings),
+            toggleHelp: defaultToggleHelp,
             showInMenuBar: nil,
             showInFloatingHUD: nil
+        )
+    }
+
+    private var defaultToggleHelp: String {
+        tr(
+            "Turning off stops updates and hides this agent's data. Saved usage is kept.",
+            "关闭后停止更新并隐藏该 Agent 的数据，已保存的用量会保留"
+        )
+    }
+
+    private func toggleHelp(for app: QuotaApp) -> String {
+        guard app == .antigravity else { return defaultToggleHelp }
+        return tr(
+            "When on, checks quota via the official agy CLI (/usage, every 30 min) and reads local chats only—no direct Google API calls or token renewal. Turning off stops updates and hides data; saved usage is kept.",
+            "开启后仅通过官方 agy CLI（/usage，最短间隔 30 分钟）低频查额度，并只读本地对话统计（不直连 Google、不自刷令牌）；关闭后停止更新并隐藏数据，已保存用量会保留。"
         )
     }
 
@@ -481,8 +505,8 @@ struct SettingsServicesView: View {
             tr("Quota: reads the sign-in from Claude Code CLI or Claude Desktop and asks Anthropic for remaining quota. Read-only; your sign-in is not changed.",
                "额度：读取 Claude Code CLI 或 Claude 桌面版的登录状态，向 Anthropic 查询剩余额度。只读取，不改动登录。")
         case .antigravity:
-            tr("Quota: reuses your Antigravity app sign-in to query Google. No agy required. Renewed tokens are saved in CCBar’s own Keychain; the app’s sign-in is read-only. Legacy sign-in files remain supported.",
-               "额度：复用 Antigravity 桌面端登录向 Google 查询，无需 agy。续期令牌存 CCBar 自己的钥匙串，不改动桌面端登录；兼容旧凭据文件。")
+            tr("Quota: runs the official agy CLI (/usage) to check quota using your local sign-in. Read-only; CCBar does not renew tokens or call Google directly. Requires agy installed.",
+               "额度：调用官方 agy CLI（/usage）读取剩余额度。只读本地登录态，不自行续期或直连 Google；需本机已安装 agy CLI。")
         case .cursor:
             tr("Quota: reads the sign-in from the Cursor app (decrypted with the Cursor Safe Storage key in Keychain when Cursor encrypts it) and asks Cursor for remaining quota. Read-only; your sign-in is not changed.",
                "额度：读取 Cursor 应用的登录状态（Cursor 加密保存时，用钥匙串里的 Cursor Safe Storage 密钥解密），向 Cursor 查询剩余额度。只读取，不改动登录。")
@@ -502,7 +526,7 @@ struct SettingsServicesView: View {
         case .claude:
             tr("Sign in to Claude Code CLI or Claude Desktop to detect it", "登录 Claude Code CLI 或 Claude 桌面版后自动识别")
         case .antigravity:
-            tr("Sign in to the Antigravity app to detect it", "登录 Antigravity 桌面端后自动识别")
+            tr("Sign in to Antigravity or agy to detect it", "登录 Antigravity 或 agy 后自动识别")
         case .cursor:
             tr("Sign in to the Cursor app to detect it", "登录 Cursor 应用后自动识别")
         case .commandCode:
@@ -514,6 +538,9 @@ struct SettingsServicesView: View {
 
     private func offHint(for app: QuotaApp) -> String? {
         switch app {
+        case .antigravity:
+            tr("Turning on checks quota via the official agy CLI (/usage, at least 30 min apart) and reads local Antigravity conversation records.",
+               "开启后将通过官方 agy CLI（/usage，间隔不少于 30 分钟）低频查询额度，并只读统计本机 Antigravity 对话用量。")
         case .cursor:
             tr("Turning on reads Cursor's sign-in to fetch quota and usage online.",
                "开启后会读取 Cursor 的登录状态，联网查询额度和用量。")
@@ -607,12 +634,14 @@ private struct ServiceEntry: Identifiable {
     let title: String
     let badge: String?
     let subtitle: String
+    let footnote: String?
     let errorDetail: String?
     let isDetected: Bool
     let connectAction: ServiceAction?
     let sourceLines: [String]
     let actions: [ServiceAction]
     let isEnabled: Binding<Bool>
+    let toggleHelp: String
     let showInMenuBar: Binding<Bool>?
     let showInFloatingHUD: Binding<Bool>?
 }
@@ -707,6 +736,14 @@ private struct ServiceRowView: View {
                             .fixedSize()
                     }
                 }
+
+                if let footnote = entry.footnote {
+                    Text(footnote)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.trailing, 8)
@@ -740,10 +777,7 @@ private struct ServiceRowView: View {
                 .controlSize(.small)
                 .tint(.green)
                 .fixedSize()
-                .help(tr(
-                    "Turning off stops updates and hides this agent's data. Saved usage is kept.",
-                    "关闭后停止更新并隐藏该 Agent 的数据，已保存的用量会保留"
-                ))
+                .help(entry.toggleHelp)
                 .frame(width: ServiceRowMetrics.toggle, alignment: .center)
         }
         .padding(.leading, ServiceRowMetrics.leadingPadding)

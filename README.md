@@ -63,7 +63,7 @@ cc-bar 展示两类数据：**订阅额度**通过各服务官方接口获取剩
 | :--- | :--- | :---: | :--- | :---: | :--- |
 | **Codex** | 5 小时 / 周额度、重置倒计时 | 支持 | 本地会话（含 `.zst` 压缩日志） | 支持 | `~/.codex/auth.json`（自动续期） |
 | **Claude Code** | 5 小时 / 周 / 模型专属额度 | 支持 | 本地会话日志 | — | Keychain / 本地只读凭据 |
-| **Antigravity** | Gemini 5 小时与周、Claude 辅助 | 支持 | — | — | Google Cloud OAuth（自动续期） |
+| **Antigravity** | Gemini 5 小时与周、Claude 辅助 | 支持 | 本地对话库（App / IDE / CLI 只读） | — | 官方 `agy` CLI（低频） / 只读凭据 |
 | **Cursor** | Total / Auto / API（含 Unlimited） | 支持 | 账号全设备远端计量（今日 / 本期） | — | 本地 state.vscdb（严格只读） |
 | **Command Code** | 5 小时 / 周额度、GOAT 月度 Credits | 支持 | — | — | 本地 5 级只读探测 / Keychain Key |
 | **OpenCode Go** | 5 小时 / 周 / 月额度 | 支持 | — | — | OpenCode / Pi 本地只读探测 / Keychain Key |
@@ -129,7 +129,7 @@ cc-bar 展示两类数据：**订阅额度**通过各服务官方接口获取剩
 | :--- | :--- | :---: | :--- |
 | **Codex** | `~/.codex/auth.json`<br>导入的其他账号：CCBar 自己的 Keychain 条目 | 读 / 写 | 临期时使用 `refresh_token` 自动续期，新令牌写回原存储位置。续期前二次确认本地文件，避免与 `codex` CLI 冲突抢刷。 |
 | **Claude Code** | `~/.claude/.credentials.json`<br>或 macOS Keychain | **严格只读** | **绝不刷新或篡改凭据**。因 Anthropic 刷新令牌为一次性，第三方刷新会导致 CLI 被踢下线。过期时保留快照并提示更新登录。访问 Claude 官方服务需要在「设置 → 数据与刷新」配置代理。 |
-| **Antigravity** | 系统钥匙串 `gemini / antigravity`（优先）<br>旧 jetski / CLI token / oauth_creds 文件（兼容） | 原始 GUI 登录只读；CCBar 续期缓存读 / 写；旧 jetski / oauth_creds 读 / 写 | 仅安装并登录桌面端即可识别账号、查询额度和自动续期，无需 agy。续期缓存按原始登录绑定，存 CCBar 自己的钥匙串。 |
+| **Antigravity** | 系统钥匙串 `gemini / antigravity`（优先）<br>旧 jetski / CLI token / oauth_creds 文件（兼容） | **严格只读** | **不提取 secret、不自行刷新令牌或直连 Google**。仅调用官方 `agy -p "/usage" --output-format json` 低频读取额度；纯桌面端未装 `agy` 时只统计本地对话库用量。 |
 | **Cursor** | `~/Library/Application Support/Cursor`<br>`/User/globalStorage/state.vscdb` | **严格只读** | 仅读 `cursorAuth/accessToken` 构造 Cookie 查询用量，绝不碰 refresh token/OAuth，不写回 Cursor SQLite 或 Keychain。 |
 | **Command Code** | 5 级本地来源或 macOS Keychain | 读 / Keychain | 只读自动探测按 `~/.commandcode/auth.json` → `~/.pi/agent/auth.json` → `~/.local/share/opencode/auth.json` → 环境变量 → Keychain 依次尝试；也可在设置中切换为手动 API Key，由 macOS Keychain 保存。 |
 | **OpenCode Go** | OpenCode / Pi 的 `auth.json` 或 macOS Keychain | 读 / Keychain | 只读自动探测按 OpenCode `auth.json` → `~/.pi/agent/auth.json` → 环境变量 `OPENCODE_API_KEY` → Keychain 依次尝试，读取其中的 `opencode-go` API Key；也可在设置中切换为手动 API Key，由 macOS Keychain 保存。 |

@@ -111,8 +111,7 @@ final class AppState {
         guard let cached = claudeProfile, cached.accountKey == claudeProfileAccountKey(account) else { return nil }
         return cached.profile
     }
-    /// 当前登录的 `loadCodeAssist` 结果（project / 套餐），按 `AntigravityQuotaClient.setupTTL` 复用。仅内存，切号时清空。
-    @ObservationIgnored private var antigravitySetup: AntigravityQuotaClient.Setup?
+    /// 当前登录的 Antigravity 凭据（只读，不向 Google 发起 OAuth 续期）。
     var antigravityAccount: AntigravityAccount? {
         didSet {
             if oldValue?.email != antigravityAccount?.email || oldValue?.accessToken != antigravityAccount?.accessToken
@@ -1806,7 +1805,7 @@ final class AppState {
             guard var next else {
                 if antigravityQuota != nil || quotaCache.antigravity != nil { resetAntigravityQuotaState() }
                 antigravityAccount = nil
-                antigravityError = tr("Sign in to the Antigravity app, then refresh", "请先在 Antigravity 桌面端登录,然后刷新")
+                antigravityError = tr("Sign in to Antigravity or agy, then refresh", "请先登录 Antigravity 或 agy，然后刷新")
                 return
             }
             if antigravityIdentityChanged(previous: antigravityAccount, next: next) {
@@ -1839,7 +1838,6 @@ final class AppState {
         antigravityQuotaSource = nil
         antigravityQuotaError = nil
         resetPrimaryQuotaRefreshState(.antigravity)
-        antigravitySetup = nil
         quotaCache.antigravity = nil
         saveQuotaCache()
     }
@@ -2219,121 +2217,32 @@ final class AppState {
             return
         }
         let initialLoginKey = account.refreshKey
-        let refreshed = await AntigravityCredentials.ensureFreshAccessToken(account: &account)
-        guard antigravityAccount?.refreshKey == initialLoginKey, antigravityError == nil else { return }
-        var activeToken: String
-        switch refreshed {
-        case .success(let t):
-            activeToken = t
-            if t != antigravityAccount?.accessToken {
-                antigravityAccount = account
-            }
-        case .failure(let err):
-            markQuotaFailure(.antigravity, err.userMessage, error: err)
-            return
-        }
-        // 版本只决定是否提醒；token 轮换或切号期间取到的额度照常展示，与原有行为一致。
         let alertEntryVersion = primaryQuotaAlertVersion(for: .antigravity)
-        // 上次实际见过的桶：daily 缺少其中任意一个才补查主域；没有历史时客户端用核心四组。
-        let previousSnapshot = antigravityQuota
-        let previousPlanType = account.planType
-        let knownLimitIDs = Set(previousSnapshot?.allLimits.map(\.id) ?? [])
-        let cachedSetup = antigravitySetup
-        var result = await AntigravityQuotaClient.fetch(
-            accessToken: activeToken, cachedSetup: cachedSetup, expectedLimitIDs: knownLimitIDs
+        let sessionKey = account.refreshToken ?? account.accessToken ?? account.source.rawValue
+        let cliResult = await AntigravityQuotaClient.fetchCLIQuota(
+            sessionKey: sessionKey,
+            force: reason == .userInitiated
         )
-        // 有效期内的令牌也可能被撤销；401 仅允许一次同登录续期重试，429 不进入此分支。
-        if case .failure(let error) = result, error.httpStatusCode == 401 {
-            guard antigravityAccount?.refreshKey == account.refreshKey, antigravityError == nil else { return }
-            let retryLoginKey = account.refreshKey
-            let retried = await AntigravityCredentials.ensureFreshAccessToken(account: &account, forceRefresh: true)
-            guard antigravityAccount?.refreshKey == retryLoginKey, antigravityError == nil else { return }
-            switch retried {
-            case .success(let token):
-                activeToken = token
-                antigravityAccount = account
-                result = await AntigravityQuotaClient.fetch(
-                    accessToken: token, cachedSetup: cachedSetup, expectedLimitIDs: knownLimitIDs
-                )
-            case .failure(let error):
-                markQuotaFailure(.antigravity, error.userMessage, error: error)
-                return
-            }
-        }
-        guard antigravityAccount?.refreshKey == account.refreshKey, antigravityError == nil else { return }
-        if case .success(let fetched) = result {
-            let transient = QuotaAlertPolicy.isTransientAntigravityAnomaly(
-                snapshot: fetched.snapshot, planType: fetched.account.planType,
-                previousSnapshot: previousSnapshot, previousPlanType: previousPlanType,
-                knownLimitIDs: knownLimitIDs
-            )
-            let suddenDrops = QuotaAlertPolicy.suddenZeroDropLimitIDs(
-                in: fetched.snapshot, previous: previousSnapshot
-            )
-            if transient || !suddenDrops.isEmpty {
-                // 唤醒瞬间或抖动可能返回残缺/假 0% 数据，延迟 1.5s 再查一次确认。
-                try? await Task.sleep(for: .milliseconds(1500))
-                guard antigravityAccount?.refreshKey == account.refreshKey, antigravityError == nil else { return }
-                let retried = await AntigravityQuotaClient.fetch(
-                    accessToken: activeToken, cachedSetup: transient ? nil : cachedSetup,
-                    expectedLimitIDs: knownLimitIDs
-                )
-                guard antigravityAccount?.refreshKey == account.refreshKey, antigravityError == nil else { return }
-                if case .success = retried {
-                    result = retried
-                } else if case .failure(let error) = retried, error.httpStatusCode == 401 || error.isRateLimited {
-                    result = retried
-                }
-            }
-        }
-        switch result {
-        case .success(let fetched):
-            let stillTransient = QuotaAlertPolicy.isTransientAntigravityAnomaly(
-                snapshot: fetched.snapshot, planType: fetched.account.planType,
-                previousSnapshot: previousSnapshot, previousPlanType: previousPlanType,
-                knownLimitIDs: knownLimitIDs
-            )
-            if stillTransient, previousSnapshot != nil {
-                AppLog.warn(.quota, "antigravity transient anomaly persisted after retry; preserving previous snapshot")
-                markQuotaFailure(.antigravity, tr("Antigravity returned incomplete quota data", "Antigravity 返回了不完整的额度数据"))
-                return
-            }
-            // 回填 plan；邮箱 jetski 本地解不出（非 JWT），额度链路成功后用 UserInfo
-            // 单独回填一次，仅当仍未取得时再调用（避免每轮都打 UserInfo）。
-            var email = fetched.account.email ?? account.email
-            if email == nil {
-                email = await AntigravityQuotaClient.fetchAccountEmail(accessToken: activeToken)
-            }
-            guard antigravityAccount?.refreshKey == account.refreshKey, antigravityError == nil else { return }
-            // 启动时尚未解析出邮箱；取得真实身份后再核对持久化快照的账号绑定。
-            if let email, let cachedEmail = quotaCache.antigravity?.accountID,
-               email.lowercased() != cachedEmail.lowercased() {
-                resetAntigravityQuotaState()
-            }
-            // 回填邮箱会递增版本，须在写回账号前判断。
-            let alertCurrent = primaryQuotaAlertVersion(for: .antigravity) == alertEntryVersion
-            if let email {
-                account.email = email
-            }
-            account.planType = fetched.account.planType ?? account.planType
+        guard antigravityAccount?.refreshKey == initialLoginKey, antigravityError == nil else { return }
+
+        switch cliResult {
+        case .success(var snapshot):
+            guard let current = antigravityAccount,
+                  !antigravityIdentityChanged(previous: current, next: account) else { return }
+            account = current
+            account.planType = account.planType ?? antigravityQuota?.planType
             antigravityAccount = account
-            antigravitySetup = fetched.setup ?? antigravitySetup
-            let snapshot = fetched.snapshot
-            // 补查主域后仍缺上次见过的桶（如 Argon）：可能是套餐变化，也可能是固定 UA 版本被收紧，留一条日志便于排查。
-            let missingLimitIDs = knownLimitIDs.subtracting(snapshot.allLimits.map(\.id))
-            if !missingLimitIDs.isEmpty {
-                AppLog.warn(.quota, "antigravity buckets missing since last refresh: \(missingLimitIDs.sorted().joined(separator: ","))")
+            snapshot.planType = account.planType
+            storeQuota(.antigravity, snapshot: snapshot, source: .antigravityCLI)
+            if primaryQuotaAlertVersion(for: .antigravity) == alertEntryVersion, account.email != nil {
+                observePrimaryQuota(snapshot, settingsVersion: alertSettingsVersion)
             }
-            storeQuota(.antigravity, snapshot: snapshot, source: .api)
-            if alertCurrent, !stillTransient {
-                let suddenDrops = QuotaAlertPolicy.suddenZeroDropLimitIDs(in: snapshot, previous: previousSnapshot)
-                let alertSnapshot = QuotaAlertPolicy.filteringLimits(in: snapshot, excluding: suddenDrops)
-                if !alertSnapshot.allLimits.isEmpty {
-                    observePrimaryQuota(alertSnapshot, settingsVersion: alertSettingsVersion)
-                }
-            }
-        case .failure(let err):
-            markQuotaFailure(.antigravity, err.userMessage, error: err)
+        case .cliMissing:
+            markQuotaFailure(.antigravity, QuotaError.antigravityCLIMissing.userMessage, error: .antigravityCLIMissing)
+        case .signedOut:
+            markQuotaFailure(.antigravity, QuotaError.antigravitySignedOut.userMessage, error: .antigravitySignedOut)
+        case .failure(let error):
+            markQuotaFailure(.antigravity, error.userMessage, error: error)
         }
     }
 

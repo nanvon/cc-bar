@@ -82,20 +82,20 @@ nonisolated enum QuotaRefreshPolicy {
 
     static func minSuccessInterval(for app: QuotaApp) -> TimeInterval {
         switch app {
-        // Antigravity 额度接口易受限流，定时刷新至少隔 2 分钟。
-        case .antigravity: return 120
+        // 仅通过官方 agy CLI 低频查额度，避免高频自动化轮询触发风控或额外唤醒开销；至少隔 30 分钟。
+        case .antigravity: return 30 * 60
         case .codex, .claude, .cursor, .commandCode, .opencodeGo: return defaultMinSuccessInterval
         }
     }
 
     /// 连续非 429 失败后定时刷新的冷却时长；nil 表示不冷却（沿用原行为）。
-    /// Antigravity 失败时每轮可能打多个 Google 接口，按 2 → 4 → 8 → 15 分钟递增，避免持续打失败请求。
+    /// Antigravity 失败时按 15 → 30 → 60 分钟递增，避免重复拉起失败的 agy 子进程。
     static func failureCooldown(for app: QuotaApp, consecutiveFailures: Int) -> TimeInterval? {
         switch app {
         case .antigravity:
             guard consecutiveFailures > 0 else { return nil }
-            let exponent = Double(min(consecutiveFailures - 1, 3))
-            return min(120 * pow(2, exponent), 15 * 60)
+            let exponent = Double(min(consecutiveFailures - 1, 2))
+            return min(15 * 60 * pow(2, exponent), 60 * 60)
         case .codex, .claude, .cursor, .commandCode, .opencodeGo: return nil
         }
     }
